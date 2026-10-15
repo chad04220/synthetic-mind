@@ -1,0 +1,8 @@
+# PyTorch: with an NVIDIA GPU install the CUDA build first, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.4
+fastapi>=0.110
+uvicorn[standard]>=0.29
+tiktoken>=0.7
+huggingface_hub>=0.23
+pyarrow>=15

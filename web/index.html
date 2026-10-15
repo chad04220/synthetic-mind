@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synthetic Mind</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="orb" id="orb"></div>
+    <div>
+      <div class="name" id="mindName">…</div>
+      <div class="sub" id="device">connecting…</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="ladder" id="ladder"></div>
+    <div class="stage-blurb" id="stageBlurb"></div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><span class="k">Age</span><span class="v" id="kAge">–</span></div>
+    <div class="kpi"><span class="k">Tokens read</span><span class="v" id="kTokens">–</span></div>
+    <div class="kpi"><span class="k">Brain</span><span class="v" id="kBrain">–</span></div>
+    <div class="kpi"><span class="k">Bits / byte</span><span class="v" id="kBpb">–</span></div>
+    <div class="kpi"><span class="k">Speed</span><span class="v" id="kTps">–</span></div>
+    <div class="kpi"><span class="k">Words known</span><span class="v" id="kVocab">–</span></div>
+  </div>
+
+  <div class="actions">
+    <button id="btnTrain" class="primary" title="Pause or resume learning">Pause learning</button>
+    <button id="btnThink" title="Have a thought right now">Think</button>
+    <button id="btnGrow" title="Add a layer of depth to the network without losing what it knows">Grow</button>
+    <button id="btnSave" title="Save to disk (also autosaves)">Save</button>
+  </div>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<main class="grid">
+  <!-- WORLD -->
+  <section class="panel world-panel">
+    <div class="panel-head">
+      <h2>World</h2>
+      <span class="muted" id="worldTime"></span>
+      <label class="switch" title="Run the body in the world"><input type="checkbox" id="worldOn" data-setting="world_enabled"><span></span>Alive</label>
+    </div>
+    <div class="canvas-wrap"><canvas id="world" tabindex="0" aria-label="The world the mind lives in"></canvas></div>
+    <div class="palette" id="palette" title="Pick an item, then click the world to place it"></div>
+    <div class="row gap">
+      <div class="dpad" aria-label="Drive the body">
+        <button data-act="north" title="W / ↑">▲</button>
+        <button data-act="west" title="A / ←">◀</button>
+        <button data-act="use" title="E: use, eat, read, play" class="mid">use</button>
+        <button data-act="east" title="D / →">▶</button>
+        <button data-act="south" title="S / ↓">▼</button>
+      </div>
+      <div class="dpad-extra">
+        <button data-act="take" title="F">take</button>
+        <button data-act="drop" title="G">drop</button>
+        <button data-act="look" title="L">look</button>
+        <button data-act="speak" title="V">speak</button>
+        <button data-act="sleep" title="Z">sleep</button>
+        <button data-act="approach" title="Q">approach</button>
+      </div>
+      <div class="hint">Driving it is a <b>demonstration</b>: the body learns to imitate what you do. Keys work when the world is focused.</div>
+    </div>
+    <div class="bars">
+      <div class="bar"><span>Energy</span><div><i id="barEnergy"></i></div><b id="valEnergy"></b></div>
+      <div class="bar"><span>Fun</span><div><i id="barFun" class="fun"></i></div><b id="valFun"></b></div>
+    </div>
+    <div class="body-facts" id="bodyFacts"></div>
+    <h3>What it wants to do</h3>
+    <div class="policy" id="policy"></div>
+    <h3>What happened</h3>
+    <ul class="log" id="worldLog"></ul>
+  </section>
+
+  <!-- MIND -->
+  <section class="panel mind-panel">
+    <div class="panel-head">
+      <h2>Inner monologue</h2>
+      <span class="muted">generated freely by the network, colored by its confidence in each token</span>
+      <label class="switch" title="Let it sense the world before each thought (otherwise it continues only from its own past thoughts)"><input type="checkbox" data-setting="thoughts_grounded"><span></span>Grounded</label>
+    </div>
+    <div class="legend"><span class="tk c0">unsure</span><span class="tk c2">→</span><span class="tk c4">sure</span>
+      <span class="muted">· <u>underlined</u> = real word</span></div>
+    <div class="thoughts" id="thoughts"></div>
+
+    <div class="panel-head chat-head">
+      <h2>Conversation</h2>
+      <span class="muted">it answers with whatever it has learned so far</span>
+    </div>
+    <div class="chat" id="chat"></div>
+    <form class="chat-input" id="chatForm">
+      <select id="chatMode" title="Talk: it replies. Teach: the text becomes something it studies.">
+        <option value="chat">Talk</option>
+        <option value="teach">Teach</option>
+      </select>
+      <input id="chatText" autocomplete="off" placeholder="Say something to the mind…">
+      <button class="primary">Send</button>
+    </form>
+  </section>
+
+  <!-- INSIGHT -->
+  <section class="panel insight-panel">
+    <nav class="tabs" id="tabs">
+      <button data-tab="growth" class="on">Growth</button>
+      <button data-tab="brain">Brain</button>
+      <button data-tab="teacher">Teacher</button>
+      <button data-tab="data">Data</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+
+    <div class="tab on" id="tab-growth">
+      <div class="charts">
+        <figure><figcaption>Loss <i class="sw a"></i>train <i class="sw b"></i>held-out FineWeb</figcaption><canvas data-chart="loss"></canvas></figure>
+        <figure><figcaption>Bits per byte <span class="muted">(lower = understands text better)</span></figcaption><canvas data-chart="bpb"></canvas></figure>
+        <figure><figcaption>Real words in its thoughts</figcaption><canvas data-chart="real"></canvas></figure>
+        <figure><figcaption>Distinct words it has used</figcaption><canvas data-chart="vocab"></canvas></figure>
+        <figure><figcaption>Body reward <span class="muted">(how well it looks after itself and explores)</span></figcaption><canvas data-chart="reward"></canvas></figure>
+        <figure><figcaption>Teacher's assessment <span class="muted">(0–10)</span></figcaption><canvas data-chart="assess"></canvas></figure>
+        <figure><figcaption>Learning speed <span class="muted">(tokens/s)</span></figcaption><canvas data-chart="tps"></canvas></figure>
+      </div>
+      <div class="note" id="assessNote"></div>
+      <h3>Words it uses</h3>
+      <div class="vocab" id="vocabWords"></div>
+    </div>
+
+    <div class="tab" id="tab-brain">
+      <h3>Where it looked during its last thought <span class="muted">(last layer attention, averaged over heads)</span></h3>
+      <div class="canvas-wrap"><canvas id="attn"></canvas></div>
+      <h3>Layer activity</h3>
+      <div class="layers" id="layers"></div>
+      <h3>Probe its predictions</h3>
+      <form class="row gap" id="probeForm">
+        <input id="probeText" placeholder="Type text, e.g. The cat sat on the" value="The cat sat on the">
+        <button>Probe</button>
+      </form>
+      <div class="probe-out" id="probeTokens"></div>
+      <div class="probe-next" id="probeNext"></div>
+      <div class="muted small">Each token is shaded by how surprised the mind was by it (bits). On the right: what it expects next.</div>
+      <h3>Anatomy</h3>
+      <div class="facts" id="anatomy"></div>
+    </div>
+
+    <div class="tab" id="tab-teacher">
+      <div class="row gap wrap">
+        <label class="switch"><input type="checkbox" data-setting="teacher_enabled"><span></span>Teacher on</label>
+        <select id="ollamaModel" title="Ollama model used as teacher"></select>
+        <button id="btnModels">Refresh models</button>
+      </div>
+      <div class="facts" id="teacherFacts"></div>
+      <div class="row gap wrap">
+        <label class="switch"><input type="checkbox" data-setting="teacher_reviews_thoughts"><span></span>Rewrites its thoughts</label>
+        <label class="switch"><input type="checkbox" data-setting="teacher_assesses"><span></span>Assesses progress</label>
+      </div>
+      <h3>Teacher's notebook</h3>
+      <div class="feed" id="teacherFeed"></div>
+    </div>
+
+    <div class="tab" id="tab-data">
+      <div class="facts" id="dataFacts"></div>
+      <h3>Diet <span class="muted">(share of each training batch)</span></h3>
+      <div class="sliders">
+        <label>FineWeb web text <input type="range" min="0" max="1" step="0.01" data-setting="data.mix_fineweb"><output></output></label>
+        <label>Teacher lessons <input type="range" min="0" max="1" step="0.01" data-setting="data.mix_teacher"><output></output></label>
+        <label>Lived experience <input type="range" min="0" max="1" step="0.01" data-setting="data.mix_experience"><output></output></label>
+      </div>
+      <label class="switch"><input type="checkbox" data-setting="data.fineweb_enabled"><span></span>Stream FineWeb</label>
+      <h3>Recent reading</h3>
+      <div class="feed" id="readFeed"></div>
+    </div>
+
+    <div class="tab" id="tab-settings">
+      <div class="sliders">
+        <label>Seconds between thoughts <input type="range" min="0.5" max="30" step="0.5" data-setting="thought_interval"><output></output></label>
+        <label>Thought length (tokens) <input type="range" min="8" max="160" step="4" data-setting="thought_tokens"><output></output></label>
+        <label>Thought temperature <input type="range" min="0.1" max="1.5" step="0.05" data-setting="thought_temperature"><output></output></label>
+        <label>Monologue memory (tokens) <input type="range" min="0" max="480" step="16" data-setting="memory_tokens"><output></output></label>
+        <label>Reply length (tokens) <input type="range" min="8" max="200" step="4" data-setting="reply_tokens"><output></output></label>
+        <label>Reply temperature <input type="range" min="0.1" max="1.5" step="0.05" data-setting="reply_temperature"><output></output></label>
+        <label>Seconds per body step <input type="range" min="0.05" max="3" step="0.05" data-setting="world_tick"><output></output></label>
+        <label>Muon learning rate <input type="range" min="0.002" max="0.05" step="0.001" data-setting="train.muon_lr"><output></output></label>
+        <label>AdamW learning rate <input type="range" min="0.0002" max="0.01" step="0.0002" data-setting="train.adam_lr"><output></output></label>
+        <label>Body learning weight <input type="range" min="0" max="2" step="0.05" data-setting="train.rl_coef"><output></output></label>
+        <label>Autosave (minutes) <input type="range" min="0" max="60" step="1" data-setting="autosave_minutes"><output></output></label>
+      </div>
+      <label class="switch"><input type="checkbox" data-setting="train.auto_grow"><span></span>Grow automatically when learning plateaus</label>
+      <div class="row gap"><button id="btnResetWorld">New world</button></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
