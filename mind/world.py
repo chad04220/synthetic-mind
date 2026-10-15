@@ -68,6 +68,7 @@ class World:
         self.next_id = 1
         self.entities: dict[int, dict] = {}
         self.terrain = [[GRASS] * W for _ in range(H)]
+        self.terrain_v = random.randrange(1 << 30)   # changes whenever the terrain does
         self.body = Body()
         self.visitor: dict | None = None   # you, when you join the world ("my friend" to the mind)
         self.heard = ""                    # what you last said near the mind
@@ -618,6 +619,7 @@ class World:
             if e["kind"] == "flower" and "grow" in e and self.tick_n - e["grow"] > 400:
                 e.pop("grow")
                 self.terrain[e["y"]][e["x"]] = FLOWERS
+                self.terrain_v += 1
         counts = {}
         for e in self.entities.values():
             counts[e["kind"]] = counts.get(e["kind"], 0) + 1
@@ -656,6 +658,7 @@ class World:
                 "holding": self.visitor["holding"]["kind"] if self.visitor["holding"] else None,
                 "said": self.visitor["said"] if time.time() < self.visitor["said_until"] else ""},
         }
+        d["terrain_v"] = self.terrain_v
         if full:
             d["terrain"] = self.terrain
         return d
@@ -668,6 +671,7 @@ class World:
 
     def load_state(self, s: dict):
         self.tick_n, self.next_id, self.terrain = s["tick"], s["next_id"], s["terrain"]
+        self.terrain_v += 1
         self.entities = {e["id"]: e for e in s["entities"]}
         for k, v in s["body"].items():
             setattr(self.body, k, v)

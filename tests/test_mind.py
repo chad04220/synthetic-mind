@@ -194,3 +194,14 @@ def test_world_edits_apply_without_the_engine(tmp_path):
     assert any("kind little mind" in t for t, _, _ in m.experience_pool.texts())
     m.world_command("leave")
     assert m.world_view()["visitor"] is None
+
+
+def test_long_pauses_are_detected_and_explained(tmp_path):
+    cfg = tiny_cfg("H")
+    m = Mind(cfg, tmp_path, torch.device("cpu"))
+    m._next = {"thought": 1e18, "body": 1e18, "snap": 0.0, "save": 0.0, "last": time.time()}
+    cfg.autosave_minutes = 1e-9          # save on this tick...
+    m.save = lambda: time.sleep(1.2)      # ...and make saving slow
+    m._tick()
+    assert m.last_hitch["seconds"] >= 1.2 and "saving" in m.last_hitch["why"]
+    assert "pause of" in (m.dir / "engine.log").read_text()

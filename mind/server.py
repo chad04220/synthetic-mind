@@ -40,8 +40,15 @@ def clean(o):
     return o
 
 
+def dumps(obj) -> str:
+    try:
+        return json.dumps(obj, allow_nan=False)
+    except ValueError:  # a NaN somewhere: replace it (slower, so only when needed)
+        return json.dumps(clean(obj))
+
+
 async def send(sock: WebSocket, obj) -> None:
-    await sock.send_text(json.dumps(clean(obj)))
+    await sock.send_text(dumps(obj))
 
 
 def create_app(mind: Mind) -> FastAPI:
@@ -94,13 +101,22 @@ def create_app(mind: Mind) -> FastAPI:
                 await asyncio.sleep(0.2)
             await send(sock, init_payload())
             last = mind.event_id
+            seen_terrain, seen_internals = None, None
             while True:
                 await asyncio.sleep(0.25)
                 evs = mind.events_since(last)
                 if evs:
                     last = evs[-1]["id"]
                 # The world is read fresh each tick, so your edits show even while the engine is busy.
-                snap = dict(mind.snapshot, world=mind.world_view())
+                # Bulky parts that rarely change (terrain, attention maps) are sent only when they do.
+                world = mind.world_view()
+                if world["terrain_v"] == seen_terrain:
+                    del world["terrain"]
+                seen_terrain = world["terrain_v"]
+                snap = dict(mind.snapshot, world=world)
+                if snap.get("internals_v") == seen_internals:
+                    snap.pop("internals", None)
+                seen_internals = snap.get("internals_v")
                 await send(sock, {"type": "tick", "snap": snap, "events": evs, "t": time.time()})
         except (WebSocketDisconnect, RuntimeError):
             pass

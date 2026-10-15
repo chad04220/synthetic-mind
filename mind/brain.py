@@ -13,6 +13,7 @@ The web server only reads snapshots and the event stream and posts commands.
 from __future__ import annotations
 
 import contextlib
+from array import array
 import math
 import queue
 import random
@@ -123,6 +124,9 @@ class Mind:
         self.started_at = time.time()
         self.train_status = "starting"
         self.skipped_steps = 0
+        self.last_hitch: dict = {}
+        self._parts: dict[str, float] = {}
+        self.internals_v = 0
         self.skipped_in_row = 0
         self.last_error = ""
         self._printed: dict[str, float] = {}
@@ -148,6 +152,7 @@ class Mind:
         self.fineweb.start()
         self.teacher.start()
         self._thread.start()
+        threading.Thread(target=self._watchdog, name="watchdog", daemon=True).start()
 
     def stop(self):
         self._stop.set()
@@ -328,6 +333,7 @@ class Mind:
             self.model.hidden(x, cap)
         last = cap["attn"][-1]
         n = min(48, last.size(0))
+        self.internals_v += 1
         self.internals = {
             "tokens": [self.tok.token_str(t) for t in ids[-n:]],
             "attn": [[round(float(v), 3) for v in row[-n:]] for row in last[-n:]],
@@ -609,30 +615,64 @@ class Mind:
                 time.sleep(1.0)
         self.save()
 
+    def _timed(self, part: str, fn):
+        t = time.perf_counter()
+        try:
+            return fn()
+        finally:
+            self._parts[part] = self._parts.get(part, 0.0) + time.perf_counter() - t
+
     def _tick(self) -> bool:
         cfg, nx = self.cfg, self._next
         now = time.time()
         self.age_seconds += now - nx["last"]
         nx["last"] = now
-        self._drain_commands()
+        self._parts = {}
+        t0 = time.perf_counter()
+        self._timed("your requests", self._drain_commands)
         did = False
         if cfg.world_enabled and now >= nx["body"]:
             nx["body"] = now + cfg.world_tick
-            self.body_step()
+            self._timed("moving its body", self.body_step)
             did = True
         if now >= nx["thought"]:
             nx["thought"] = time.time() + cfg.thought_interval
-            self.think()
+            self._timed("thinking", self.think)
             did = True
-        if cfg.training and self.train_step():
+        if cfg.training and self._timed("training", self.train_step):
             did = True
         if now >= nx["snap"]:
             nx["snap"] = now + 0.25
             self._snap()
         if cfg.autosave_minutes > 0 and now - nx["save"] > cfg.autosave_minutes * 60:
             nx["save"] = now
-            self.save()
+            self._timed("saving", self.save)
+        took = time.perf_counter() - t0
+        if took > 1.0:
+            worst = max(self._parts, key=self._parts.get) if self._parts else "?"
+            self._hitch(took, f"the engine was busy {worst}", self._parts)
+        # Leave the GPU some idle time so the browser and desktop stay smooth.
+        share = min(max(cfg.gpu_share, 0.2), 1.0)
+        if did and share < 1.0 and self.device.type == "cuda":
+            time.sleep(min(0.25, took * (1 - share) / share))
         return did
+
+    def _hitch(self, seconds: float, why: str, parts: dict | None = None):
+        detail = ", ".join(f"{k} {v:.2f}s" for k, v in sorted((parts or {}).items(), key=lambda kv: -kv[1]))
+        self.last_hitch = {"t": time.time(), "seconds": round(seconds, 2), "why": why}
+        self.log(f"pause of {seconds:.1f}s: {why}" + (f" ({detail})" if detail else ""), every=5)
+
+    def _watchdog(self):
+        """Notice when the whole program stops running (another thread holding Python's lock,
+        the operating system, or a paused console) as opposed to the engine being busy."""
+        last = time.perf_counter()
+        while not self._stop.is_set():
+            time.sleep(0.25)
+            now = time.perf_counter()
+            if now - last > 1.5:
+                self._hitch(now - last - 0.25, "the whole program was paused (by the system, the console, "
+                            "or another thread)")
+            last = now
 
     def _drain_commands(self):
         while True:
@@ -736,6 +776,8 @@ class Mind:
             "lr": self.last_lr, "gnorm": self.last_gnorm,
             "train_status": self.train_status if self.cfg.training else "paused",
             "skipped_steps": self.skipped_steps, "last_error": self.last_error,
+            "hitch": self.last_hitch if self.last_hitch and time.time() - self.last_hitch["t"] < 300 else None,
+            "internals_v": self.internals_v,
             "stage": stage, "stage_name": STAGES[stage][0], "stage_blurb": STAGES[stage][2],
             "stages": [s[0] for s in STAGES],
             "vocab": len(self.vocab_used), "vocab_sample": sorted(self.vocab_used)[-60:],
@@ -781,8 +823,8 @@ class Mind:
             "vocab": sorted(self.vocab_used),
             "assessments": self.assessments,
             "history": list(self.history),
-            "teacher_pool": list(self.teacher_pool.items),
-            "experience_pool": list(self.experience_pool.items),
+            "teacher_pool": [(array("i", ids).tobytes(), w, tag) for ids, w, tag in list(self.teacher_pool.items)],
+            "experience_pool": [(array("i", ids).tobytes(), w, tag) for ids, w, tag in list(self.experience_pool.items)],
             "world": self.world.state(),
             "action_counts": self.action_counts,
         }
@@ -827,8 +869,13 @@ class Mind:
         self.vocab_used = set(s["vocab"])
         self.assessments = s["assessments"]
         self.history.extend(s["history"])
-        self.teacher_pool.items.extend(s["teacher_pool"])
-        self.experience_pool.items.extend(s["experience_pool"])
+        for pool, items in ((self.teacher_pool, s["teacher_pool"]), (self.experience_pool, s["experience_pool"])):
+            for ids, w, tag in items:
+                if isinstance(ids, bytes):
+                    a = array("i")
+                    a.frombytes(ids)
+                    ids = a.tolist()
+                pool.items.append((ids, w, tag))
         try:
             self.world.load_state(s["world"])
         except (KeyError, TypeError):

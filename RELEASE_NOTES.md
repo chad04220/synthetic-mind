@@ -1,3 +1,21 @@
+# Synthetic Mind v0.1.4
+
+## Smoother browser, and pauses that explain themselves
+
+- **The dashboard is much lighter.** It used about 14% of the browser's main thread and 80 KB/s of
+  updates; now about 4% and 21 KB/s. The map is redrawn only when something moves or changes
+  (and not at all in a hidden tab), the header orb no longer animates nonstop, only the tab you are
+  looking at is updated, and the map's terrain and the attention data are sent only when they change.
+- **Leaves the GPU room for your desktop.** Settings → *GPU time for training* (default 90%): after
+  each step the engine rests briefly, so the browser, which shares the GPU, stays responsive. Set it
+  to 100% for maximum training speed, or lower if the desktop still stutters.
+- **Every pause is measured and explained.** Any stall longer than a second is timed and attributed
+  (training, thinking, moving its body, saving, or the whole program being paused by the system) and
+  shown on the Growth tab's status line and in `minds/<name>/engine.log`.
+- **Faster saves.** Memories are stored compactly in checkpoints, so autosave no longer stalls.
+
+---
+
 # Synthetic Mind v0.1.3
 
 ## New: be there with it

@@ -134,8 +134,8 @@ class FineWebStream:
             self.tokens_seen += len(ids)
             if self.docs_seen % 4 == 0:
                 self.words.update(_WORD.findall(text.lower()))
-                if len(self.words) > 200_000:
-                    self.words = Counter(dict(self.words.most_common(100_000)))
+                if len(self.words) > 400_000:   # prune rarely: it holds Python's lock for a moment
+                    self.words = Counter(dict(self.words.most_common(200_000)))
 
     def take(self, n: int) -> list[int] | None:
         """Pack whole documents (and the start of the next one) into n tokens."""

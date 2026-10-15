@@ -30,7 +30,15 @@ function connect() {
       if (msg.type === "init") init(msg);
       else for (const e of msg.events) { try { onEvent(e); } catch (err) { console.error(e.kind, err); } }
     } catch (err) { console.error(err); }
-    try { if (msg.snap) render(msg.snap); } catch (err) { console.error("render", err); }
+    try {
+      if (msg.snap) {
+        if (S.snap) {
+          if (msg.snap.world && !msg.snap.world.terrain) msg.snap.world.terrain = S.snap.world.terrain;
+          if (!("internals" in msg.snap)) msg.snap.internals = S.snap.internals;
+        }
+        render(msg.snap);
+      }
+    } catch (err) { console.error("render", err); }
   };
   ws.onclose = () => { $("#device").textContent = "disconnected, reconnecting…"; setTimeout(connect, 1500); };
 }
@@ -114,7 +122,7 @@ function addThought(t) {
     <div class="meta"><span>step ${fmt(t.step)}</span><span>${Math.round((t.real || 0) * 100)}% real words</span>
     <span>confidence ${(t.confidence * 100 || 0).toFixed(1)}%</span>${t.grounded ? "<span>grounded in senses</span>" : ""}</div>`;
   box.append(d);
-  while (box.children.length > 150) box.firstChild.remove();
+  while (box.children.length > 80) box.firstChild.remove();
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
@@ -161,12 +169,18 @@ $("#chatForm").onsubmit = async (ev) => {
 };
 
 // ---------------------------------------------------------------- header + panels
+// Replace an element's HTML only when it actually changed (avoids needless layout and paint).
+function setHTML(el, html) { if (el._html !== html) { el._html = html; el.innerHTML = html; } }
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+const tabOn = (t) => $(`#tab-${t}`).classList.contains("on");
+
 function render(s) {
   S.snap = s;
+  S.worldDirty = true;
   $("#mindName").textContent = s.name;
   $("#device").textContent = `${s.device} · ${s.precision} · ${s.tokenizer} tokens`;
   document.title = `${s.name} · ${s.stage_name}`;
-  $("#ladder").innerHTML = s.stages.map((n, i) => `<span class="${i < s.stage ? "done" : i === s.stage ? "now" : ""}">${n}</span>`).join("");
+  setHTML($("#ladder"), s.stages.map((n, i) => `<span class="${i < s.stage ? "done" : i === s.stage ? "now" : ""}">${n}</span>`).join(""));
   $("#stageBlurb").textContent = s.stage_blurb;
   $("#kAge").textContent = dur(s.age);
   $("#kTokens").textContent = big(s.tokens);
@@ -176,18 +190,19 @@ function render(s) {
   $("#kTps").textContent = !s.settings.training ? "paused" : learning ? `${big(Math.round(s.tps))} tok/s` : "not learning";
   const st = $("#trainStatus");
   st.className = "status " + (learning || !s.settings.training ? "ok" : "warn");
-  st.innerHTML = `Training: ${esc(s.train_status || "")} · step ${fmt(s.step)}` +
+  setHTML(st, `Training: ${esc(s.train_status || "")} · step ${fmt(s.step)}` +
     (s.skipped_steps ? ` · ${fmt(s.skipped_steps)} unstable steps skipped` : "") +
-    (s.last_error ? `<span class="err">Last error: ${esc(s.last_error)} (details in minds/${esc(s.name)}/engine.log)</span>` : "");
+    (s.hitch ? `<span class="err">Pause of ${s.hitch.seconds}s ${dur((Date.now() / 1000) - s.hitch.t)} ago: ${esc(s.hitch.why)}</span>` : "") +
+    (s.last_error ? `<span class="err">Last error: ${esc(s.last_error)} (details in minds/${esc(s.name)}/engine.log)</span>` : ""));
   $("#kVocab").textContent = fmt(s.vocab);
   $("#btnTrain").textContent = s.settings.training ? "Pause learning" : "Resume learning";
   $("#btnTrain").classList.toggle("primary", !s.settings.training);
   syncSettings(s.settings);
   renderBody(s);
-  renderBrain(s);
-  renderTeacher(s);
-  renderData(s);
-  $("#vocabWords").innerHTML = (s.vocab_sample || []).map((w) => `<span>${esc(w)}</span>`).join("");
+  if (tabOn("brain")) renderBrain(s);
+  if (tabOn("teacher")) renderTeacher(s);
+  if (tabOn("data")) renderData(s);
+  if (tabOn("growth")) setHTML($("#vocabWords"), (s.vocab_sample || []).map((w) => `<span>${esc(w)}</span>`).join(""));
   const warn = [];
   if (s.fineweb.error && s.settings["data.fineweb_enabled"]) warn.push(`FineWeb: ${s.fineweb.error}`);
   if (s.teacher.error && s.settings.teacher_enabled) warn.push(`Teacher: ${s.teacher.error}`);
@@ -244,18 +259,18 @@ function renderTeacher(s) {
     sel.value = s.settings.ollama_model;
     sel.dataset.sig = sig;
   }
-  $("#teacherFacts").innerHTML = dl([
+  setHTML($("#teacherFacts"), dl([
     ["Status", esc(s.teacher.status) + (s.teacher.error ? ` <span class="muted">(${esc(s.teacher.error)})</span>` : "")],
     ["Server", esc(s.settings.ollama_url)],
     ["Lessons written", fmt(s.teacher.lessons)],
     ["Lesson pool", fmt(s.pools.teacher)],
-  ]);
+  ]));
 }
 
 function renderData(s) {
   const f = s.fineweb, rf = s.rows_from, tot = Object.values(rf).reduce((a, b) => a + b, 0) || 1;
   const pct = (k) => `${((rf[k] || 0) / tot * 100).toFixed(1)}%`;
-  $("#dataFacts").innerHTML = dl([
+  setHTML($("#dataFacts"), dl([
     ["FineWeb", `${esc(f.status)}${f.error ? ` <span class="muted">(${esc(f.error)})</span>` : ""}`],
     ["Now reading", `<span class="muted">${esc(f.source || "–")}</span>`],
     ["Documents streamed", fmt(f.docs)],
@@ -263,25 +278,25 @@ function renderData(s) {
     ["Bytes per token", f.bytes_per_token],
     ["Experience pool", `${fmt(s.pools.experience)} memories`],
     ["Rows trained so far", `web ${pct("fineweb")} · teacher ${pct("teacher")} · experience ${pct("experience")}`],
-  ]);
+  ]));
 }
 
 function renderBrain(s) {
-  $("#anatomy").innerHTML = dl([
+  setHTML($("#anatomy"), dl([
     ["Parameters", `${fmt(s.params)} <span class="muted">(${fmt(s.trunk_params)} outside the word embedding)</span>`],
     ["Layers", `${s.layers}${s.growths ? ` <span class="muted">(grew ${s.growths}×)</span>` : ""}`],
     ["Width", s.d_model], ["Context", `${s.seq_len} tokens`],
     ["Training step", fmt(s.step)], ["Loss", s.loss ? s.loss.toFixed(4) : "–"],
     ["Held-out loss", s.val ? s.val.toFixed(4) : "–"], ["Learning rate", s.lr ? s.lr.toExponential(2) : "–"],
     ["Gradient norm", s.gnorm ? s.gnorm.toFixed(3) : "–"],
-  ]);
+  ]));
   const it = s.internals || {};
   if (it.resid_rms) {
     const mr = Math.max(...it.resid_rms, 1e-6), me = Math.max(...it.attn_entropy, 1e-6);
-    $("#layers").innerHTML = `<div><span></span><span>activation size</span><span>attention spread</span></div>` +
-      it.resid_rms.map((r, i) => `<div><span>layer ${i + 1}</span><i style="width:${r / mr * 100}%"></i><i class="e" style="width:${it.attn_entropy[i] / me * 100}%"></i></div>`).join("");
+    setHTML($("#layers"), `<div><span></span><span>activation size</span><span>attention spread</span></div>` +
+      it.resid_rms.map((r, i) => `<div><span>layer ${i + 1}</span><i style="width:${r / mr * 100}%"></i><i class="e" style="width:${it.attn_entropy[i] / me * 100}%"></i></div>`).join(""));
   }
-  if ($("#tab-brain").classList.contains("on") && it !== S.lastInternals) { S.lastInternals = it; drawAttn(s); }
+  if (it !== S.lastInternals) { S.lastInternals = it; drawAttn(s); }
 }
 
 function drawAttn(s) {
@@ -403,7 +418,7 @@ async function worldApi(name, body = {}) {
     const r = await fetch(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.detail || r.statusText);
-    if (j.world && S.snap) { S.snap.world = j.world; renderBody(S.snap); }
+    if (j.world && S.snap) { S.snap.world = j.world; S.worldDirty = true; renderBody(S.snap); }
     return j.result;
   } catch (err) { toast(err.message); }
 }
@@ -489,6 +504,11 @@ function buildTerrain(w, ts) {
 function drawWorld(now) {
   requestAnimationFrame(drawWorld);
   const s = S.snap; if (!s) return;
+  // Redraw when the world changed or something is still gliding; otherwise ~4 times a second
+  // for blinking and bobbing. The GPU is busy training, so the page should not repaint needlessly.
+  const moving = S.moving || (now - (S.lastDraw || 0)) > 250;
+  if (!(S.worldDirty || moving) || now - (S.lastDraw || 0) < 33) return;
+  S.lastDraw = now; S.worldDirty = false;
   const w = s.world, dpr = devicePixelRatio || 1;
   // Camera: the whole map, or (zoomed) half of it following you, or the mind when you're away.
   const vw = S.zoom ? w.w / 2 : w.w, vh = S.zoom ? w.h / 2 : w.h;
@@ -523,6 +543,7 @@ function drawWorld(now) {
   const b = w.body, target = [b.x * ts + ts / 2, b.y * ts + ts / 2];
   if (!bodyPos || Math.hypot(bodyPos[0] - target[0], bodyPos[1] - target[1]) > ts * 3) bodyPos = target.slice();
   bodyPos[0] += (target[0] - bodyPos[0]) * .25; bodyPos[1] += (target[1] - bodyPos[1]) * .25;
+  S.moving = Math.hypot(target[0] - bodyPos[0], target[1] - bodyPos[1]) > .5 || Math.hypot(camT[0] - S.cam[0], camT[1] - S.cam[1]) > .01;
   const [bx, by] = bodyPos, r = ts * .36 * (1 + Math.sin(t * 2) * .03);
   const glow = wg.createRadialGradient(bx, by, r * .2, bx, by, r * 2.2);
   glow.addColorStop(0, "rgba(180,140,255,.55)"); glow.addColorStop(1, "rgba(124,156,255,0)");
@@ -551,6 +572,7 @@ function drawWorld(now) {
     const vt = [v.x * ts + ts / 2, v.y * ts + ts / 2];
     if (!S.youPos || Math.hypot(S.youPos[0] - vt[0], S.youPos[1] - vt[1]) > ts * 3) S.youPos = vt.slice();
     S.youPos[0] += (vt[0] - S.youPos[0]) * .35; S.youPos[1] += (vt[1] - S.youPos[1]) * .35;
+    if (Math.hypot(vt[0] - S.youPos[0], vt[1] - S.youPos[1]) > .5) S.moving = true;
     [vx, vy] = S.youPos;
     const vr = ts * .34;
     const vg = wg.createRadialGradient(vx - vr * .3, vy - vr * .3, vr * .1, vx, vy, vr);
@@ -615,10 +637,10 @@ function tileAt(e) {
   return { x: Math.min(w.w - 1, Math.max(0, Math.floor(vw.x + (e.clientX - rect.left) / rect.width * vw.w))),
            y: Math.min(w.h - 1, Math.max(0, Math.floor(vw.y + (e.clientY - rect.top) / rect.height * vw.h))) };
 }
-function setZoom(on) { S.zoom = on; $("#btnZoom").textContent = on ? "🗺️ Whole map" : "🔍 Zoom in"; }
+function setZoom(on) { S.zoom = on; S.worldDirty = true; $("#btnZoom").textContent = on ? "🗺️ Whole map" : "🔍 Zoom in"; }
 $("#btnZoom").onclick = () => setZoom(!S.zoom);
-wc.addEventListener("mousemove", (e) => { if (S.snap) S.hover = tileAt(e); });
-wc.addEventListener("mouseleave", () => { S.hover = null; });
+wc.addEventListener("mousemove", (e) => { if (S.snap) { S.hover = tileAt(e); S.worldDirty = true; } });
+wc.addEventListener("mouseleave", () => { S.hover = null; S.worldDirty = true; });
 wc.addEventListener("click", async (e) => {
   wc.focus();
   if (!S.snap || mode !== "add") return;
@@ -655,11 +677,11 @@ function renderBody(s) {
   $("#barEnergy").style.width = `${b.energy}%`; $("#valEnergy").textContent = Math.round(b.energy);
   $("#barEnergy").style.background = b.energy < 25 ? css("--bad") : b.energy < 50 ? css("--warn") : css("--good");
   $("#barFun").style.width = `${b.fun}%`; $("#valFun").textContent = Math.round(b.fun);
-  $("#bodyFacts").textContent = `${b.sleeping ? "Sleeping · " : ""}holding ${b.holding || "nothing"} · ${fmt(b.steps)} steps · ${b.visited} places visited · fainted ${b.faints}× · reward ${b.reward}`;
+  setText($("#bodyFacts"), `${b.sleeping ? "Sleeping · " : ""}holding ${b.holding || "nothing"} · ${fmt(b.steps)} steps · ${b.visited} places visited · fainted ${b.faints}× · reward ${b.reward}`);
   const mx = Math.max(...s.policy, 1e-6);
-  $("#policy").innerHTML = s.actions.map((a, i) => `<div title="${a}: ${(s.policy[i] * 100).toFixed(1)}%"><i style="height:${s.policy[i] / mx * 70}%"></i><span>${a}</span></div>`).join("");
+  setHTML($("#policy"), s.actions.map((a, i) => `<div title="${a}: ${(s.policy[i] * 100).toFixed(1)}%"><i style="height:${Math.round(s.policy[i] / mx * 70)}%"></i><span>${a}</span></div>`).join(""));
   $("#policy").style.height = "110px";
-  $("#worldLog").innerHTML = w.log.slice().reverse().map((l) => `<li>${esc(l)}</li>`).join("");
+  setHTML($("#worldLog"), w.log.slice().reverse().map((l) => `<li>${esc(l)}</li>`).join(""));
   const v = w.visitor, jb = $("#btnJoin");
   if (!!v !== !!S.hadVisitor) { S.hadVisitor = !!v; setZoom(!!v); }   // follow yourself while you're in the world
   jb.textContent = v ? "Leave the world" : "Join the world";

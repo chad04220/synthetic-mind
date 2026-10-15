@@ -122,7 +122,8 @@ expects next, and its anatomy.
 thoughts and ideal replies. **Data tab.** FineWeb status, the file it is reading, and
 sliders for the diet (web text / teacher lessons / lived experience). **Settings.** Thought
 rate, length and temperature, monologue memory, reply length, body speed, learning rates,
-autosave and automatic growth.
+autosave, automatic growth and *GPU time for training* (below 100% the engine rests a moment
+after each step so the browser and desktop, which share the GPU, stay smooth).
 
 ## How it learns as fast as it can
 

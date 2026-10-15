@@ -48,8 +48,8 @@ input[type=text], input:not([type]), select { background: var(--panel-2); border
 .top > * { min-width: 0; }
 .orb { flex: none; width: 38px; height: 38px; border-radius: 50%;
   background: radial-gradient(circle at 35% 35%, #fff 0, var(--accent) 35%, var(--accent-2) 75%, transparent 76%);
-  box-shadow: 0 0 22px var(--accent); animation: pulse 3s ease-in-out infinite; }
-.orb.thinking { animation-duration: .6s; }
+  box-shadow: 0 0 22px var(--accent); }
+.orb.thinking { animation: pulse .6s ease-in-out 2; }   /* only when a thought arrives: idle pages stay still */
 @keyframes pulse { 50% { transform: scale(.9); box-shadow: 0 0 8px var(--accent); } }
 .name { font-weight: 700; font-size: 18px; }
 .sub { color: var(--muted); font-size: 12px; }

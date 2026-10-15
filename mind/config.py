@@ -107,6 +107,9 @@ class MindConfig:
 
     autosave_minutes: float = 10.0
     training: bool = True
+    # Share of time the GPU spends training. Below 1.0 the engine rests briefly after each step,
+    # which keeps the browser and the rest of the desktop smooth while it trains.
+    gpu_share: float = 0.9
 
     def apply_preset(self, preset: str) -> None:
         d, n, h, t = MODEL_PRESETS[preset]
@@ -152,6 +155,7 @@ def _fill(obj, d: dict) -> None:
 # Settings the UI may change on a live mind (dotted paths into MindConfig).
 LIVE_SETTINGS = {
     "training": bool,
+    "gpu_share": float,
     "thought_interval": float,
     "thought_tokens": int,
     "thought_temperature": float,
