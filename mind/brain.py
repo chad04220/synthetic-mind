@@ -120,6 +120,11 @@ class Mind:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._engine, name="engine", daemon=True)
         self.started_at = time.time()
+        self.train_status = "starting"
+        self.skipped_steps = 0
+        self.skipped_in_row = 0
+        self.last_error = ""
+        self._printed: dict[str, float] = {}
         self.load()
 
     # ------------------------------------------------------------------ setup
@@ -148,6 +153,43 @@ class Mind:
         self._thread.join(timeout=30)
         self.fineweb.stop()
         self.teacher.stop()
+
+    # ------------------------------------------------------------------ diagnostics
+    def log(self, msg: str, every: float = 0.0, error: bool = False):
+        """Append to minds/<name>/engine.log; echo to the console at most once per `every` seconds
+        (printing from a busy loop can stall the whole process when a Windows console is paused)."""
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self.dir / "engine.log", "a", encoding="utf-8") as f:
+                f.write(f"{stamp} {msg}\n")
+        except OSError:
+            pass
+        if error:
+            self.last_error = f"{stamp[11:]} {msg.splitlines()[-1] if msg else ''}"[:400]
+        now = time.time()
+        key = msg[:40]
+        if now - self._printed.get(key, 0) >= every:
+            self._printed[key] = now
+            print(f"[mind] {msg}", flush=True)
+
+    def _weights_finite(self) -> bool:
+        return all(bool(torch.isfinite(p).all()) for p in self.model.parameters())
+
+    def _recover(self, why: str):
+        """Roll back to the last good checkpoint (or keep going from fresh moments)."""
+        self.log(f"{why}; restoring the last good checkpoint", error=True)
+        for name in ("state.pt", "state.prev.pt"):
+            path = self.dir / name
+            if path.exists():
+                s = torch.load(path, map_location=self.device, weights_only=False)
+                if all(torch.isfinite(v).all() for v in s["model"].values() if v.is_floating_point()):
+                    self.model.load_state_dict(s["model"])
+                    self._build_optim()
+                    self.event("error", {"text": f"{why}; restored {name}"})
+                    return
+        self.model = MindNet(self.cfg.model).to(self.device)
+        self._build_optim()
+        self.event("error", {"text": f"{why}; no good checkpoint, the network restarts from scratch"})
 
     # ------------------------------------------------------------------ events
     def event(self, kind: str, data: dict):
@@ -221,6 +263,8 @@ class Mind:
             with self.autocast():
                 logits = self.model(x)[0, -1].float()
             logits[self.tok.n_real:] = float("-inf")
+            if not torch.isfinite(logits[:self.tok.n_real]).all():
+                raise FloatingPointError("the network produced non-finite predictions")
             probs_full = F.softmax(logits, -1)
             ent = float(-(probs_full * probs_full.clamp_min(1e-12).log()).sum())
             p = F.softmax(logits / max(temperature, 1e-3), -1)
@@ -440,12 +484,15 @@ class Mind:
                 if rows:
                     t = torch.tensor(rows, device=self.device)
                     self.val_batches.append((t[:, :-1], t[:, 1:]))
-        t0 = time.time()
+        t0 = time.perf_counter()
         total = 0.0
         ntok = 0
         for _ in range(tc.grad_accum):
             batch = self.mixer.batch(B, T, self.device)
             if batch is None:
+                for o in self.opts:
+                    o.zero_grad(set_to_none=True)
+                self.train_status = "waiting for training data (FineWeb: %s)" % self.fineweb.status
                 return False
             x, y = batch
             with self.autocast():
@@ -462,18 +509,33 @@ class Mind:
             for g in o.param_groups:
                 g["lr"] = g["base_lr"] * f
         self.last_lr = tc.muon_lr * f if tc.optimizer == "muon" else tc.adam_lr * f
-        self.last_gnorm = float(torch.nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip))
+        gnorm = float(torch.nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip))
+        if not (math.isfinite(total) and math.isfinite(gnorm)):
+            # A bad step (overflow, a degenerate batch): drop it before it reaches the weights.
+            for o in self.opts:
+                o.zero_grad(set_to_none=True)
+            self.skipped_steps += 1
+            self.skipped_in_row += 1
+            if self.skipped_in_row >= 10 and not self._weights_finite():
+                self.skipped_in_row = 0
+                self._recover("the weights became non-finite")
+            self.train_status = f"skipped {self.skipped_steps} unstable step(s) (loss {total:.3g}, grad norm {gnorm:.3g})"
+            self.log(f"non-finite step skipped (loss={total}, gnorm={gnorm}, step={self.step})", every=30)
+            return True
+        self.last_gnorm = gnorm
+        self.skipped_in_row = 0
         for o in self.opts:
             o.step()
             o.zero_grad(set_to_none=True)
         if self.device.type == "cuda":
             torch.cuda.synchronize()
-        dt = time.time() - t0
+        dt = max(time.perf_counter() - t0, 1e-6)
         self.step += 1
         self.tokens_trained += ntok
-        self.tok_per_sec = 0.9 * self.tok_per_sec + 0.1 * ntok / max(dt, 1e-6) if self.step > 1 else ntok / dt
-        if not math.isfinite(total):
-            print("[mind] non-finite loss; skipping")
+        self.tok_per_sec = 0.9 * self.tok_per_sec + 0.1 * ntok / dt if self.step > 1 else ntok / dt
+        self.train_status = "learning"
+        if self.step % 200 == 0 and not self._weights_finite():
+            self._recover("the weights became non-finite")
             return True
         self.loss_ema = total if self.loss_ema is None else 0.98 * self.loss_ema + 0.02 * total
         if self.step % 10 == 0:
@@ -533,8 +595,10 @@ class Mind:
                     time.sleep(0.02)
             except Exception as e:  # keep the mind alive; show what went wrong
                 import traceback
-                traceback.print_exc()
+                self.log(traceback.format_exc(), every=60, error=True)
                 self.event("error", {"text": f"{type(e).__name__}: {e}"[:400]})
+                if isinstance(e, FloatingPointError) and not self._weights_finite():
+                    self._recover("the weights became non-finite")
                 self._snap()
                 time.sleep(1.0)
         self.save()
@@ -631,6 +695,8 @@ class Mind:
             "seq_len": self.cfg.model.seq_len, "tokenizer": self.tok.kind, "growths": self.growths,
             "loss": self.loss_ema, "val": self.val_loss, "bpb": self.bpb(), "tps": self.tok_per_sec,
             "lr": self.last_lr, "gnorm": self.last_gnorm,
+            "train_status": self.train_status if self.cfg.training else "paused",
+            "skipped_steps": self.skipped_steps, "last_error": self.last_error,
             "stage": stage, "stage_name": STAGES[stage][0], "stage_blurb": STAGES[stage][2],
             "stages": [s[0] for s in STAGES],
             "vocab": len(self.vocab_used), "vocab_sample": sorted(self.vocab_used)[-60:],
@@ -661,6 +727,9 @@ class Mind:
     def save(self) -> str:
         path = self.dir / "state.pt"
         tmp = path.with_suffix(".tmp")
+        if not self._weights_finite():
+            self._recover("refusing to save non-finite weights")
+            return ""
         state = {
             "model": self.model.state_dict(),
             "opts": [o.state_dict() for o in self.opts],
@@ -679,6 +748,8 @@ class Mind:
             "action_counts": self.action_counts,
         }
         torch.save(state, tmp)
+        if path.exists():
+            path.replace(self.dir / "state.prev.pt")
         tmp.replace(path)
         self.cfg.save(self.dir / "config.json")
         self.event("saved", {"path": str(path)})
@@ -689,6 +760,18 @@ class Mind:
         if not path.exists():
             return
         s = torch.load(path, map_location=self.device, weights_only=False)
+        if not all(torch.isfinite(v).all() for v in s["model"].values() if v.is_floating_point()):
+            prev = self.dir / "state.prev.pt"
+            good = prev.exists() and all(torch.isfinite(v).all() for v in
+                                         torch.load(prev, map_location="cpu", weights_only=False)["model"].values()
+                                         if v.is_floating_point())
+            print(f"[mind] {path.name} holds broken (non-finite) weights; "
+                  + ("using state.prev.pt" if good else "the network restarts from scratch, memories are kept"))
+            if good:
+                s = torch.load(prev, map_location=self.device, weights_only=False)
+            else:
+                s["model"] = self.model.state_dict()
+                s["opts"] = []
         self.model.load_state_dict(s["model"])
         try:
             for o, st in zip(self.opts, s["opts"]):

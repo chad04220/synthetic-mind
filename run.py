@@ -6,11 +6,30 @@
 from __future__ import annotations
 
 import argparse
+import os
 import threading
 import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def disable_console_pause():
+    """Windows consoles freeze a program that prints while text is selected (QuickEdit mode):
+    one stray click in the window would stall training. Turn QuickEdit off for this console."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        handle = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            ENABLE_QUICK_EDIT_MODE, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
+            k32.SetConsoleMode(handle, (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS)
+    except Exception:
+        pass
 
 
 def main():
@@ -30,6 +49,7 @@ def main():
     ap.add_argument("--compile", action="store_true", help="torch.compile the training graph (needs Triton)")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
+    disable_console_pause()
 
     import torch
     import uvicorn

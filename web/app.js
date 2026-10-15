@@ -23,10 +23,14 @@ async function api(name, body = {}) {
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   ws.onmessage = (m) => {
-    const msg = JSON.parse(m.data);
-    if (msg.type === "init") init(msg);
-    else { for (const e of msg.events) onEvent(e); }
-    if (msg.snap) render(msg.snap);
+    // One bad message or rendering bug must never stop the page from updating.
+    let msg;
+    try { msg = JSON.parse(m.data); } catch (err) { console.error("bad message", err); return; }
+    try {
+      if (msg.type === "init") init(msg);
+      else for (const e of msg.events) { try { onEvent(e); } catch (err) { console.error(e.kind, err); } }
+    } catch (err) { console.error(err); }
+    try { if (msg.snap) render(msg.snap); } catch (err) { console.error("render", err); }
   };
   ws.onclose = () => { $("#device").textContent = "disconnected, reconnecting…"; setTimeout(connect, 1500); };
 }
@@ -168,7 +172,13 @@ function render(s) {
   $("#kTokens").textContent = big(s.tokens);
   $("#kBrain").textContent = `${big(s.params)} · ${s.layers}L`;
   $("#kBpb").textContent = s.bpb ? s.bpb.toFixed(3) : "–";
-  $("#kTps").textContent = s.settings.training ? `${big(Math.round(s.tps))} tok/s` : "paused";
+  const learning = s.train_status === "learning";
+  $("#kTps").textContent = !s.settings.training ? "paused" : learning ? `${big(Math.round(s.tps))} tok/s` : "not learning";
+  const st = $("#trainStatus");
+  st.className = "status " + (learning || !s.settings.training ? "ok" : "warn");
+  st.innerHTML = `Training: ${esc(s.train_status || "")} · step ${fmt(s.step)}` +
+    (s.skipped_steps ? ` · ${fmt(s.skipped_steps)} unstable steps skipped` : "") +
+    (s.last_error ? `<span class="err">Last error: ${esc(s.last_error)} (details in minds/${esc(s.name)}/engine.log)</span>` : "");
   $("#kVocab").textContent = fmt(s.vocab);
   $("#btnTrain").textContent = s.settings.training ? "Pause learning" : "Resume learning";
   $("#btnTrain").classList.toggle("primary", !s.settings.training);
@@ -326,7 +336,10 @@ function drawChart(canvas, lines, opt = {}) {
   const g = canvas.getContext("2d");
   const pts = lines.flatMap((l) => l.data);
   g.font = `${10 * dpr}px system-ui`; g.fillStyle = css("--muted");
-  if (pts.length < 2) { g.fillText("waiting for data…", 8 * dpr, H / 2); return; }
+  if (pts.length < 2) {
+    g.fillText(S.snap && S.snap.step < 20 ? "waiting for the first training steps…" : "no data yet", 8 * dpr, H / 2);
+    return;
+  }
   let x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
   let y0 = opt.min ?? Math.min(...pts.map((p) => p[1])), y1 = opt.max ?? Math.max(...pts.map((p) => p[1]));
   if (y1 - y0 < 1e-9) { y1 += 1; y0 -= opt.min != null ? 0 : 1; }

@@ -195,3 +195,8 @@ figcaption { font-size: 12px; margin-bottom: 4px; }
 input[type=range] { accent-color: var(--accent); width: 100%; }
 #ollamaModel { max-width: 220px; }
 ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.status { font-size: 12.5px; padding: 7px 10px; border-radius: 8px; margin-bottom: 10px; background: var(--panel-2); }
+.status.ok::before { content: "● "; color: var(--good); }
+.status.warn { background: color-mix(in srgb, var(--warn) 16%, var(--panel-2)); }
+.status.warn::before { content: "● "; color: var(--warn); }
+.status .err { display: block; color: var(--bad); margin-top: 3px; font-family: var(--mono); font-size: 11.5px; word-break: break-word; }

@@ -1,3 +1,26 @@
+# Synthetic Mind v0.1.2
+
+## Fixed: freezes, and charts that never fill in
+
+- **An unstable training step can no longer break the network.** A step whose loss or gradients
+  are not finite (NaN/infinity) is now skipped before it reaches the weights. Previously it was
+  applied, which corrupted the weights for good: every later step failed, so no statistics were
+  recorded and the charts stayed on "waiting for data".
+- **Broken minds repair themselves.** Corrupted weights are never saved; the previous checkpoint is
+  kept as `state.prev.pt`, and a mind whose saved weights are broken resumes from the last good
+  checkpoint. If none exists the network restarts from scratch, and its memories, conversations and
+  world are kept.
+- **No more console freezes on Windows.** Clicking inside the console window put it into
+  text-selection mode, which pauses any program writing to it. That mode is now switched off for
+  Synthetic Mind's window, and repeated messages are rate-limited and written to
+  `minds/<name>/engine.log`.
+- **The dashboard keeps updating** even if one message or chart fails. Non-numeric values are never
+  sent to the page.
+- **Training status on the Growth tab**: learning, waiting for data, unstable steps skipped, and
+  the last error, if any. The header shows "not learning" when it isn't.
+
+---
+
 # Synthetic Mind v0.1.1
 
 ## Fixed: PyTorch installed without GPU support on Windows

@@ -3,6 +3,8 @@ forwards your actions to the engine thread."""
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import time
 from pathlib import Path
 
@@ -20,6 +22,21 @@ COMMANDS = {
     "set": ["key", "value"], "grow": [], "save": [], "think": [], "act": ["action"],
     "place": ["kind", "x", "y", "text"], "refresh_models": [], "reset_world": [],
 }
+
+
+def clean(o):
+    """Replace NaN/Infinity with null: browsers' JSON.parse rejects them, which would stall the page."""
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [clean(v) for v in o]
+    return o
+
+
+async def send(sock: WebSocket, obj) -> None:
+    await sock.send_text(json.dumps(clean(obj)))
 
 
 def create_app(mind: Mind) -> FastAPI:
@@ -43,7 +60,7 @@ def create_app(mind: Mind) -> FastAPI:
 
     @app.get("/api/state")
     def state():
-        return init_payload()
+        return clean(init_payload())
 
     @app.post("/api/{name}")
     async def command(name: str, body: dict | None = None):
@@ -55,7 +72,7 @@ def create_app(mind: Mind) -> FastAPI:
             result = await asyncio.wait_for(asyncio.wrap_future(mind.call(name, *args)), timeout=120)
         except Exception as e:
             raise HTTPException(400, f"{type(e).__name__}: {e}")
-        return {"ok": True, "result": result}
+        return clean({"ok": True, "result": result})
 
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
@@ -63,14 +80,14 @@ def create_app(mind: Mind) -> FastAPI:
         try:
             while not mind.snapshot:
                 await asyncio.sleep(0.2)
-            await sock.send_json(init_payload())
+            await send(sock, init_payload())
             last = mind.event_id
             while True:
                 await asyncio.sleep(0.25)
                 evs = mind.events_since(last)
                 if evs:
                     last = evs[-1]["id"]
-                await sock.send_json({"type": "tick", "snap": mind.snapshot, "events": evs, "t": time.time()})
+                await send(sock, {"type": "tick", "snap": mind.snapshot, "events": evs, "t": time.time()})
         except (WebSocketDisconnect, RuntimeError):
             pass
 

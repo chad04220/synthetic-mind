@@ -103,3 +103,49 @@ def test_byte_tokenizer_roundtrip():
     t = ByteTokenizer()
     s = "Hello, wörld! 🌷"
     assert t.decode(t.encode(s)) == s
+
+
+def test_unstable_step_is_skipped_and_broken_weights_recover(tmp_path):
+    cfg = tiny_cfg("N")
+    m = Mind(cfg, tmp_path, torch.device("cpu"))
+    m.experience_pool.add("a stable sentence to learn. " * 4)
+    for _ in range(5):
+        m.train_step()
+    m.save()
+    good = {k: v.clone() for k, v in m.model.state_dict().items()}
+
+    # A step whose loss is NaN must not reach the weights.
+    real = m.model.chunked_loss
+    m.model.chunked_loss = lambda h, t: real(h, t) * float("nan")
+    step = m.step
+    assert m.train_step()
+    assert m.step == step and m.skipped_steps == 1 and m._weights_finite()
+    m.model.chunked_loss = real
+
+    # Weights that went bad anyway are rolled back instead of saved, and resuming ignores them.
+    with torch.no_grad():
+        m.model.embed.weight[0, 0] = float("nan")
+    assert m.save() == ""
+    assert m._weights_finite()
+    assert all(torch.equal(v, good[k]) for k, v in m.model.state_dict().items())
+
+
+def test_broken_checkpoint_is_not_resumed(tmp_path):
+    cfg = tiny_cfg("C")
+    m = Mind(cfg, tmp_path, torch.device("cpu"))
+    m.experience_pool.add("hello there. " * 10)
+    m.train_step()
+    m.save()
+    m.train_step()
+    m.save()  # state.prev.pt now holds the first good save
+    s = torch.load(m.dir / "state.pt", weights_only=False)
+    s["model"]["embed.weight"][:] = float("nan")
+    torch.save(s, m.dir / "state.pt")
+    m2 = Mind(MindConfig.load(m.dir / "config.json"), tmp_path, torch.device("cpu"))
+    assert m2._weights_finite()
+
+
+def test_server_never_sends_nan():
+    from mind.server import clean
+    out = clean({"a": float("nan"), "b": [1.0, float("inf")], "c": {"d": 2}})
+    assert out == {"a": None, "b": [1.0, None], "c": {"d": 2}}
