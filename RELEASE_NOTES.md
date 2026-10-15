@@ -1,4 +1,21 @@
-# Synthetic Mind v0.1.0
+# Synthetic Mind v0.1.1
+
+## Fixed: PyTorch installed without GPU support on Windows
+
+On Python 3.14 and newer, `start.bat` failed to find a CUDA build of PyTorch (CUDA 12.4 builds stop
+at Python 3.13) and then silently installed PyPI's CPU-only build, so training ran on the CPU.
+
+`start.bat` now:
+- tries CUDA 12.6, 12.8, 13.0 and 12.4 builds in turn and checks that it really got one;
+- **repairs an existing `.venv`** that has the CPU-only build: just run `start.bat` again;
+- prints the PyTorch version and the GPU it will train on before starting;
+- explains what to do for 32-bit Python or a Python version with no CUDA build at all.
+
+`run.py` also warns when an NVIDIA GPU is present but PyTorch can't use it.
+
+---
+
+# v0.1.0
 
 The first release: a neural network that starts as random weights and learns language while you
 watch it think, talk to it and see it live in a small world.
@@ -6,7 +23,7 @@ watch it think, talk to it and see it live in a small world.
 ## Getting started (Windows + NVIDIA GPU)
 
 1. Install Python 3.10+ and [Ollama](https://ollama.com), then pull a chat model: `ollama pull llama3.2`.
-2. Download `synthetic-mind-v0.1.0.zip` below and unzip it.
+2. Download the `synthetic-mind-….zip` of the latest release and unzip it.
 3. Double-click `start.bat`. The first run installs PyTorch (CUDA) and the requirements, then opens
    the dashboard at http://127.0.0.1:8765.
 

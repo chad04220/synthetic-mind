@@ -57,6 +57,12 @@ def main():
     if args.compile:
         cfg.train.compile = True
 
+    if device.type == "cpu" and not args.cpu and torch.version.cuda is None:
+        import shutil
+        if shutil.which("nvidia-smi"):
+            print("WARNING: an NVIDIA GPU is present but this PyTorch is the CPU-only build, so training will be slow.\n"
+                  "         On Windows, start.bat repairs this. Manually: pip uninstall torch, then\n"
+                  "         pip install torch --index-url https://download.pytorch.org/whl/cu126")
     mind = Mind(cfg, root, device)
     print(f"Device: {mind.device}  parameters: {mind.model.n_params():,}")
     mind.start()

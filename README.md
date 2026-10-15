@@ -33,7 +33,7 @@ like any other experience.
 Linux/macOS: `./start.sh`. Manual setup:
 
 ```
-pip install torch --index-url https://download.pytorch.org/whl/cu124   # or the CPU build
+pip install torch --index-url https://download.pytorch.org/whl/cu126   # or the CPU build
 pip install -r requirements.txt
 python run.py
 ```
