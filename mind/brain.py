@@ -78,6 +78,7 @@ class Mind:
         self.experience_pool = TextPool(self.tok, cfg.data.pool_size)
         self.mixer = Mixer(cfg, self.fineweb, self.teacher_pool, self.experience_pool)
         self.world = World()
+        self.world_lock = threading.RLock()   # the page edits the world directly, without waiting for the engine
         self.teacher = Teacher(self)
 
         # progress
@@ -348,7 +349,9 @@ class Mind:
         self.chat_log = self.chat_log[-400:]
         index = len(self.chat_log) - 1
         if cfg.world_enabled:
-            self.world.say(reply or "...")
+            with self.world_lock:
+                self.world.visitor_say(text)
+                self.world.say(reply or "...")
         # Hearing you is experience in itself; the teacher adds what it should have said.
         self.experience_pool.add_ids(self.encode_turns([("<|user|>", text)]), 2.0, "heard")
         if cfg.teacher_enabled and cfg.ollama_model:
@@ -392,7 +395,8 @@ class Mind:
 
     def body_step(self):
         w = self.world
-        obs = w.observe()
+        with self.world_lock:
+            obs = w.observe()
         ids = self._obs_ids(obs)
         demo = bool(self.demo_actions)
         if demo:
@@ -404,7 +408,8 @@ class Mind:
             p = F.softmax(logits[0].float(), -1)
             self.last_policy = [round(float(v), 4) for v in p]
             a = int(torch.multinomial(p, 1)) if random.random() > 0.05 else random.randrange(len(ACTIONS))
-        reward, narr, info = w.step(ACTIONS[a])
+        with self.world_lock:
+            reward, narr, info = w.step(ACTIONS[a])
         self.action_counts[a] += 1
         self.reward_ema = 0.98 * self.reward_ema + 0.02 * reward
 
@@ -412,7 +417,8 @@ class Mind:
             prompt = ids + [self.tok["<|mind|>"]]
             gen = self.generate(prompt, 20, 0.8, 0.95, stop_on_newline=True)
             said = self.tok.decode([t for t, _, _ in gen]).strip()
-            w.say(said or "...")
+            with self.world_lock:
+                w.say(said or "...")
             narr += f' I say: "{said}"'
             self.event("speak", {"text": said})
         if "read" in info:
@@ -666,22 +672,55 @@ class Mind:
             if args[0] in ACTIONS:
                 self.demo_actions.append(args[0])
             return True
-        if name == "place":
-            kind, x, y, text = args
-            if kind == "erase":
-                w.remove_at(x, y)
-            elif kind in KINDS:
-                extra = {"text": text} if text and kind in ("sign", "book") else {}
-                w.add(kind, x, y, **extra)
-                if text:
-                    self.experience_pool.add(text, 2.0, kind)
-            return True
         if name == "refresh_models":
             return self.teacher.refresh_models()
-        if name == "reset_world":
-            self.world = World()
-            return True
         raise ValueError(f"unknown command {name}")
+
+    # ------------------------------------------------------------------ world edits from the page
+    def world_view(self) -> dict:
+        with self.world_lock:
+            return self.world.to_dict()
+
+    def world_command(self, name: str, *args) -> str:
+        """Applied immediately from the web server's thread; returns a message for the page."""
+        written = ""   # a sign or book you wrote: something to study
+        with self.world_lock:
+            w = self.world
+            if name == "place":
+                kind, x, y, text = args
+                x, y = int(x), int(y)
+                if kind == "erase":
+                    w.remove_at(x, y)
+                    return "Erased."
+                if kind not in KINDS:
+                    return f"Unknown item {kind}."
+                if not w.walkable(x, y):
+                    return "That spot is blocked (water, a tree, a rock or a bush). Pick open ground."
+                extra = {"text": text} if text and kind in ("sign", "book") else {}
+                written = extra.get("text", "")
+                w.add(kind, x, y, **extra)
+                msg = f"Placed {KINDS[kind][1]}."
+            elif name == "join":
+                w.join()
+                msg = "You are in the world. Walk with WASD or the arrows; the mind can see you."
+            elif name == "leave":
+                w.leave()
+                msg = "You left the world."
+            elif name == "you":
+                action, kind, text = (list(args) + [None, None, None])[:3]
+                before = len(w.log)
+                msg = w.visitor_act(action, kind, text or "")
+                written = text or "" if action == "hold" and kind == "book" else ""
+                for line in w.log[before:]:   # gifts and hugs become memories it can study
+                    self.experience_pool.add_ids(self.encode_turns([("<|thought|>", line)]), 2.0, "friend")
+            elif name == "reset_world":
+                self.world = World()
+                msg = "A new world was generated."
+            else:
+                raise ValueError(f"unknown world command {name}")
+        if written.strip():
+            self.experience_pool.add(written, 2.0, "written")
+        return msg
 
     def _snap(self):
         stage = self.stage_index()
@@ -707,7 +746,7 @@ class Mind:
             "pools": {"teacher": len(self.teacher_pool), "experience": len(self.experience_pool)},
             "rows_from": dict(self.mixer.rows_from), "mix_active": self.mixer.weights(),
             "settings": self._settings(),
-            "world": self.world.to_dict(),
+            "world": self.world_view(),
             "policy": self.last_policy, "actions": ACTIONS, "action_counts": self.action_counts,
             "reward_ema": self.reward_ema, "internals": self.internals,
             "event_id": self.event_id,

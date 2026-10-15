@@ -20,7 +20,12 @@ WEB = Path(__file__).resolve().parent.parent / "web"
 COMMANDS = {
     "chat": ["text"], "probe": ["text"], "teach": ["text"], "feedback": ["index", "good"],
     "set": ["key", "value"], "grow": [], "save": [], "think": [], "act": ["action"],
-    "place": ["kind", "x", "y", "text"], "refresh_models": [], "reset_world": [],
+    "refresh_models": [],
+}
+# Applied straight away under the world lock, so they never wait behind training or a thought.
+WORLD_COMMANDS = {
+    "place": ["kind", "x", "y", "text"], "join": [], "leave": [], "you": ["action", "kind", "text"],
+    "reset_world": [],
 }
 
 
@@ -50,7 +55,7 @@ def create_app(mind: Mind) -> FastAPI:
     def init_payload() -> dict:
         return {
             "type": "init",
-            "snap": mind.snapshot,
+            "snap": dict(mind.snapshot, world=mind.world_view()) if mind.snapshot else {},
             "history": list(mind.history),
             "thoughts": list(mind.thoughts)[-120:],
             "chat": [dict(m, index=i) for i, m in enumerate(mind.chat_log)][-120:],
@@ -64,9 +69,16 @@ def create_app(mind: Mind) -> FastAPI:
 
     @app.post("/api/{name}")
     async def command(name: str, body: dict | None = None):
+        body = body or {}
+        if name in WORLD_COMMANDS:
+            args = [body.get(k) for k in WORLD_COMMANDS[name]]
+            try:
+                result = await asyncio.to_thread(mind.world_command, name, *args)
+            except Exception as e:
+                raise HTTPException(400, f"{type(e).__name__}: {e}")
+            return clean({"ok": True, "result": result, "world": mind.world_view()})
         if name not in COMMANDS:
             raise HTTPException(404, f"unknown command {name}")
-        body = body or {}
         args = [body.get(k) for k in COMMANDS[name]]
         try:
             result = await asyncio.wait_for(asyncio.wrap_future(mind.call(name, *args)), timeout=120)
@@ -87,7 +99,9 @@ def create_app(mind: Mind) -> FastAPI:
                 evs = mind.events_since(last)
                 if evs:
                     last = evs[-1]["id"]
-                await send(sock, {"type": "tick", "snap": mind.snapshot, "events": evs, "t": time.time()})
+                # The world is read fresh each tick, so your edits show even while the engine is busy.
+                snap = dict(mind.snapshot, world=mind.world_view())
+                await send(sock, {"type": "tick", "snap": snap, "events": evs, "t": time.time()})
         except (WebSocketDisconnect, RuntimeError):
             pass
 

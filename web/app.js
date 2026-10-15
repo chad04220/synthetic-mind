@@ -384,14 +384,77 @@ addEventListener("resize", () => { drawCharts(); drawAttn(S.snap); });
 const EMOJI = { apple: "🍎", berry: "🫐", ball: "⚽", book: "📘", block: "🧱", seed: "🌰", lamp: "💡", musicbox: "🎵",
   mirror: "🪞", sign: "🪧", bed: "🛏️", cat: "🐈", flower: "🌷" };
 const TERRAIN = ["#3f7d3a", "#2f6fb0", "#d8c48a", "#2d5e2a", "#7d8088", "#4c8a42", "#356b2f", "#b39a6a"];
-let tool = null;
+let tool = null, mode = "add";
+const PORTABLE = ["apple", "berry", "ball", "book", "block", "seed"];
+const BLOCKED = new Set([1, 3, 4, 6]);  // water, tree, rock, bush
+
+let toastTimer;
+function toast(text) {
+  if (!text) return;
+  let t = $(".toast");
+  if (!t) { t = document.createElement("div"); t.className = "toast"; document.body.append(t); }
+  t.textContent = text; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+// World edits answer with the new world, so the map updates at once.
+async function worldApi(name, body = {}) {
+  try {
+    const r = await fetch(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    if (j.world && S.snap) { S.snap.world = j.world; renderBody(S.snap); }
+    return j.result;
+  } catch (err) { toast(err.message); }
+}
+
 const pal = $("#palette");
 for (const k of [...Object.keys(EMOJI), "erase"]) {
   const b = document.createElement("button");
-  b.textContent = k === "erase" ? "🧽" : EMOJI[k]; b.title = k === "erase" ? "Erase objects" : `Place ${k}`;
-  b.onclick = () => { tool = tool === k ? null : k; $$("button", pal).forEach((x) => x.classList.toggle("on", x === b && tool)); };
+  b.textContent = k === "erase" ? "🧽" : EMOJI[k]; b.title = k === "erase" ? "Erase things" : `Place ${k}`;
+  b.onclick = () => {
+    tool = tool === k ? null : k;
+    $$("button", pal).forEach((x) => x.classList.toggle("on", x === b && !!tool));
+    $("#addHint").textContent = tool ? (tool === "erase" ? "Click things on the map to erase them." : `Now click open ground on the map to place the ${tool}. Click it again to stop.`)
+      : "Choose an item, then click open ground on the map to put it there. Signs and books ask what they should say. 🧽 erases.";
+    wc.style.cursor = tool ? "copy" : "crosshair";
+  };
   pal.append(b);
 }
+const hp = $("#holdPalette");
+for (const k of PORTABLE) {
+  const b = document.createElement("button");
+  b.textContent = EMOJI[k]; b.title = `Hold a new ${k}`;
+  b.onclick = async () => {
+    if (!S.snap?.world.visitor) await worldApi("join");
+    const text = k === "book" ? (prompt("Write the book's text (leave empty for a random FineWeb page):") || "") : "";
+    toast(await worldApi("you", { action: "hold", kind: k, text }));
+  };
+  hp.append(b);
+}
+
+function setMode(m) {
+  mode = m;
+  $$("#worldModes button").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+  for (const id of ["add", "you", "guide"]) $(`#mode-${id}`).hidden = id !== m;
+  if (m !== "add" && tool) $$("button.on", pal).forEach((b) => b.click());
+}
+$$("#worldModes button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+
+$("#btnJoin").onclick = async () => {
+  const joined = !!S.snap?.world.visitor;
+  toast(await worldApi(joined ? "leave" : "join"));
+  if (!joined) wc.focus();
+};
+$("#btnSay").onclick = () => sayFromWorld();
+function sayFromWorld() {
+  $("#chatMode").value = "chat";
+  const inp = $("#chatText"); inp.placeholder = "Say something (it appears above you in the world)…"; inp.focus();
+}
+$$("[data-you]").forEach((b) => b.onclick = async () => {
+  if (!S.snap?.world.visitor) await worldApi("join");
+  toast(await worldApi("you", { action: b.dataset.you }));
+});
 
 const wc = $("#world"), wg = wc.getContext("2d");
 let terrainCanvas = null, bodyPos = null;
@@ -427,11 +490,21 @@ function drawWorld(now) {
   requestAnimationFrame(drawWorld);
   const s = S.snap; if (!s) return;
   const w = s.world, dpr = devicePixelRatio || 1;
-  const ts = Math.floor(wc.clientWidth * dpr / w.w);
+  // Camera: the whole map, or (zoomed) half of it following you, or the mind when you're away.
+  const vw = S.zoom ? w.w / 2 : w.w, vh = S.zoom ? w.h / 2 : w.h;
+  const ts = Math.floor(wc.clientWidth * dpr / vw);
   if (!ts) return;
-  if (wc.width !== ts * w.w) { wc.width = ts * w.w; wc.height = ts * w.h; S.lastTerrain = ""; }
+  if (wc.width !== Math.round(ts * vw)) { wc.width = Math.round(ts * vw); wc.height = Math.round(ts * vh); S.lastTerrain = ""; }
   const sig = w.terrain.map((r) => r.join("")).join("") + ts;
   if (sig !== S.lastTerrain) { terrainCanvas = buildTerrain(w, ts); S.lastTerrain = sig; }
+  const focus = w.visitor || w.body;
+  const camT = [Math.min(Math.max(focus.x + .5 - vw / 2, 0), w.w - vw), Math.min(Math.max(focus.y + .5 - vh / 2, 0), w.h - vh)];
+  if (!S.cam || !S.zoom) S.cam = camT.slice();
+  S.cam[0] += (camT[0] - S.cam[0]) * .12; S.cam[1] += (camT[1] - S.cam[1]) * .12;
+  S.view = { x: S.cam[0], y: S.cam[1], w: vw, h: vh };
+  wg.setTransform(1, 0, 0, 1, 0, 0);
+  wg.clearRect(0, 0, wc.width, wc.height);
+  wg.translate(-S.cam[0] * ts, -S.cam[1] * ts);
   wg.drawImage(terrainCanvas, 0, 0);
   // water shimmer
   const t = now / 1000;
@@ -471,11 +544,44 @@ function drawWorld(now) {
     }
   }
   if (b.holding) { wg.font = `${ts * .45}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`; wg.fillText(EMOJI[b.holding] || "", bx + r * .9, by + r * .6); }
+  // you
+  const v = w.visitor;
+  let vx = null, vy = null;
+  if (v) {
+    const vt = [v.x * ts + ts / 2, v.y * ts + ts / 2];
+    if (!S.youPos || Math.hypot(S.youPos[0] - vt[0], S.youPos[1] - vt[1]) > ts * 3) S.youPos = vt.slice();
+    S.youPos[0] += (vt[0] - S.youPos[0]) * .35; S.youPos[1] += (vt[1] - S.youPos[1]) * .35;
+    [vx, vy] = S.youPos;
+    const vr = ts * .34;
+    const vg = wg.createRadialGradient(vx - vr * .3, vy - vr * .3, vr * .1, vx, vy, vr);
+    vg.addColorStop(0, "#fff6e0"); vg.addColorStop(.5, "#ffb547"); vg.addColorStop(1, "#e0702a");
+    wg.fillStyle = vg; wg.beginPath(); wg.arc(vx, vy, vr, 0, 7); wg.fill();
+    wg.strokeStyle = "rgba(255,255,255,.9)"; wg.lineWidth = Math.max(1, ts * .05); wg.stroke();
+    const vf = { north: [0, -1], south: [0, 1], west: [-1, 0], east: [1, 0] }[v.facing] || [0, 1];
+    wg.fillStyle = "#3a1d08";
+    for (const s2 of [-1, 1]) {
+      const ex = vx + vf[0] * vr * .35 + (vf[1] !== 0 ? s2 * vr * .32 : 0), ey = vy + vf[1] * vr * .3 + (vf[0] !== 0 ? s2 * vr * .3 : 0) - vr * .1;
+      wg.beginPath(); wg.arc(ex, ey, vr * .11, 0, 7); wg.fill();
+    }
+    wg.font = `600 ${Math.max(9 * dpr, ts * .3)}px system-ui`; wg.fillStyle = "#fff";
+    wg.fillText("you", vx, vy + vr + ts * .22);
+    if (v.holding) { wg.font = `${ts * .45}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`; wg.fillText(EMOJI[v.holding] || "", vx + vr * .9, vy + vr * .5); }
+  }
+  // placement preview
+  if (tool && S.hover && mode === "add") {
+    const { x: hx, y: hy } = S.hover, blocked = tool !== "erase" && BLOCKED.has(w.terrain[hy]?.[hx]);
+    wg.strokeStyle = blocked ? "rgba(255,107,122,.95)" : "rgba(255,255,255,.9)"; wg.lineWidth = Math.max(1, ts * .06);
+    wg.strokeRect(hx * ts + 1, hy * ts + 1, ts - 2, ts - 2);
+    if (tool !== "erase" && !blocked) {
+      wg.globalAlpha = .6; wg.font = `${ts * .72}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
+      wg.fillText(EMOJI[tool], hx * ts + ts / 2, hy * ts + ts / 2 + ts * .04); wg.globalAlpha = 1;
+    }
+  }
   // night
   const dark = 1 - w.light;
   if (dark > .02) {
     wg.save(); wg.fillStyle = `rgba(8,12,40,${dark * .85})`;
-    wg.fillRect(0, 0, wc.width, wc.height);
+    wg.fillRect(0, 0, w.w * ts, w.h * ts);
     wg.globalCompositeOperation = "lighter";
     for (const [lx, ly] of [...lamps, [bx, by]]) {
       const rr = (lx === bx && ly === by ? 1.6 : 4.5) * ts;
@@ -485,34 +591,62 @@ function drawWorld(now) {
     }
     wg.restore();
   }
-  // speech bubble
-  if (b.said) {
-    const text = b.said.length > 70 ? b.said.slice(0, 70) + "…" : b.said;
-    wg.font = `${Math.max(11 * dpr, ts * .38)}px system-ui`;
-    const tw = Math.min(wg.measureText(text).width, ts * 10) + ts * .5, th = ts * .7;
-    let x = Math.min(Math.max(bx - tw / 2, 4), wc.width - tw - 4), y = by - r - th - ts * .3;
-    if (y < 4) y = by + r + ts * .3;
-    wg.fillStyle = "rgba(255,255,255,.95)"; wg.beginPath(); wg.roundRect(x, y, tw, th, th / 2.5); wg.fill();
-    wg.fillStyle = "#1a2233"; wg.textAlign = "left"; wg.fillText(text, x + ts * .25, y + th / 2, ts * 10);
-    wg.textAlign = "center";
-  }
+  // speech bubbles
+  if (b.said) bubble(b.said, bx, by, r, ts, dpr, "rgba(255,255,255,.95)");
+  if (v && v.said) bubble(v.said, vx, vy, ts * .34, ts, dpr, "rgba(255,226,180,.97)");
+  wg.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+function bubble(said, bx, by, r, ts, dpr, color) {
+  const text = said.length > 70 ? said.slice(0, 70) + "…" : said;
+  wg.font = `${Math.max(11 * dpr, ts * .38)}px system-ui`;
+  const tw = Math.min(wg.measureText(text).width, ts * 10) + ts * .5, th = ts * .7;
+  const left = S.view.x * ts, top = S.view.y * ts;
+  let x = Math.min(Math.max(bx - tw / 2, left + 4), left + wc.width - tw - 4), y = by - r - th - ts * .3;
+  if (y < top + 4) y = by + r + ts * .3;
+  wg.fillStyle = color; wg.beginPath(); wg.roundRect(x, y, tw, th, th / 2.5); wg.fill();
+  wg.fillStyle = "#1a2233"; wg.textAlign = "left"; wg.fillText(text, x + ts * .25, y + th / 2, ts * 10);
+  wg.textAlign = "center";
 }
 requestAnimationFrame(drawWorld);
 
+function tileAt(e) {
+  const rect = wc.getBoundingClientRect(), w = S.snap.world, vw = S.view || { x: 0, y: 0, w: w.w, h: w.h };
+  return { x: Math.min(w.w - 1, Math.max(0, Math.floor(vw.x + (e.clientX - rect.left) / rect.width * vw.w))),
+           y: Math.min(w.h - 1, Math.max(0, Math.floor(vw.y + (e.clientY - rect.top) / rect.height * vw.h))) };
+}
+function setZoom(on) { S.zoom = on; $("#btnZoom").textContent = on ? "🗺️ Whole map" : "🔍 Zoom in"; }
+$("#btnZoom").onclick = () => setZoom(!S.zoom);
+wc.addEventListener("mousemove", (e) => { if (S.snap) S.hover = tileAt(e); });
+wc.addEventListener("mouseleave", () => { S.hover = null; });
 wc.addEventListener("click", async (e) => {
   wc.focus();
-  if (!tool || !S.snap) return;
-  const rect = wc.getBoundingClientRect(), w = S.snap.world;
-  const x = Math.floor((e.clientX - rect.left) / rect.width * w.w), y = Math.floor((e.clientY - rect.top) / rect.height * w.h);
+  if (!S.snap || mode !== "add") return;
+  if (!tool) { toast("Choose an item below the map first, then click where it should go."); return; }
+  const { x, y } = tileAt(e);
   let text = "";
   if (tool === "sign") { text = prompt("What should the sign say?") || ""; if (!text) return; }
   if (tool === "book") text = prompt("Write the book's text (leave empty for a random FineWeb page):") || "";
-  try { await api("place", { kind: tool, x, y, text }); } catch (err) { flash(err.message); }
+  toast(await worldApi("place", { kind: tool, x, y, text }));
 });
 
-const KEYS = { ArrowUp: "north", w: "north", ArrowDown: "south", s: "south", ArrowLeft: "west", a: "west", ArrowRight: "east", d: "east",
+// Keys go to whoever you are controlling: the mind (Guide), else your own avatar if you joined.
+const MIND_KEYS = { ArrowUp: "north", w: "north", ArrowDown: "south", s: "south", ArrowLeft: "west", a: "west", ArrowRight: "east", d: "east",
   e: "use", f: "take", g: "drop", l: "look", v: "speak", z: "sleep", q: "approach", " ": "rest" };
-wc.addEventListener("keydown", (e) => { const a = KEYS[e.key]; if (a) { e.preventDefault(); api("act", { action: a }); } });
+const YOU_KEYS = { ArrowUp: "north", w: "north", ArrowDown: "south", s: "south", ArrowLeft: "west", a: "west", ArrowRight: "east", d: "east",
+  f: "take", g: "give", h: "pet" };
+wc.addEventListener("keydown", async (e) => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (mode === "guide") {
+    const a = MIND_KEYS[k];
+    if (a) { e.preventDefault(); api("act", { action: a }); }
+    return;
+  }
+  if (!S.snap?.world.visitor) return;
+  if (k === "t") { e.preventDefault(); sayFromWorld(); return; }
+  const a = YOU_KEYS[k];
+  if (a) { e.preventDefault(); const msg = await worldApi("you", { action: a }); if (msg) toast(msg); }
+});
 $$("[data-act]").forEach((b) => b.onclick = () => api("act", { action: b.dataset.act }));
 
 function renderBody(s) {
@@ -526,6 +660,11 @@ function renderBody(s) {
   $("#policy").innerHTML = s.actions.map((a, i) => `<div title="${a}: ${(s.policy[i] * 100).toFixed(1)}%"><i style="height:${s.policy[i] / mx * 70}%"></i><span>${a}</span></div>`).join("");
   $("#policy").style.height = "110px";
   $("#worldLog").innerHTML = w.log.slice().reverse().map((l) => `<li>${esc(l)}</li>`).join("");
+  const v = w.visitor, jb = $("#btnJoin");
+  if (!!v !== !!S.hadVisitor) { S.hadVisitor = !!v; setZoom(!!v); }   // follow yourself while you're in the world
+  jb.textContent = v ? "Leave the world" : "Join the world";
+  jb.classList.toggle("primary", !v); jb.classList.toggle("joined", !!v);
+  $("#youHolding").textContent = v ? (v.holding ? `${EMOJI[v.holding]} ${v.holding}` : "nothing") : "(join first)";
 }
 
 connect();

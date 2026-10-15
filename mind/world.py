@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import dataclass, field
 
 W, H = 28, 18
@@ -68,6 +69,10 @@ class World:
         self.entities: dict[int, dict] = {}
         self.terrain = [[GRASS] * W for _ in range(H)]
         self.body = Body()
+        self.visitor: dict | None = None   # you, when you join the world ("my friend" to the mind)
+        self.heard = ""                    # what you last said near the mind
+        self.heard_ttl = 0
+        self.bonus = 0.0                   # social reward waiting for the mind's next step
         self.log: list[str] = []
         self.book_texts: list[str] = []
         self._generate()
@@ -124,6 +129,10 @@ class World:
 
     def walkable(self, x, y) -> bool:
         return 0 <= x < W and 0 <= y < H and self.terrain[y][x] not in BLOCKING
+
+    def free_for_body(self, x, y) -> bool:
+        v = self.visitor
+        return self.walkable(x, y) and not (v and (v["x"], v["y"]) == (x, y))
 
     def add(self, kind: str, x: int, y: int, **state) -> dict | None:
         if kind not in KINDS or not (0 <= x < W and 0 <= y < H):
@@ -222,6 +231,13 @@ class World:
                 for d, e in self.visible() if d > 1][:3]
         if seen:
             s.append("I see " + "; ".join(seen) + ".")
+        v = self.visitor
+        if v:
+            d = abs(v["x"] - b.x) + abs(v["y"] - b.y)
+            where = "right next to me" if d == 1 else self._rel(v["x"] - b.x, v["y"] - b.y)
+            s.append(f"My friend is {where}" + (f" and holds {KINDS[v['holding']['kind']][1]}." if v["holding"] else "."))
+        if self.heard_ttl > 0:
+            s.append(f'My friend says: "{self.heard}"')
         return " ".join(s)
 
     def describe_self(self) -> str:
@@ -251,6 +267,9 @@ class World:
             narr += n2
         elif action == "approach":
             target = next((e for d, e in self.visible() if d > 0 and self._interesting(e)), None)
+            v = self.visitor
+            if v and abs(v["x"] - b.x) + abs(v["y"] - b.y) > 1 and (target is None or self.rng.random() < 0.5):
+                target = {"kind": "friend", "x": v["x"], "y": v["y"]}
             if target:
                 dx, dy = target["x"] - b.x, target["y"] - b.y
                 opts = []
@@ -261,14 +280,14 @@ class World:
                 moved = False
                 for d in sorted(opts, key=lambda _: self.rng.random()):
                     ddx, ddy = DIRS[d]
-                    if self.walkable(b.x + ddx, b.y + ddy):
+                    if self.free_for_body(b.x + ddx, b.y + ddy):
                         r2, n2 = self._move(d)
                         reward += r2
-                        narr += f"I go toward {KINDS[target['kind']][1]}. " + n2
+                        narr += f"I go toward {self._name(target)}. " + n2
                         moved = True
                         break
                 if not moved:
-                    narr += f"I want to reach {KINDS[target['kind']][1]} but something is in the way."
+                    narr += f"I want to reach {self._name(target)} but something is in the way."
             else:
                 narr += "I look for something interesting, but I see nothing new."
         elif action == "use":
@@ -276,7 +295,12 @@ class World:
             narr += narr2
         elif action == "take":
             e = self._target(portable=True)
-            if b.holding:
+            v = self.visitor
+            if not b.holding and v and v["holding"] and self._facing_friend():
+                b.holding, v["holding"] = v["holding"], None
+                narr += f"I take {KINDS[b.holding['kind']][1]} from my friend. Thank you!"
+                reward += self._novel("take:gift", 0.5)
+            elif b.holding:
                 narr += f"My hands are full; I already hold {KINDS[b.holding['kind']][1]}."
             elif e:
                 del self.entities[e["id"]]
@@ -320,6 +344,15 @@ class World:
         else:  # rest
             narr += "I rest for a moment."
 
+        # company
+        v = self.visitor
+        if v and abs(v["x"] - b.x) + abs(v["y"] - b.y) <= 2:
+            reward += 0.015
+        reward += self.bonus
+        self.bonus = 0.0
+        if self.heard_ttl > 0:
+            self.heard_ttl -= 1
+
         # needs
         b.energy = max(0.0, b.energy - (0.08 if b.sleeping else 0.22))
         b.fun = max(0.0, b.fun - 0.15)
@@ -342,6 +375,8 @@ class World:
         dx, dy = DIRS[action]
         b.facing = action
         nx, ny = b.x + dx, b.y + dy
+        if self.visitor and (self.visitor["x"], self.visitor["y"]) == (nx, ny):
+            return 0.0, f"My friend is {action} of me."
         if not self.walkable(nx, ny):
             what = TERRAIN_NAMES[self.terrain[ny][nx]] if 0 <= nx < W and 0 <= ny < H else "the edge"
             return -0.05, f"I cannot go {action}, there is {what}."
@@ -388,6 +423,9 @@ class World:
             b.energy = min(100.0, b.energy + gain)
             b.holding = None
             return 0.1 + 1.5 * hunger, f"I eat {KINDS[h['kind']][1]}. It tastes sweet.", info
+        if self._facing_friend() and not self.at(*self._front()):
+            b.fun = min(100.0, b.fun + 12)
+            return self._novel("use:friend", 0.45) + 0.12, "I hug my friend. I feel happy.", info
         e = self._target() or (h if h else None)
         if not e:
             return -0.02, "I reach out but touch nothing.", info
@@ -438,12 +476,143 @@ class World:
         b.fun = min(100.0, b.fun + fun_gain)
         return self._novel("use:" + k, base) + fun_gain / 100, text, info
 
+    def _front(self) -> tuple[int, int]:
+        dx, dy = DIRS[self.body.facing]
+        return self.body.x + dx, self.body.y + dy
+
+    def _facing_friend(self) -> bool:
+        v = self.visitor
+        if not v:
+            return False
+        if (v["x"], v["y"]) == self._front():
+            return True
+        # Adjacent but not faced: turn toward the friend.
+        b = self.body
+        for d, (dx, dy) in DIRS.items():
+            if (b.x + dx, b.y + dy) == (v["x"], v["y"]):
+                b.facing = d
+                return True
+        return False
+
+    @staticmethod
+    def _name(target: dict) -> str:
+        return "my friend" if target["kind"] == "friend" else KINDS[target["kind"]][1]
+
+    # -- you, the visitor ---------------------------------------------------------
+    def join(self) -> dict:
+        """Put your avatar in the world on a free tile near the mind."""
+        if self.visitor:
+            return self.visitor
+        b = self.body
+        best = None
+        for r in range(1, max(W, H)):
+            for y in range(b.y - r, b.y + r + 1):
+                for x in range(b.x - r, b.x + r + 1):
+                    if abs(x - b.x) + abs(y - b.y) == r and self.walkable(x, y) and (x, y) != (b.x, b.y):
+                        best = (x, y)
+                        break
+                if best:
+                    break
+            if best:
+                break
+        x, y = best or (b.x, b.y)
+        self.visitor = {"x": x, "y": y, "facing": "south", "holding": None, "said": "", "said_until": 0.0}
+        self.log.append("My friend arrives!")
+        self.bonus += self._novel("friend:arrive", 0.5)
+        return self.visitor
+
+    def leave(self):
+        v = self.visitor
+        if v and v["holding"]:
+            e = v["holding"]
+            e["x"], e["y"] = v["x"], v["y"]
+            self.entities[e["id"]] = e
+        if v:
+            self.log.append("My friend waves goodbye and leaves.")
+        self.visitor = None
+        self.heard_ttl = 0
+
+    def visitor_say(self, text: str):
+        if self.visitor:
+            self.visitor["said"] = text
+            self.visitor["said_until"] = time.time() + 7
+            b, v = self.body, self.visitor
+            if abs(v["x"] - b.x) + abs(v["y"] - b.y) <= 6:
+                self.heard, self.heard_ttl = text[:160], 20
+
+    def visitor_act(self, action: str, kind: str | None = None, text: str = "") -> str:
+        """Move or act as your avatar. Returns a short description of what happened."""
+        v = self.visitor
+        if not v:
+            return "Join the world first."
+        b = self.body
+        if action in DIRS:
+            dx, dy = DIRS[action]
+            v["facing"] = action
+            nx, ny = v["x"] + dx, v["y"] + dy
+            if self.walkable(nx, ny) and (nx, ny) != (b.x, b.y):
+                v["x"], v["y"] = nx, ny
+            return ""
+        if action == "hold":
+            if kind not in KINDS or not KINDS[kind][0]:
+                return f"You can only hold small things (not a {kind})."
+            if v["holding"]:
+                self.visitor_act("drop")
+            v["holding"] = {"id": self.next_id, "kind": kind, "x": v["x"], "y": v["y"]}
+            if kind == "book":
+                v["holding"]["text"] = text or ""
+            self.next_id += 1
+            return f"You are holding {KINDS[kind][1]}."
+        if action == "take":
+            if v["holding"]:
+                return self.visitor_act("drop")
+            dx, dy = DIRS[v["facing"]]
+            for x, y in ((v["x"], v["y"]), (v["x"] + dx, v["y"] + dy)):
+                for e in self.at(x, y):
+                    if KINDS[e["kind"]][0]:
+                        del self.entities[e["id"]]
+                        v["holding"] = e
+                        return f"You pick up {KINDS[e['kind']][1]}."
+            return "Nothing to pick up here."
+        if action == "drop":
+            if not v["holding"]:
+                return "Your hands are empty."
+            e, v["holding"] = v["holding"], None
+            e["x"], e["y"] = v["x"], v["y"]
+            self.entities[e["id"]] = e
+            return f"You put down {KINDS[e['kind']][1]}."
+        if action == "give":
+            if not v["holding"]:
+                return "Pick something up (or choose an item and press Hold) first."
+            if abs(v["x"] - b.x) + abs(v["y"] - b.y) > 1:
+                return "Walk right next to the mind to give it something."
+            e, v["holding"] = v["holding"], None
+            what = KINDS[e["kind"]][1]
+            if b.holding:
+                e["x"], e["y"] = b.x, b.y
+                self.entities[e["id"]] = e
+                self.log.append(f"My friend puts {what} down beside me.")
+            else:
+                b.holding = e
+                self.log.append(f"My friend gives me {what}!")
+            b.sleeping = False
+            self.bonus += self._novel("gift:" + e["kind"], 0.6)
+            return f"You give it {what}."
+        if action == "pet":
+            if abs(v["x"] - b.x) + abs(v["y"] - b.y) > 1:
+                return "Walk right next to the mind first."
+            b.fun = min(100.0, b.fun + 10)
+            self.log.append("My friend gives me a hug. I feel happy.")
+            self.bonus += self._novel("hugged", 0.4)
+            return "You hug the mind."
+        return f"Unknown action {action}."
+
     def _world_tick(self):
         r = self.rng
         for e in list(self.entities.values()):
             if e["kind"] == "cat" and r.random() < 0.25:
                 dx, dy = r.choice(list(DIRS.values()))
-                if self.walkable(e["x"] + dx, e["y"] + dy) and (e["x"] + dx, e["y"] + dy) != (self.body.x, self.body.y):
+                if self.free_for_body(e["x"] + dx, e["y"] + dy) and (e["x"] + dx, e["y"] + dy) != (self.body.x, self.body.y):
                     e["x"] += dx
                     e["y"] += dy
             if e["kind"] == "flower" and "grow" in e and self.tick_n - e["grow"] > 400:
@@ -482,6 +651,10 @@ class World:
                      "sleeping": b.sleeping, "said": b.said if b.said_ttl else "", "steps": b.steps,
                      "visited": len(b.visits), "faints": b.faints, "reward": round(b.total_reward, 2)},
             "log": self.log[-12:],
+            "visitor": None if not self.visitor else {
+                "x": self.visitor["x"], "y": self.visitor["y"], "facing": self.visitor["facing"],
+                "holding": self.visitor["holding"]["kind"] if self.visitor["holding"] else None,
+                "said": self.visitor["said"] if time.time() < self.visitor["said_until"] else ""},
         }
         if full:
             d["terrain"] = self.terrain

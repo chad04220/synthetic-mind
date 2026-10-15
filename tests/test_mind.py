@@ -92,7 +92,7 @@ def test_engine_thread_answers_commands(tmp_path):
         assert m.call("chat", "hi").result(timeout=60)["role"] == "mind"
         m.call("set", "thought_interval", 0.5).result(timeout=30)
         m.call("act", "east").result(timeout=30)
-        m.call("place", "sign", 6, 6, "be kind").result(timeout=30)
+        assert "Placed" in m.world_command("place", "sign", 3, 4, "be kind")
         time.sleep(3)
         assert m.snapshot["step"] > 0 and m.thoughts
     finally:
@@ -149,3 +149,48 @@ def test_server_never_sends_nan():
     from mind.server import clean
     out = clean({"a": float("nan"), "b": [1.0, float("inf")], "c": {"d": 2}})
     assert out == {"a": None, "b": [1.0, None], "c": {"d": 2}}
+
+
+def test_visitor_can_walk_give_and_be_seen():
+    w = World(seed=3)
+    b = w.body
+    assert "Join" in w.visitor_act("north")
+    v = w.join()
+    assert abs(v["x"] - b.x) + abs(v["y"] - b.y) == 1
+    assert "My friend is right next to me" in w.observe()
+    assert "holding a red apple" in w.visitor_act("hold", "apple")
+    assert "give it a red apple" in w.visitor_act("give")
+    assert b.holding and b.holding["kind"] == "apple"
+    r, narr, _ = w.step("use")              # it eats the gift and is rewarded for the company
+    assert "eat" in narr and r > 0
+    w.visitor_act("hold", "ball")
+    r, narr, _ = w.step("take")              # it can also take what you hold
+    assert "from my friend" in narr and b.holding["kind"] == "ball"
+    w.visitor_say("hello little one")
+    assert 'My friend says: "hello little one"' in w.observe()
+    r, narr, _ = w.step("use")               # facing you with a ball in hand: it kicks the ball...
+    r, narr, _ = w.step("use")               # ...and then hugs you
+    assert "hug my friend" in narr
+    # neither of you can walk into the other
+    vx, vy = v["x"], v["y"]
+    d = next(k for k, (dx, dy) in __import__("mind.world", fromlist=["DIRS"]).DIRS.items()
+             if (b.x + dx, b.y + dy) == (vx, vy))
+    w._move(d)
+    assert (b.x, b.y) != (vx, vy)
+    w.leave()
+    assert w.visitor is None and "friend" not in w.observe()
+
+
+def test_world_edits_apply_without_the_engine(tmp_path):
+    m = Mind(tiny_cfg("W"), tmp_path, torch.device("cpu"))   # engine thread never started
+    n = len(m.world.entities)
+    assert "Placed" in m.world_command("place", "apple", 3, 4, "")
+    assert len(m.world.entities) == n + 1
+    assert "blocked" in m.world_command("place", "apple", *next(
+        (x, y) for y in range(18) for x in range(28) if not m.world.walkable(x, y)), "")
+    m.world_command("join")
+    m.world_command("you", "hold", "book", "Once upon a time there was a kind little mind.")
+    assert m.world_view()["visitor"]["holding"] == "book"
+    assert any("kind little mind" in t for t, _, _ in m.experience_pool.texts())
+    m.world_command("leave")
+    assert m.world_view()["visitor"] is None

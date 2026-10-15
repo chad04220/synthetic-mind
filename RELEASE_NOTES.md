@@ -1,3 +1,28 @@
+# Synthetic Mind v0.1.3
+
+## New: be there with it
+
+- **Join the world as your own avatar.** Under the map, switch to *🧍 Be there* and press
+  *Join the world*. You appear next to the mind and the map zooms in to follow you (🔍 shows the
+  whole map again). Walk with WASD or the arrows.
+- **Give it things.** Take a new apple, berry, ball, book, block or seed into your hands, or pick
+  up anything lying around (F), then walk up to the mind and hand it over (G). A book you hand
+  over can contain your own writing, which it reads and studies.
+- **Keep it company.** Hug it (H) and talk (T or the conversation box): your words appear above
+  you and the mind hears them when it is close. It senses where you are and what you hold, can
+  take things from your hands and hug you back, and is rewarded for your company, so it learns to
+  come to you.
+
+## Fixed: adding things to the world
+
+- Placing items now happens instantly. Before, every world edit waited in line behind training
+  and the mind's thoughts, so when the engine was slow or stalled, clicks seemed to do nothing.
+- Clearer controls: the world panel has three modes (*Add things*, *Be there*, *Guide the
+  mind*), a preview outline shows where an item will land (red where it can't go), and a short
+  message confirms what happened, or explains why not.
+
+---
+
 # Synthetic Mind v0.1.2
 
 ## Fixed: freezes, and charts that never fill in

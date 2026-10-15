@@ -77,15 +77,28 @@ read, brain size, speed and how many real words it has used. *Pause learning*, *
 
 **World.** A garden with a pond, trees, a bed, a lamp, a mirror, a music box, books, balls,
 blocks, seeds, berries, apples and a cat. The body gets hungry and bored; eating, playing,
-reading, petting the cat and discovering new places are rewarding. Each step the body's
-senses are written as first-person text ("I feel hungry. I see a red apple 2 north…"); the
-same network that learns language reads it and chooses one of 12 actions. What happens is
-narrated back and studied, so its words are grounded in what it does. Books it reads
-contain FineWeb pages (or text you write) and become study material.
-- Click an item in the palette, then click the map to place it (signs and books ask for text).
-- Drive the body with the d-pad or keys (WASD/arrows, E use, F take, G drop, L look,
-  V speak, Z sleep, Q approach). Driving is a *demonstration*: it learns to imitate you.
-- *What it wants to do* shows the policy's current action probabilities.
+reading, petting the cat, discovering new places and spending time with you are rewarding.
+Each step the body's senses are written as first-person text ("I feel hungry. I see a red
+apple 2 north. My friend is right next to me…"); the same network that learns language
+reads it and chooses one of 12 actions. What happens is narrated back and studied, so its
+words are grounded in what it does. Books it reads contain FineWeb pages (or text you
+write) and become study material. Under the map are three modes:
+- **🧺 Add things**: pick an item, then click open ground to place it (a dashed outline
+  previews the spot and turns red where it can't go). Signs and books ask for their text;
+  🧽 erases.
+- **🧍 Be there**: *Join the world* to appear next to the mind as your own avatar (the map
+  zooms in and follows you; 🔍 toggles the whole map). Walk with WASD/arrows, take a new
+  item into your hands from the row of items, pick things up or put them down (F), walk
+  up to the mind and give it what you hold (G) or hug it (H), and talk (T, or just use the
+  conversation box): your words appear above you and the mind hears them when it's close.
+  It senses where you are and what you hold, can take things from your hands and hug you,
+  and is rewarded for your company, so it learns to come to you.
+- **🎮 Guide the mind**: drive its body with the d-pad or keys (WASD/arrows, E use, F take,
+  G drop, L look, V speak, Z sleep, Q approach). This is a *demonstration*: it learns to
+  imitate you.
+
+*What it wants to do* shows the policy's current action probabilities. Everything you do
+in the world applies immediately, even while the mind is busy training or thinking.
 
 **Inner monologue.** A thought every few seconds, generated freely: the only input is its
 own previous thoughts. Every token is shaded by the probability the network gave it (hover

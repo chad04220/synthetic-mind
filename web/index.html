@@ -48,25 +48,61 @@
       <span class="muted" id="worldTime"></span>
       <label class="switch" title="Run the body in the world"><input type="checkbox" id="worldOn" data-setting="world_enabled"><span></span>Alive</label>
     </div>
-    <div class="canvas-wrap"><canvas id="world" tabindex="0" aria-label="The world the mind lives in"></canvas></div>
-    <div class="palette" id="palette" title="Pick an item, then click the world to place it"></div>
-    <div class="row gap">
-      <div class="dpad" aria-label="Drive the body">
-        <button data-act="north" title="W / ↑">▲</button>
-        <button data-act="west" title="A / ←">◀</button>
-        <button data-act="use" title="E: use, eat, read, play" class="mid">use</button>
-        <button data-act="east" title="D / →">▶</button>
-        <button data-act="south" title="S / ↓">▼</button>
+    <div class="canvas-wrap"><canvas id="world" tabindex="0" aria-label="The world the mind lives in"></canvas>
+      <button class="zoom" id="btnZoom" title="Zoom in and follow you (or the mind)">🔍 Zoom in</button></div>
+    <div class="seg" id="worldModes" role="tablist">
+      <button data-mode="add" class="on">🧺 Add things</button>
+      <button data-mode="you">🧍 Be there</button>
+      <button data-mode="guide">🎮 Guide the mind</button>
+    </div>
+
+    <div class="mode" id="mode-add">
+      <div class="palette" id="palette"></div>
+      <div class="hint" id="addHint">Choose an item, then click open ground on the map to put it there. Signs and books ask what they should say. 🧽 erases.</div>
+    </div>
+
+    <div class="mode" id="mode-you" hidden>
+      <div class="row gap wrap">
+        <button id="btnJoin" class="primary">Join the world</button>
+        <div class="dpad" aria-label="Walk">
+          <button data-you="north" title="W / ↑">▲</button>
+          <button data-you="west" title="A / ←">◀</button>
+          <button data-you="pet" title="H: hug the mind" class="mid">hug</button>
+          <button data-you="east" title="D / →">▶</button>
+          <button data-you="south" title="S / ↓">▼</button>
+        </div>
+        <div class="dpad-extra">
+          <button data-you="take" title="F">pick up / put down</button>
+          <button data-you="give" title="G">give to mind</button>
+          <button id="btnSay" title="T">say something</button>
+        </div>
       </div>
-      <div class="dpad-extra">
-        <button data-act="take" title="F">take</button>
-        <button data-act="drop" title="G">drop</button>
-        <button data-act="look" title="L">look</button>
-        <button data-act="speak" title="V">speak</button>
-        <button data-act="sleep" title="Z">sleep</button>
-        <button data-act="approach" title="Q">approach</button>
+      <div class="hand-row">In your hands: <b id="youHolding">nothing</b> · take a new one:
+        <span class="palette inline" id="holdPalette"></span></div>
+      <div class="hint">Click the map, then use the keys: WASD or arrows walk, F picks up or puts down, G gives to the mind,
+        H hugs, T talks. What you say in the conversation appears above you, and the mind hears it when you are close.
+        It is rewarded for your company, so it may come to you.</div>
+    </div>
+
+    <div class="mode" id="mode-guide" hidden>
+      <div class="row gap">
+        <div class="dpad" aria-label="Drive the body">
+          <button data-act="north" title="W / ↑">▲</button>
+          <button data-act="west" title="A / ←">◀</button>
+          <button data-act="use" title="E: use, eat, read, play" class="mid">use</button>
+          <button data-act="east" title="D / →">▶</button>
+          <button data-act="south" title="S / ↓">▼</button>
+        </div>
+        <div class="dpad-extra">
+          <button data-act="take" title="F">take</button>
+          <button data-act="drop" title="G">drop</button>
+          <button data-act="look" title="L">look</button>
+          <button data-act="speak" title="V">speak</button>
+          <button data-act="sleep" title="Z">sleep</button>
+          <button data-act="approach" title="Q">approach</button>
+        </div>
+        <div class="hint">Moving the mind yourself is a <b>demonstration</b>: its body learns to imitate what you do. Keys work after you click the map.</div>
       </div>
-      <div class="hint">Driving it is a <b>demonstration</b>: the body learns to imitate what you do. Keys work when the world is focused.</div>
     </div>
     <div class="bars">
       <div class="bar"><span>Energy</span><div><i id="barEnergy"></i></div><b id="valEnergy"></b></div>
