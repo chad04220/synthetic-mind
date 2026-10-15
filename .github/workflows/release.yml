@@ -1,0 +1,50 @@
+name: Release
+
+# Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) or run this workflow by hand
+# with a tag name: the offline tests run on CPU, then a GitHub release is published with the
+# notes from RELEASE_NOTES.md and a ready-to-unzip archive.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt pytest
+      - name: Test
+        run: python -m pytest -q tests
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        run: |
+          TAG="${{ inputs.release_tag || github.ref_name }}"
+          mkdir -p dist
+          git archive --format=zip --prefix=synthetic-mind/ -o "dist/synthetic-mind-${TAG}.zip" HEAD
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: Synthetic Mind ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          body_path: RELEASE_NOTES.md
+          files: dist/*.zip
