@@ -1036,3 +1036,24 @@ def test_wren_voice_art_prompts():
     assert plan["title"] == "Snail Song" and "the snail" in m.seen[-1] and "music" in m.seen[-1]
     m.reply = "Lovely colours, Zen. Next time, try a tree on one side."
     assert v.critique("a painting of the pond", "painting", "Pond", "", 0.4, 2).startswith("Lovely colours")
+
+
+def test_wren_comes_back_to_unfinished_art_and_keeps_commissions(mind):
+    life = _wren_life(mind, voice=True)
+    w, c = life.world, life.companion
+    c.commission_work("painting", "Moss asleep by the fire")
+    assert c.set_plan(ag.Goal("paint", "easel"), "Make the painting our friend asked for")
+    assert w.wren.art_fallback["subject"] == "Moss asleep by the fire"
+    c.zen_came("hungry")                                  # Zen interrupts
+    assert c.plan is None and c.aside is not None
+    for _ in range(400):                                  # (something urgent may come first)
+        life.step()
+        if c.plan is not None and c.plan.goal.verb == "paint":
+            break
+    assert c.plan is not None and c.plan.goal.verb == "paint" and c.commission   # back to it, order still open
+    for _ in range(2000):                                 # its model never answers: the order still shapes the piece
+        life.step()
+        if any(x["author"] == w.wren.name and x["kind"] == "painting" for x in w.creations):
+            break
+    made = next(x for x in w.creations if x["author"] == w.wren.name and x["kind"] == "painting")
+    assert made["data"]["subject"] == "Moss asleep by the fire" and made.get("commission") and c.commission is None

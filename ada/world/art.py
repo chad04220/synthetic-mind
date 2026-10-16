@@ -98,7 +98,9 @@ LAND = {"spring": ["#7fb35a", "#a7cf6e", "#5d8f3d", "#f7c6d9"], "summer": ["#4f8
         "autumn": ["#b5793a", "#d9a25c", "#8a5a2b", "#c0462e"], "winter": ["#dfe8ee", "#b8c6d1", "#8fa3b3", "#ffffff"]}
 MOOD_TINT = {"calm": "#7fa7c9", "joyful": "#f2c14e", "lonely": "#6c7a99", "dreamy": "#b39ddb", "stormy": "#4a5568",
              "cosy": "#e08e45", "playful": "#ef6f6c", "peaceful": "#8fbf9f"}
-COLOR_WORDS = {"red": "#d64545", "blue": "#3f6fb5", "green": "#4f9a4f", "yellow": "#f2c94c", "orange": "#ef8a3a",
+COLOR_WORDS = {"golden": "#d9a93b", "gray": "#8d8d8d", "amber": "#e0a03a", "crimson": "#b8323c", "navy": "#24396b",
+               "violet": "#8e5bb5", "lavender": "#b9a3d6", "cream": "#f3e9d2", "rust": "#b5582e", "sky": "#8ec5e8",
+               "red": "#d64545", "blue": "#3f6fb5", "green": "#4f9a4f", "yellow": "#f2c94c", "orange": "#ef8a3a",
                "purple": "#8e5bb5", "pink": "#ee8fb2", "gold": "#d9a93b", "white": "#f4f1ea", "black": "#232323",
                "brown": "#8a5a2b", "grey": "#8d8d8d", "silver": "#b9c2cc", "teal": "#2a9d8f"}
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -427,7 +429,13 @@ def describe_music(d: dict) -> str:
 
 # ====================================================================== sculpture
 SUBJECTS = ["cat", "bird", "hen", "owl", "fish", "figure", "tree", "mushroom", "heart", "moon", "spiral", "wave",
-            "tower", "flower", "rabbit", "snail"]
+            "tower", "flower", "rabbit", "snail", "apple"]
+SUBJECT_WORDS = {"apple": "apple", "pear": "apple", "plum": "apple", "fruit": "apple", "kitten": "cat", "moss": "cat",
+                 "chicken": "hen", "rooster": "hen", "duck": "bird", "robin": "bird", "sparrow": "bird",
+                 "person": "figure", "girl": "figure", "boy": "figure", "zen": "figure", "wren": "figure",
+                 "child": "figure", "bunny": "rabbit", "hare": "rabbit", "rose": "flower", "sunflower": "flower",
+                 "tulip": "flower", "pine": "tree", "oak": "tree", "toadstool": "mushroom", "shell": "spiral",
+                 "love": "heart", "crescent": "moon", "water": "wave", "stones": "tower", "cairn": "tower"}
 MATERIALS = {"clay": ["#c2703d", "#e09f6b", "#9c4a2a"], "wood": ["#a47148", "#c08552", "#7f5539"],
              "stone": ["#a8a29e", "#d6d3d1", "#78716c"]}
 CREATURES = ("cat", "bird", "hen", "owl", "fish", "figure", "rabbit", "snail")
@@ -464,6 +472,9 @@ def _template(subject: str, pose: str) -> list[dict]:
             parts[3]["scale"], parts[4]["scale"] = [.4, .04, .16], [.4, .04, .16]
             parts[3]["pos"], parts[4]["pos"] = [-.42, .36, 0], [.42, .36, 0]
         return parts
+    if subject == "apple":
+        return [P("sphere", (0, .34, 0), (.34, .32, .34)), P("cylinder", (0, .7, 0), (.025, .12, .025), (0, 0, .2), 2),
+                P("sphere", (.1, .72, 0), (.1, .025, .05), (0, 0, -.4), 1)]
     if subject == "fish":
         return [P("sphere", (0, .4, 0), (.36, .18, .1)), P("cone", (-.42, .4, 0), (.14, .16, .04), (0, 0, 1.57), 1),
                 P("cone", (.05, .58, 0), (.1, .12, .02), tone=1), P("cylinder", (0, .12, 0), (.03, .2, .03), tone=2)]
@@ -540,7 +551,7 @@ def compose_sculpture(rng: random.Random, plan: dict, skill: float, material: st
 def describe_sculpture(d: dict) -> str:
     if d.get("v") != 2:
         return f"a sculpture in {d.get('material', 'clay')}"
-    pose = {"sleeping": "a sleeping ", "flying": "a flying "}.get(d.get("pose"), "a ")
+    pose = {"sleeping": "a sleeping ", "flying": "a flying "}.get(d.get("pose"), "an " if d["subject"][0] in "aeiou" else "a ")
     glaze = " with a coloured glaze" if d.get("glaze") else ""
     return f"{pose}{d['subject']} made of {d['material']}, {d['finish']}{glaze}"
 
@@ -665,9 +676,12 @@ def clean_plan(kind: str, raw: dict, place: str = "", time: str = "noon", season
         plan["subject"] = s("subject", 120) or plan["idea"]
     elif kind == "sculpture":
         subj = s("subject", 40).lower()
-        plan["subject"] = next((x for x in SUBJECTS if x in subj), "") or None
+        plan["subject"] = next((x for x in SUBJECTS if re.search(rf"\b{x}", subj)), "") or \
+            next((v for k, v in SUBJECT_WORDS.items() if re.search(rf"\b{k}", subj)), "") or None
         plan["about"] = subj
         pose = s("pose", 16).lower()
+        pose = {"resting": "sleeping", "asleep": "sleeping", "curled": "sleeping", "lying": "sleeping",
+                "sat": "sitting", "perched": "sitting", "soaring": "flying"}.get(pose, pose)
         if pose in ("sitting", "sleeping", "flying", "standing"):
             plan["pose"] = pose
         g = s("glaze", 16)
@@ -677,7 +691,9 @@ def clean_plan(kind: str, raw: dict, place: str = "", time: str = "noon", season
             del plan["subject"]
     elif kind == "poem":
         text = str(raw.get("text") or "").strip()
-        text = re.sub(r"[*_#`]+", "", text)[:900]
+        text = re.sub(r"[*_#`]+|[\U0001F000-\U0001FFFF\u2600-\u27BF\uFE0F]", "", text)
+        text = "\n".join(re.sub(r"\s+([.,!?])", r"\1", re.sub(r"([.!?])\s*\.", r"\1", re.sub(r"[ \t]{2,}", " ", l))).strip()
+                         for l in text.split("\n") if l.strip())[:900]
         plan.update({"text": text, "form": s("form", 16).lower() if s("form", 16).lower() in FORMS else "",
                      "about": s("about", 80) or s("subject", 80)})
         plan["subject"] = plan["about"]

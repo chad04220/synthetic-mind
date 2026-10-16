@@ -70,6 +70,7 @@ class Companion:
         self.suggestion = None
         self.commission: dict | None = None            # something our friend asked Wren to make
         self.art_rid, self.art_kind = None, ""
+        self.aside = None                                  # a piece of art set aside, to come back to
         self.last_art = self.w.tick_n                      # Wren longs to make something after a while
         self.recent_labels: deque = deque(maxlen=6)
         self.failed: dict[str, float] = {}            # option label -> when it last failed
@@ -192,8 +193,36 @@ class Companion:
         if self.now() >= self.next_decide:
             self.decide()
 
+    def set_aside(self):
+        """A piece of art interrupted (Zen came, a conversation): Wren comes back to it afterwards."""
+        p = self.plan
+        if p and (p.goal.verb in self.ART_KIND or any(g.verb in self.ART_KIND for g in p.then)):
+            self.aside = (p, self.current_label, self.now())
+            self.b.activity = ""
+
+    def resume_aside(self, opts) -> bool:
+        p, label, since = self.aside
+        if opts and opts[0].score >= 6.5 and self.now() - since <= 600:
+            return False                                   # something needs doing first; the piece can wait
+        self.aside = None
+        if self.now() - since > 600 or self.w.phase != "day":
+            self.b.art_plan, self.b.art_wait, self.art_rid = None, False, None
+            return False
+        p.route, p.ticks = [], 0
+        self.plan = p
+        self.current_label = label
+        self.intent = {"text": label or ag.say(p.goal, self.name), "goal": ag.say(p.goal, self.name), "t": time.time()}
+        self.life.link.send("event", kind="wren_intent", text=f"Back to it: {self.intent['text']}", reason="")
+        art_goal = next((g for g in [p.goal, *p.then] if g.verb in self.ART_KIND), p.goal)
+        self.note(f"I went back to my {self.ART_KIND.get(art_goal.verb, 'work').replace('music', 'song')}.")
+        return True
+
     def decide(self):
         opts = self.options()
+        if self.aside:
+            opts.sort(key=lambda o: -o.score)
+            if self.resume_aside(opts):
+                return
         if not opts:
             self.set_plan(ag.Goal("rest", "sofa", reason="Nothing needs doing.", source="companion"))
             return
@@ -307,17 +336,18 @@ class Companion:
         b.art_plan, b.art_wait = None, False
         kind = self.ART_KIND[goal.verb]
         order = self.commission if self.commission and self.commission["kind"] == kind else None
+        fallback = None
         if order:
-            self.commission = None
+            fallback = {"subject": order["about"], "about": order["about"], "elements": [], "mood": "joyful"}
+            if kind == "painting":
+                fallback.update({k: v for k, v in art.words_to_plan(order["about"]).items()
+                                 if k in ("elements", "layers", "colors", "place") and v})
+        if kind == "poem":
+            fallback = {**art.small_poem(self.rng, self.w.season, self.w.time_of_day(),
+                                         order["about"] if order else "", self.zen.name), **(fallback or {})}
+        b.art_fallback = fallback
         if not (self.life.voice_ready and self.life.cfg.oracle.enabled):
-            if order:
-                b.art_plan = {"subject": order["about"], "about": order["about"], "elements": [], "mood": "joyful"}
-                if kind == "painting":
-                    b.art_plan.update({k: v for k, v in art.words_to_plan(order["about"]).items()
-                                       if k in ("elements", "layers", "colors") and v})
-            if kind == "poem":
-                b.art_plan = {**art.small_poem(self.rng, self.w.season, self.w.time_of_day(),
-                                               order["about"] if order else "", self.zen.name), **(b.art_plan or {})}
+            b.art_plan = fallback
             return
         w = self.w
         ctx = {"place": w.place_of(b.x, b.y), "time": w.time_of_day(), "season": w.season, "weather": w.weather,
@@ -335,12 +365,14 @@ class Companion:
         b = self.b
         b.art_plan = plan or {}
         b.art_wait = False
-        if self.art_kind == "poem" and not b.art_plan.get("text"):
-            b.art_plan = {**art.small_poem(self.rng, self.w.season, self.w.time_of_day(), b.art_plan.get("about", ""),
-                                           self.zen.name), **{k: v for k, v in b.art_plan.items() if v}}
-        if plan.get("subject") and self.near_zen(6) and self.care() >= 1:
-            self.speak(f"I'm going to make {plan['subject'] if plan['subject'].startswith(('a ', 'an ', 'the ')) else 'something about ' + plan['subject']}.",
-                       kind="say")
+        if not b.art_plan:
+            b.art_plan = b.art_fallback
+        elif self.art_kind == "poem" and not b.art_plan.get("text"):
+            b.art_plan = {**(b.art_fallback or {}), **{k: v for k, v in b.art_plan.items() if v}}
+        b.art_plan = b.art_plan or {}
+        if plan and plan.get("title") and self.near_zen(6) and self.care() >= 1:
+            noun = {"music": "song", "painting": "picture"}.get(self.art_kind, self.art_kind or "something")
+            self.speak(f"I'm making a {noun}, {self.zen.name}. I'll call it \"{plan['title']}\".", kind="say")
 
     def commission_work(self, kind: str, about: str) -> str:
         """Our friend asks Wren to make something."""
@@ -466,6 +498,9 @@ class Companion:
         if "created" in info:
             c = info["created"]
             self.last_art = self.w.tick_n
+            if self.commission and self.commission["kind"] == c["kind"] and c.get("author") == self.name:
+                c["commission"] = self.commission["about"]
+                self.commission = None
             self.life.link.send("event", kind="created", creation=c)
             if not c.get("title") and self.life.voice_ready:
                 self.life.oracle("wren_name", work=c)
@@ -481,6 +516,7 @@ class Companion:
     def zen_came(self, why: str):
         """The synth came to Wren (often because it needs something): Wren turns to it."""
         if self.plan and self.plan.goal.verb not in ("feed", "give", "dry", "light", "cook", "bake") and not self.talk:
+            self.set_aside()
             self.plan = None
             self.b.activity = ""
         if self.waiting:                               # its model's answer can still serve the next choice
@@ -779,6 +815,7 @@ class Companion:
         self.talk_seq += 1
         self.talk = t
         z.engaged = b.engaged = t.id
+        self.set_aside()
         self.plan = None
         if initiator == self.name:
             self.life.plan = None                      # the synth stops to listen

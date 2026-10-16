@@ -77,6 +77,7 @@ class Being:
     needs: dict = field(default_factory=lambda: {n: 75.0 for n in NEEDS})
     wet: float = 0.0
     art_plan: dict | None = None                   # what it means to make next (Wren's comes from its model)
+    art_fallback: dict | None = None               # what it makes if its model is too slow
     art_wait: bool = False
     activity: str = ""                             # what it is doing right now ("playing the piano")
     role: str = ""                                 # "synth", "companion" or "visitor"

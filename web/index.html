@@ -126,7 +126,13 @@
 
 <!-- ====================================================== GALLERY -->
 <section class="view" id="view-gallery">
-  <div class="card"><div class="row"><h2 style="margin:0">🖼️ Keepsakes</h2><span class="muted">Everything <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> have made. It stays.</span></div>
+  <div class="card keep-head"><div class="row"><h2 style="margin:0">🖼️ Keepsakes</h2><span class="muted">Everything <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> have made. It stays.</span></div>
+    <form class="commission" id="commission" autocomplete="off">
+      <span class="clabel">Ask <span class="wrenname">Wren</span> to make</span>
+      <select name="kind" aria-label="What kind of work"><option value="painting">a painting 🎨</option><option value="music">a song 🎵</option><option value="sculpture">a sculpture 🗿</option><option value="poem">a poem 📜</option></select>
+      <input name="about" maxlength="160" placeholder="about… (the pond at dusk, Moss asleep by the fire, the first snow)" aria-label="What about">
+      <button class="primary" type="submit">Ask</button>
+    </form>
     <div class="gchips" id="galleryChips"></div></div>
   <div class="gallery" id="gallery"></div>
 </section>

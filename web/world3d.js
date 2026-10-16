@@ -4,6 +4,7 @@
 // Continuous positions (fx, fy, onMove) are in tile units where an integer value is the tile centre
 // (so fx = 12.0 is the centre of tile 12, world X = 12.5).
 import * as THREE from "./vendor/three.module.min.js";
+import { buildSculpture } from "./sculpt3d.js";
 
 // ───────────────────────────────────────────────────────────── constants
 const BLOCKING = new Set([1, 3, 4, 8, 13, 15, 18]);
@@ -504,7 +505,7 @@ const S = {
   container: null, renderer: null, scene: null, camera: null, clock: new THREE.Clock(),
   world: null, sig: "", season: "spring", weather: "clear",
   staticGroup: null, roofs: [], windowGlows: [], doorLamps: [], fireflySpots: [], bLit: [], bGlow: [], treeSpots: new Map(),
-  kinds: {}, ents: new Map(), people: new Map(), ada: null, adaData: null, visitorData: null, avatar: null,
+  kinds: {}, ents: new Map(), creations: new Map(), art: new Map(), artTex: new Map(), artQueue: [], artT: 0, people: new Map(), ada: null, adaData: null, visitorData: null, avatar: null,
   live: { phase: "day", sun: 0.35, season: "spring", weather: "clear", light: 1 },
   env: null, labels: new Map(), layer: null,
   cam: { yaw: -0.65, pitch: 0.72, dist: 13, tYaw: -0.65, tPitch: 0.72, tDist: 13, target: new THREE.Vector3(64, 0, 48), focus: "synth", fp: false },
@@ -723,6 +724,7 @@ function full(snap) {
   applyLive(snap, true);
   rebuildIfNeeded();
   syncFurniture();
+  takeCreations(snap); syncArt();
   makePlaceLabels();
   if (!S.firstFull) { S.firstFull = true; snapCamera(); }
 }
@@ -1776,6 +1778,7 @@ function delta(snap) {
   applyLive(snap, false);
   rebuildIfNeeded();
   syncFurniture();
+  takeCreations(snap); syncArt();
 }
 function applyLive(s, isFull) {
   const L = S.live;
@@ -2065,6 +2068,7 @@ function updateSprites(dt, t) {
   const cp = S.camera.position, night = S.env.night;
   for (const e of S.ents.values()) {
     if (HIDDEN_KINDS.has(e.kind)) continue;
+    if (S.art.get(e.id)?.obj) continue;                 // hung paintings and sculptures on plinths are real 3D things
     const k = S.kinds[e.kind] || {}, size = k.size || "small";
     const small = size === "small", creature = size === "creature";
     const furn = FURN_KINDS.has(e.kind), fruitTree = isFruitTree(e.kind);
@@ -2627,6 +2631,8 @@ function pickAt(e, terrain) {
   for (const [n, f] of S.people) if (f.group.visible) test(f.group.position, 0.55, 0.6, { kind: "person", name: n });
   for (const ent of S.ents.values()) {
     if (HIDDEN_KINDS.has(ent.kind)) continue;
+    const art = S.art.get(ent.id);
+    if (art?.obj) { if (art.obj.visible) { art.obj.getWorldPosition(tmpV2); test(tmpV2.clone().setY(tmpV2.y + art.mid), 0, art.r, entInfo(ent)); } continue; }
     const k = S.kinds[ent.kind] || {}; let h = entSize(ent, k), y0 = standY(ent.x, ent.y) + (ent.lift || 0), px = ent.px ?? ent.x + 0.5, pz = ent.pz ?? ent.y + 0.5;
     if (isFruitTree(ent.kind)) { const sp = S.treeSpots.get(ent.x + "," + ent.y); if (sp) { px = sp.x; pz = sp.z; y0 = sp.y; h = 2; } }
     if (FURN_KINDS.has(ent.kind)) h = ent.kind === "rug" ? 0.1 : 0.8;
@@ -2701,7 +2707,7 @@ function frame(now) {
   updateClouds(dt);
   updateCamera(dt);
   updateBow();
-  if (S.world) updateRoofs(dt);
+  if (S.world) { updateRoofs(dt); updateArt(); }
   const pr = S.renderer.getPixelRatio();
   S.snowMat.uniforms.uPR.value = pr * (S.vh / 900); S.emberMat.uniforms.uPR.value = pr * (S.vh / 900); S.puffMat.uniforms.uPR.value = pr * (S.vh / 900); if (S.flyMat) S.flyMat.uniforms.uPR.value = pr * (S.vh / 900);
   S.renderer.render(S.scene, S.camera);
@@ -2710,6 +2716,123 @@ function frame(now) {
   st.drawCalls = info.calls; st.triangles = info.triangles;
   st.frames++; st.msAcc += performance.now() - t0;
   if (now - st.last > 1000) { st.fps = Math.round((st.frames * 1000) / (now - st.last)); st.ms = +(st.msAcc / st.frames).toFixed(2); st.frames = 0; st.msAcc = 0; st.last = now; }
+}
+
+// ───────────────────────────────────────────────────────────── art in the house
+// Paintings hung on a wall (an entity with `wall` and `work`) become framed canvases showing the actual painting;
+// sculptures on plinths (`plinth` and `work`) become the actual sculpture on a small stone plinth. Built lazily, a
+// piece at a time, and cached by work; everything else keeps its billboard.
+const WALL_DIR = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] };
+function takeCreations(snap) {
+  for (const c of snap.creations || []) if (c && c.id != null) S.creations.set(c.id, Object.assign(S.creations.get(c.id) || {}, c));
+}
+function artKey(e) { return e.kind === "painting" ? `p${e.work}|${e.x},${e.y}|${e.wall}` : `s${e.work}|${e.x},${e.y}`; }
+function wantsArt(e) {
+  return e.work != null && S.creations.get(e.work)?.data &&
+    ((e.kind === "painting" && WALL_DIR[e.wall] && window.Art?.paint) || (e.kind === "sculpture" && e.plinth));
+}
+function syncArt() {
+  if (!S.world) return;
+  for (const [id, a] of S.art) {
+    const e = S.ents.get(id);
+    if (!e || !wantsArt(e) || artKey(e) !== a.key) dropArt(id);
+  }
+  for (const e of S.ents.values()) if (wantsArt(e) && !S.art.has(e.id)) { S.art.set(e.id, { key: artKey(e), obj: null }); S.artQueue.push(e.id); }
+}
+function dropArt(id) {
+  const a = S.art.get(id); if (!a) return;
+  S.art.delete(id);
+  if (a.obj) {
+    S.scene.remove(a.obj);
+    a.obj.traverse((o) => { if (o.geometry && !o.userData.shared) o.geometry.dispose(); if (o.material && !o.material.userData?.shared) o.material.dispose?.(); });
+  }
+  if (a.work != null) {   // the painting's texture is shared by work: let it go when nobody shows it
+    const t = S.artTex.get(a.work);
+    if (t && --t.users <= 0) { t.tex.dispose(); S.artTex.delete(a.work); }
+  }
+}
+function paintingTex(work, spec) {
+  let t = S.artTex.get(work);
+  if (!t) {
+    const cv = document.createElement("canvas"); cv.width = 512; cv.height = 512;
+    window.Art.paint(cv, spec);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    t = { tex, users: 0, aspect: cv.width / cv.height }; S.artTex.set(work, t);
+  }
+  t.users++;
+  return t;
+}
+function artMats() {
+  if (S.artMats) return S.artMats;
+  const m = (c) => { const x = new THREE.MeshLambertMaterial({ color: c }); x.userData.shared = true; return x; };
+  S.artMats = { frame: m(0x6b4426), frameHi: m(0x9a6a3d), back: m(0x3a2a1c), stone: m(0xcfc9bf), stoneDark: m(0xa9a197) };
+  return S.artMats;
+}
+function buildPainting(e, c) {
+  const [dx, dy] = WALL_DIR[e.wall], M = artMats(), t = paintingTex(e.work, c.data);
+  const g = new THREE.Group(), maxS = 0.62, w = t.aspect >= 1 ? maxS : maxS * t.aspect, h = t.aspect >= 1 ? maxS / t.aspect : maxS, fw = 0.05, depth = 0.04;
+  const canvas = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshLambertMaterial({ map: t.tex }));
+  canvas.position.z = depth / 2 + 0.002; canvas.receiveShadow = true;
+  const back = new THREE.Mesh(new THREE.BoxGeometry(w + fw * 2, h + fw * 2, depth * 0.6), M.back); back.position.z = depth * 0.2;
+  g.add(canvas, back);
+  const bar = (bw, bh, x, y, mat) => { const b = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, depth), mat); b.position.set(x, y, depth / 2); b.castShadow = true; g.add(b); };
+  bar(w + fw * 2, fw, 0, h / 2 + fw / 2, M.frameHi); bar(w + fw * 2, fw, 0, -h / 2 - fw / 2, M.frame);
+  bar(fw, h, -w / 2 - fw / 2, 0, M.frame); bar(fw, h, w / 2 + fw / 2, 0, M.frameHi);
+  const gap = wallGap(e.x, e.y, dx, dy) ?? 0.5, base = standY(e.x, e.y);
+  g.position.set(e.x + 0.5 + dx * (gap - 0.025), base + 1.12, e.y + 0.5 + dy * (gap - 0.025));
+  g.rotation.y = Math.atan2(-dx, -dy);
+  g.rotation.x = 0;
+  const a = S.art.get(e.id); a.work = e.work; a.mid = 0; a.r = Math.max(w, h) * 0.6;
+  a.anchor = [e.x + dx + 0.5, e.y + dy + 0.5]; a.top = base + 1.12 - h / 2 - fw; a.normal = [-dx, -dy];
+  return g;
+}
+function buildPlinthSculpture(e, c) {
+  const M = artMats(), g = new THREE.Group(), ph = 0.32, pw = 0.36;
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, pw), M.stone); plinth.position.y = ph / 2; plinth.castShadow = plinth.receiveShadow = true;
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(pw + 0.06, 0.04, pw + 0.06), M.stoneDark); cap.position.y = ph - 0.02; cap.castShadow = true;
+  const foot = new THREE.Mesh(new THREE.BoxGeometry(pw + 0.06, 0.04, pw + 0.06), M.stoneDark); foot.position.y = 0.02; foot.receiveShadow = true;
+  const sc = buildSculpture(THREE, c.data, { plinth: false, detail: 2 });
+  const k = 0.6 / Math.max(0.2, sc.userData.height || 1);
+  sc.scale.setScalar(Math.min(k, (pw * 1.6) / Math.max(0.1, sc.userData.size || 1) * 1.4));
+  sc.position.y = ph;
+  sc.rotation.y = ((hashStr(String(e.work)) % 628) / 100) * 0.3 - 0.3;
+  g.add(plinth, cap, foot, sc);
+  g.position.set(e.x + 0.5, standY(e.x, e.y), e.y + 0.5);
+  const a = S.art.get(e.id); a.mid = (ph + 0.6) / 2; a.r = 0.45; a.anchor = null;
+  a.sculpt = sc;
+  return g;
+}
+function updateArt() {
+  // build one waiting piece at a time, so a room full of paintings never stalls a frame for long
+  const now = performance.now();
+  while (S.artQueue.length && now - S.artT > 60) {
+    const id = S.artQueue.shift(), a = S.art.get(id), e = S.ents.get(id);
+    if (!a || a.obj || !e) continue;
+    const c = S.creations.get(e.work);
+    try { a.obj = e.kind === "painting" ? buildPainting(e, c) : buildPlinthSculpture(e, c); S.scene.add(a.obj); }
+    catch (err) { console.warn("art piece", e.work, err); S.art.delete(id); }
+    S.artT = performance.now();
+    break;
+  }
+  // when the dollhouse cut-away lowers a wall, its paintings come down with it and lean on the top of what is left
+  const cut = S.cut, box = U.cutBox.value, f = U.cutFocus.value, d = U.cutDir.value;
+  for (const a of S.art.values()) {
+    if (!a.obj || !a.anchor) continue;
+    let drop = 0;
+    if (cut && cut.bi >= 0 && cut.amt > 0.02) {
+      const [ax, az] = a.anchor;
+      if (ax > box.x && ax < box.z && az > box.y && az < box.w) {
+        const inner = ax > box.x + 0.5 && ax < box.z - 0.5 && az > box.y + 0.5 && az < box.w - 0.5;
+        if (inner || (ax - f.x) * d.x + (az - f.y) * d.y > 0.3) drop = Math.max(0, a.top - (U.cutY.value + 0.02));
+      }
+    }
+    if (a.y0 === undefined) a.y0 = a.obj.position.y;
+    a.obj.position.y = a.y0 - drop;
+    a.obj.rotation.x = drop > 0.01 ? -0.14 * Math.min(1, drop * 3) : 0;
+    // seen from behind over a lowered wall, a painting is only the back of a frame: leave it out
+    const cp = S.camera.position, [nx, nz] = a.normal;
+    a.obj.visible = !(drop > 0.01 && (cp.x - a.obj.position.x) * nx + (cp.z - a.obj.position.z) * nz < 0);
+  }
 }
 
 // ───────────────────────────────────────────────────────────── public API

@@ -1543,13 +1543,13 @@ def _make_art(w: World, me: Being, p: Plan, hold, release) -> tuple | None:
         w.sounds.append(("piano music", me.x, me.y, 12))
     need = ART_TIME[v][1 if wren else 0]
     # Wren's plan comes from its language model; it keeps working on the piece while it thinks
-    if wren and getattr(me, "art_wait", False) and getattr(me, "art_plan", None) is None and p.working < need + 160:
+    if wren and getattr(me, "art_wait", False) and getattr(me, "art_plan", None) is None and p.working < need + 280:
         return None
     if p.working < need:
         return None
     me.activity = ""
-    plan = dict(getattr(me, "art_plan", None) or {})
-    me.art_plan, me.art_wait = None, False
+    plan = dict(getattr(me, "art_plan", None) or getattr(me, "art_fallback", None) or {})
+    me.art_plan, me.art_wait, me.art_fallback = None, False, None
     place, time = w.place_of(me.x, me.y), w.time_of_day()
     mood = plan.get("mood") or (w.feelings(me) or ["calm"])[0].replace("very ", "")
     if not wren and p.goal.source in ("self", "you") and p.goal.text:

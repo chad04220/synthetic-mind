@@ -331,3 +331,98 @@ figure.work blockquote { margin: 0; padding: 14px 16px; font-family: Georgia, "T
 #diary .who.wren { color: #4f8f7f; } #diary .who.zen { color: #6f7fe0; }
 #diary .when { float: right; font-size: 10.5px; color: var(--muted); }
 #diary.hide-zen .item.zen, #diary.hide-wren .item.wren { display: none; }
+
+/* ================================================================== keepsakes: the gallery, the viewer, the commission form */
+.keep-head .commission { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--panel-2)); border: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--line)); }
+.commission .clabel { font-weight: 600; font-size: 13px; }
+.commission input { flex: 1 1 260px; }
+.gchips .gsp { flex: 1; }
+.gchips button small { opacity: .6; margin-left: 2px; }
+.gallery { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; align-items: start; }
+.gempty { padding: 24px; grid-column: 1 / -1; text-align: center; }
+figure.work { display: flex; flex-direction: column; background: var(--panel); outline: none; }
+figure.work:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+figure.work.painting canvas { border-bottom: 0; }
+figure.work figcaption b { font-size: 13.5px; line-height: 1.3; }
+.wmeta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.wmeta .who { color: var(--c); font-weight: 600; }
+.spill { margin-left: auto; width: 46px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; display: inline-block; }
+.spill i { display: block; height: 100%; background: linear-gradient(90deg, #e9a944, #f6d77a); border-radius: 3px; }
+/* a painting hangs in a wooden frame with a cream mat */
+.frame { padding: 9px; margin: 12px 12px 0; border-radius: 3px; display: grid; place-items: center;
+  background: linear-gradient(135deg, #8a5a32 0%, #5e3a1d 30%, #9a6a3d 55%, #4f3017 100%);
+  box-shadow: inset 0 0 0 1px rgba(255,220,170,.25), inset 0 0 6px rgba(0,0,0,.6), 0 6px 14px rgba(0,0,0,.35); }
+.frame .mat { background: #f1eadb; padding: 8px; box-shadow: inset 0 1px 4px rgba(0,0,0,.35); width: 100%; aspect-ratio: 4 / 3; display: grid; place-items: center; }
+.frame canvas { max-width: 100%; max-height: 100%; width: auto !important; height: auto; box-shadow: 0 0 0 1px rgba(0,0,0,.15); }
+figure.work .frame canvas { max-height: 190px; }
+.plinthbox { background: #1f1d22; aspect-ratio: 1 / 1; display: grid; place-items: center; }
+.plinthbox canvas { width: 100%; height: 100%; }
+figure.work .roll { margin: 0; background: #0d1120; }
+figure.work .roll canvas { display: block; width: 100%; }
+.roll .play { position: absolute; right: 10px; bottom: 10px; width: 42px; height: 42px; border-radius: 50%; padding: 0; font-size: 16px;
+  background: #f6d77a; color: #2a2012; border: 0; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+.roll .play.on { background: #fff; }
+.roll .mtag { position: absolute; left: 10px; top: 8px; font-size: 11px; color: #c9d2ea; opacity: .8; }
+.poemcard { margin: 12px 12px 0; padding: 16px 18px 14px; border-radius: 4px; background: linear-gradient(#fbf7ec, #f2e8cf); color: #3a2f1e;
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif; box-shadow: 0 2px 8px rgba(0,0,0,.25); min-height: 140px; }
+.poemcard p { margin: 0 0 4px; font-size: 14.5px; line-height: 1.5; font-style: italic; }
+.poemcard .pform { font: 600 10px/1 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; color: #9a7b4f; margin-bottom: 10px; }
+.poemcard.big { margin: 0; padding: 40px 48px; min-height: 0; }
+.poemcard.big p { font-size: 22px; line-height: 1.65; }
+/* the viewer */
+#workDlg { max-width: 1280px; width: 96vw; max-height: 94vh; overflow: auto; }
+#workDlg .wd { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 22px; padding: 22px; position: relative; align-items: start; }
+#workDlg .wd-art { min-width: 0; display: grid; place-items: center; }
+#workDlg canvas { margin: 0; border-radius: 0; }
+#workDlg .frame.big { margin: 0; padding: 16px; width: 100%; }
+#workDlg .frame.big .mat { padding: 18px; aspect-ratio: auto; max-height: 74vh; }
+#workDlg .frame.big canvas { max-height: calc(74vh - 36px); width: 100% !important; height: auto; object-fit: contain; }
+#workDlg .orbitbox { position: relative; width: 100%; aspect-ratio: 1 / 1; max-height: 76vh; border-radius: 12px; overflow: hidden; background: radial-gradient(#4a4440, #18171c 75%); }
+#workDlg .orbitbox canvas { width: 100%; height: 100%; }
+#workDlg .orbitbox .hint { position: absolute; left: 0; right: 0; bottom: 10px; text-align: center; font-size: 12px; color: #d9d2c8; opacity: .7; pointer-events: none; }
+#workDlg .songbox { width: 100%; border-radius: 12px; overflow: hidden; background: #0d1120; }
+#workDlg .songbox canvas { width: 100%; height: auto; display: block; }
+#workDlg .songbox .songmeta { padding: 10px 14px; font-size: 12.5px; color: #b8c2d6; }
+#workDlg .built.big { width: 100%; font-size: 120px; border-radius: 12px; }
+.wd-info { display: flex; flex-direction: column; gap: 8px; }
+.wd-info h2 { font-size: 22px; margin: 0; font-family: Georgia, serif; font-weight: 600; line-height: 1.2; }
+.wd-info .wkind { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.wd-info .wby { display: flex; align-items: center; gap: 8px; }
+.wd-info .wdesc { margin: 4px 0; line-height: 1.5; }
+.wd-info .wtext { margin: 0; font-style: italic; color: var(--muted); }
+.wskill { display: flex; flex-direction: column; gap: 4px; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+.wskill > i { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; display: block; }
+.wskill > i b { display: block; height: 100%; background: linear-gradient(90deg, #e9a944, #f6d77a); }
+.wcomments { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.wcomments > small { font-size: 10.5px; letter-spacing: .1em; color: var(--muted); }
+.wcomment { padding: 9px 11px; border-radius: 10px; border-top-left-radius: 3px; background: rgba(127,179,166,.14); }
+.wcomment p { margin: 3px 0 0; line-height: 1.45; font-size: 13.5px; }
+.wactions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.wactions form { margin: 0 0 0 auto !important; }
+.wactions button.big { padding: 8px 18px; font-size: 15px; }
+#workDlg .wnav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 34px; height: 54px; padding: 0; font-size: 26px; line-height: 1;
+  background: rgba(10,14,24,.55); color: #fff; border-color: rgba(255,255,255,.2); }
+#workDlg .wnav.prev { left: 4px; } #workDlg .wnav.next { right: 4px; }
+@media (max-width: 860px) {
+  #workDlg .wd { grid-template-columns: 1fr; padding: 14px; }
+  #workDlg .wnav { top: 30%; }
+}
+/* the minds' art skills */
+.mc-art { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 8px; }
+.mc-art > small { font-size: 10.5px; letter-spacing: .08em; color: var(--muted); }
+.mc-art .ab { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.mc-art .ab i { width: 38px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; display: inline-block; }
+.mc-art .ab i b { display: block; height: 100%; background: linear-gradient(90deg, #e9a944, #f6d77a); }
+figure.work .wmedia { aspect-ratio: 4 / 3; display: grid; overflow: hidden; background: color-mix(in srgb, var(--panel-2) 70%, #000 4%); }
+figure.work .wmedia > * { min-width: 0; min-height: 0; }
+figure.work .frame { margin: 14px; align-self: center; justify-self: center; max-width: calc(100% - 28px); max-height: calc(100% - 28px); }
+figure.work .frame .mat { aspect-ratio: auto; }
+figure.work .frame canvas { max-height: 150px; }
+figure.work .plinthbox { aspect-ratio: auto; height: 100%; }
+figure.work .roll { height: 100%; position: relative; }
+figure.work .roll canvas { height: 100%; object-fit: cover; }
+figure.work .poemcard { margin: 14px; min-height: 0; overflow: hidden; }
+figure.work .built { height: 100%; }
+#workDlg .wd { padding: 22px 50px; }
+#workDlg .wnav.prev { left: 8px; } #workDlg .wnav.next { right: 8px; }
