@@ -1,3 +1,74 @@
+# Synthetic Mind v2.0.0: Zen and the valley of minds
+
+A new synth, a valley four times the size, a community of minds that think, talk and create,
+and a 3D world you can walk around in.
+
+## Zen
+
+- **A new synth, Zen, is the default.** It starts from nothing, like Ada did. Ada is kept: run
+  `python run.py --name Ada`, or `start.bat --name Ada`.
+- **A 32k vocabulary trained on FineWeb.** On unseen FineWeb text it packs slightly more text per
+  token than GPT-2's 50k vocabulary: 4.65 against 4.59 bytes per token. It is 35% smaller, so less
+  of Zen's brain is a lookup table and the loss is cheaper. It writes any text; nothing is out of
+  vocabulary.
+- **Zen's journey.** First word, first phrase, first sentence, first action in its own words,
+  first conversation, first painting, first song, each stage, and concept scores: each first time
+  is recorded with the day and what was said.
+
+## A community of minds
+
+- **Seven villagers, each with its own voice:** Mira the baker, Theo the librarian, Rowan the
+  smith, Juniper the merchant, Finn the fisher, Sage the teacher and Pip, a child who loves to
+  play. Each villager is its own llama.cpp server on the CPU. They share one copy of the model
+  in memory (about 260 MB each instead of 1.2 GB).
+- **The same selfhood as Zen.** Each has six needs and the feelings they bring, intentions in
+  their own words (their needs and their work decide when their model is busy), the same planner
+  and actions as Zen, an inner monologue, a diary, coins, and friendships with everyone.
+- **Conversations, one turn at a time.** Whoever has something to say starts the conversation and
+  walks up to the other mind. The speaker composes its line (a "…" bubble) while the listener
+  waits; then they swap. This works between villagers, and between villagers and Zen, who answers
+  with its own brain. Zen studies the conversations it takes part in or overhears.
+- **A priority gate** lets a few villagers generate at once on your CPU: conversation turns first,
+  then decisions, then naming their works, then thoughts.
+
+## Lasting art
+
+- **Paintings** of the valley's places, times and seasons; **music** composed at the piano and
+  recorded (play it in the Gallery); **sculptures** carved from stone, wood or clay; **buildings**
+  (benches, birdhouses, lamp posts, fountains, flower beds); **poems**. They are made by Zen and
+  the villagers, named by their makers, kept in the valley and in the new **Gallery**.
+- New materials and tools: clay from the river, a chisel, a hammer, paper.
+
+## A bigger valley
+
+- **128 × 96 tiles:**
+  - mountains with a mine and a snowy peak, a river with bridges, a lake with a beach and a dock;
+  - a village with a plaza, market, school, workshop and forge, music hall, studio and park;
+  - Zen's cottage with a farm and an orchard, a meadow with beehives, the observatory, a forest.
+- **More to do:** fishing, mining, milking, eggs and honey, carrots and pumpkins, baking pies,
+  crafting, quests from the villagers, buying and selling, swimming, kites, snowmen.
+- **Money goes round:** sellers are paid, the market buys what you sell from its own purse, and
+  work earns a little.
+
+## A 3D valley
+
+- **A three.js view** with day and night, seasons, weather, lit windows and fire, swaying trees,
+  water, and characters with name tags and speech bubbles.
+- **Visit the valley yourself:** WASD and the mouse, Shift to run, V for first person, E to
+  use or talk, G to give, H to hug. Talk to Zen or to the villager you face.
+- **An information overlay:** every mind's mood and activity, a minimap, a live feed, and a card for
+  whoever you select. The new **Minds** tab shows them all in full.
+- A welcome screen on first visit (the **?** button shows it again).
+
+## Under the hood
+
+- The Oracle and the villagers' servers stop together with the program, even mid-start.
+- The 3D view counts positions with whole numbers at tile centres; the server agrees.
+- 41 tests, including the turn-taking protocol, the gallery surviving a restart, every new
+  activity, and the tokenizer.
+
+---
+
 # Ada v1.2.1
 
 ## Fixed: the built-in Oracle couldn't download llama.cpp ("HTTP Error 404")

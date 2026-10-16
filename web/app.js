@@ -70,14 +70,22 @@ function connect() {
     P.msgs++; P.bytes += m.data.length; P.msgMs += dt; P.msgMax = Math.max(P.msgMax, dt);
   };
   ws.onopen = () => banner("");
-  ws.onclose = () => { banner("Lost contact with Ada's Hub. Reconnecting…"); setTimeout(connect, 1500); };
+  ws.onclose = () => { banner("Lost contact with the Hub. Reconnecting…"); setTimeout(connect, 1500); };
 }
 
 function init(m) {
   S.settings = m.settings; S.academy = m.academy || {}; S.metrics = m.metrics || []; S.assessments = m.assessments || [];
   S.concepts = m.concepts || {}; S.oracle = m.oracle || {}; S.feeds = m.feeds || {};
-  setText($("#name"), m.name); document.title = m.name;
+  setText($("#name"), m.name); document.title = `${m.name} · Synthetic Mind`; S.name = m.name;
+  setTalkTarget(null);
+  $("#chatText").placeholder = `Say something to ${m.name}…`;
+  S.journey = m.journey || [];
+  $$(".synthname").forEach((el) => el.textContent = m.name);
+  try { if (!localStorage.getItem("welcomed")) { $("#welcome").showModal(); localStorage.setItem("welcomed", "1"); } } catch { /* private window */ }
   MapView.setWorld(m.world);
+  worldIn(m.world, true);
+  for (const k of ["npc", "ada_says", "vthought", "vdid", "talk"]) for (const e of S.feeds[k] || []) Community.st.feed.push(e);
+  Community.st.feed.sort((a, b) => a.t - b.t);
   $("#chat").innerHTML = ""; $("#thoughts").innerHTML = ""; $("#diary").innerHTML = ""; $("#village").innerHTML = "";
   $("#lessons").innerHTML = ""; $("#qa").innerHTML = "";
   for (const c of S.feeds.chat || []) {
@@ -94,8 +102,17 @@ function init(m) {
   syncSettings(); renderAll(); drawCharts();
 }
 
+function worldIn(w, full) {
+  if (!w) return;
+  if (w.minds) Community.setMinds(w.minds);
+  if (w.creations) Community.addWorks(w.creations);
+  if (w.kinds) Community.st.kinds = w.kinds;
+  for (const v of S.oracle?.villagers || []) Community.st.voices[v.name] = { status: v.voice?.status, model: v.voice?.model };
+  if (W3.api) { try { full ? W3.api.full(w) : W3.api.delta(w); } catch (e) { console.error(e); report("error", "3D: " + e.message); } }
+}
+
 function tick(m) {
-  if (m.world) { m.world.full ? MapView.setWorld(m.world) : MapView.applyDelta(m.world); }
+  if (m.world) { m.world.full ? MapView.setWorld(m.world) : MapView.applyDelta(m.world); worldIn(m.world, !!m.world.full); }
   if (m.academy) S.academy = m.academy;
   if (m.settings) { S.settings = m.settings; syncSettings(); }
   if (m.oracle) S.oracle = m.oracle;
@@ -112,17 +129,22 @@ function onEvent(e) {
     case "chat": if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; }
       chatLine({ role: "user", text: e.user }); chatLine({ role: "mind", text: e.text, tokens: e.tokens, asleep: e.asleep }); break;
     case "tutor": tutorLine(e); break;
-    case "npc": addVillage(e); break;
+    case "npc": addVillage(e); Community.addFeed(e);
+      if (e.to === "you") chatLine({ role: "mind", who: e.name, text: e.text }); break;
+    case "ada_says": case "vthought": case "vdid": case "talk": Community.addFeed(e); break;
+    case "created": Community.addFeed(e); if (e.creation) Community.addWorks([e.creation]); break;
+    case "quest": Community.addFeed(e); toast(`🏅 ${e.text}`); break;
+    case "milestone": S.journey = [...(S.journey || []), e]; toast(`🌱 ${e.title}`, 6000); break;
     case "oracle": addVillage(e); addQA(e); break;
     case "read": case "fact": addVillage(e); break;
     case "lesson": addLesson(e); break;
     case "metric": S.metrics.push(e.point); if (S.metrics.length > 20000) S.metrics.shift(); chartsDue(); break;
     case "assessment": S.assessments.push(e); chartsDue(); break;
     case "concepts": chartsDue(); break;
-    case "published": toast(`🎓 Ada has a new brain (v${e.meta.version}, step ${big(e.meta.step)}).`); break;
-    case "brain": toast(`🌍 Ada is now living with brain v${e.meta.version}.`); break;
-    case "grew": toast(`🧠 Her brain grew to ${e.layers} layers.`, 5000); break;
-    case "phase": toast(e.phase === "night" ? "🌙 Night: Ada sleeps and studies." : `☀️ Day ${e.day}: Ada wakes up.`); break;
+    case "published": toast(`🎓 ${SYNTH()} has a new brain (v${e.meta.version}, step ${big(e.meta.step)}).`); break;
+    case "brain": toast(`🌍 ${SYNTH()} is now living with brain v${e.meta.version}.`); break;
+    case "grew": toast(`🧠 ${SYNTH()}'s brain grew to ${e.layers} layers.`, 5000); break;
+    case "phase": toast(e.phase === "night" ? `🌙 Night: ${SYNTH()} sleeps.` : `☀️ Day ${e.day}: ${SYNTH()} wakes up.`); break;
     case "error": banner(e.text); setTimeout(() => banner(""), 15000); break;
   }
 }
@@ -138,7 +160,7 @@ function renderHeader() {
     const txt = sc === "academy" ? "🎓 Study only: the world is paused" : sc === "world" ? (night ? `🌙 Asleep · wakes in ${left}` : `☀️ Awake · sleeps in ${left}`)
       : night ? `🌙 Asleep, studying · wakes in ${left}` : `☀️ Awake · sleeps in ${left}`;
     setText($("#sched"), txt); $("#sched").classList.toggle("night", night);
-    setText($("#btnSleep"), night ? "Wake her up" : "Put her to bed");
+    setText($("#btnSleep"), night ? "Wake up" : "Go to sleep");
     $("#orb").classList.toggle("asleep", night);
     setText($("#kSelf"), pct(mind.self_rate));
   }
@@ -147,6 +169,7 @@ function renderHeader() {
   setText($("#kTokens"), a.tokens != null ? big(a.tokens) + " tokens" : "–");
   setText($("#kConcepts"), a.concepts?.accuracy != null ? pct(a.concepts.accuracy) : "–");
 }
+$("#btnHelp").onclick = () => $("#welcome").showModal();
 $("#btnSleep").onclick = () => api(MapView.st.world?.phase === "night" ? "wake_now" : "sleep_now").catch((e) => toast(e.message));
 
 $$("#nav button").forEach((b) => b.onclick = () => {
@@ -155,11 +178,14 @@ $$("#nav button").forEach((b) => b.onclick = () => {
   $$(".view").forEach((v) => v.classList.toggle("on", v.id === `view-${S.view}`));
   renderAll(); if (S.view === "academy") drawCharts(); if (S.view === "health") pollHealth(true);
   MapView.st.dirty = true;
+  if (W3.api) W3.api.pause(S.view !== "world" || document.hidden);
 });
 
 function renderAll() {
   renderHeader();
   if (S.view === "world") renderWorld();
+  else if (S.view === "minds") renderMinds();
+  else if (S.view === "gallery") renderGallery();
   else if (S.view === "academy") renderAcademy();
   else if (S.view === "concepts") renderConcepts();
   else if (S.view === "oracle") renderOracle();
@@ -208,27 +234,61 @@ function renderHealth(h) {
 
 // ================================================================== world view
 const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", company: "Company", fun: "Fun" };
+const SYNTH = () => S.name || "Zen";
+const W3 = { api: null, ready: false };          // the 3D valley (world3d.js), when WebGL is available
+
 function renderWorld() {
   const w = MapView.st.world; if (!w || !w.ada) return;   // before the World's first snapshot
-  const a = w.ada, m = w.mind || {};
-  setText($("#adaWhere"), a.sleeping ? "asleep" : `${a.place === "home" ? "at home" : "in the " + a.place}${a.carrying?.length ? " · carrying " + a.carrying.join(", ") : ""}`);
+  const a = w.ada, m = w.mind || {}, n = SYNTH();
+  // the overlay
+  const sky = { clear: "☀️", cloudy: "☁️", rain: "🌧️", snow: "❄️", windy: "🌬️", fog: "🌫️" }[w.weather] || "";
+  setText($("#ovClock"), `Day ${w.day} · ${w.season} · ${w.time} · ${sky} ${Math.round(w.temperature)}°C`);
+  const sel = Community.st.byName[Community.st.selected];
+  setText($("#ovPlace"), sel ? `${sel.name}: ${sel.place}` : `${n}: ${a.place}`);
+  Community.strip($("#mindStrip"));
+  setHTML($("#mindCard"), sel ? Community.card(sel, false) : "");
+  Community.feed($("#liveFeed"), ["npc", "ada_says", "vthought", "created", "quest"]);
+  renderHotbar(w);
+  // the synth's own card below
+  setText($("#adaTitle"), n);
+  setText($("#adaWhere"), a.sleeping ? "asleep" : `${a.place === "home" ? "at home" : "in the " + a.place}${a.carrying?.length ? " · carrying " + a.carrying.join(", ") : ""}${a.coins != null ? " · 🪙 " + a.coins : ""}`);
   setHTML($("#needs"), Object.entries(a.needs || {}).map(([k, v]) => {
     const c = v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
     return `<div class="need"><span>${NEED_LABEL[k] || k}</span><div><i style="width:${Math.round(v)}%;background:${c}"></i></div><b>${Math.round(v)}</b></div>`;
   }).join(""));
   const it = m.intent || {};
-  const badge = { self: '<span class="badge self">her own words</span>', needs: '<span class="badge needs">her needs</span>', you: '<span class="badge you">your idea</span>' }[it.source] || "";
-  setHTML($("#intent"), a.sleeping ? "💤 Sleeping" : (m.plan ? badge + esc(m.plan) : esc(it.text || "…")));
+  const badge = { self: '<span class="badge self">its own words</span>', needs: '<span class="badge needs">its needs</span>', you: '<span class="badge you">your idea</span>' }[it.source] || "";
+  setHTML($("#intent"), a.engaged || a.talking ? "💬 Talking" : a.sleeping ? "💤 Sleeping" : (m.plan ? badge + esc(m.plan) : esc(it.text || "…")));
   setText($("#intentWhy"), !a.sleeping && it.reason ? "Why: " + it.reason : "");
-  setText($("#tried"), S.tried && it.source !== "self" && !a.sleeping ? `She tried to say: “${S.tried.text}”` : "");
-  setText($("#selfPct"), `· ${pct(m.self_rate)} of her last ${m.decisions || 0} choices`);
+  setText($("#tried"), S.tried && it.source !== "self" && !a.sleeping ? `It tried to say: “${S.tried.text}”` : "");
+  setText($("#selfPct"), `· ${pct(m.self_rate)} of its last ${m.decisions || 0} choices`);
   $("#selfBar").style.width = `${Math.round((m.self_rate || 0) * 100)}%`;
   setHTML($("#log"), (w.log || []).slice().reverse().map((l) => `<li>${esc(l)}</li>`).join(""));
-  setText($("#mapLabel"), m.brain ? `Ada · brain v${m.brain}` : "Ada");
+}
+
+function renderMinds() {
+  Community.grid($("#mindsGrid"));
+  Community.feed($("#communityFeed"));
+  setText($("#jName"), SYNTH());
+  const done = S.journey || [];
+  const next = ["first word", "first phrase", "first sentence", "acts in its own words", "first conversation", "first painting", "first song"]
+    .filter((x) => !done.some((m) => m.title.toLowerCase().includes(x.replace("acts in its own words", "chose in its own words"))));
+  setHTML($("#journey"), done.map((m) => `<div class="ms"><b>${esc(m.title)}</b><span>${m.day ? "Day " + m.day + " · " : ""}${esc(m.detail)}</span></div>`).join("")
+    + next.slice(0, 3).map((x) => `<div class="ms next"><b>Next: ${esc(x)}</b><span>not yet</span></div>`).join(""));
+}
+function renderGallery() { Community.gallery($("#gallery"), $("#galleryChips")); }
+Community.onChange = () => { renderAll(); };
+Community.st.onSelect = (name) => {
+  if (W3.api && S.mode === "watch") W3.api.focusOn(name === SYNTH() ? "synth" : name);
+  MapView.setFollow(name === SYNTH() ? "ada" : name); $("#follow").value = "all";
+  if (S.mode === "you") setTalkTarget(name);
+};
+
+function renderHotbar(w) {
   const v = w.visitor;
-  setText($("#btnJoin"), v ? "Leave the world" : "Join the world");
-  $("#btnJoin").classList.toggle("primary", !v);
-  setText($("#youCarry"), v ? (v.carrying.length ? v.carrying.join(", ") : "nothing") : "(join first)");
+  if (!v || S.mode !== "you") return;
+  const slots = Array.from({ length: 6 }, (_, i) => v.carrying[i]);
+  setHTML($("#hotbar"), slots.map((k, i) => `<div class="slot" title="${k || "empty"}"><small>${i + 1}</small>${k ? (GLYPH[k] || "❔") : ""}</div>`).join(""));
 }
 
 function tokHTML(tokens) {
@@ -242,20 +302,22 @@ function prepend(box, html, max = 120) {
 function addThought(e) { prepend($("#thoughts"), `${tokHTML(e.tokens)}<div class="meta">brain v${e.brain ?? "?"} · ${new Date(e.t * 1000).toLocaleTimeString()}</div>`); }
 function addDeed(e) {
   if (e.kind === "intent") {
-    const who = { self: "🗣️ her own words", needs: "🧭 her needs", you: "🙋 your idea" }[e.source] || "";
+    const who = { self: "🗣️ its own words", needs: "🧭 its needs", you: "🙋 your idea" }[e.source] || "";
     prepend($("#diary"), `<b class="t">${who}</b>${esc(e.text)}${e.reason ? `<div class="meta">${esc(e.reason)}</div>` : ""}`);
   } else prepend($("#diary"), `${e.ok ? "✅" : "⚠️"} ${esc(e.text)}<div class="meta">${e.reward != null ? "reward " + e.reward : ""}</div>`);
 }
 function addVillage(e) {
-  const html = e.kind === "npc" ? `<b class="t">${esc(e.name)}</b>${esc(e.text)}${e.ada ? `<div class="meta">Ada said: ${esc(e.ada)}</div>` : ""}`
+  if (e.kind === "npc" && e.text === "…") return;
+  const html = e.kind === "npc" ? `<b class="t">${esc(e.name)}${e.to ? ` → ${esc(e.to)}` : ""}</b>${esc(e.text)}`
     : e.kind === "oracle" ? `<b class="t">🔮 The Oracle${e.by === "you" ? " (asked by you)" : ""}</b><i>${esc(e.question)}</i>\n${esc(e.text)}`
-    : e.kind === "read" ? `<b class="t">📘 Ada read</b>${esc(e.text)}` : `<b class="t">🔭 Ada learned</b>${esc(e.text)}`;
+    : e.kind === "read" ? `<b class="t">📘 ${esc(SYNTH())} read</b>${esc(e.text)}` : `<b class="t">🔭 ${esc(SYNTH())} learned</b>${esc(e.text)}`;
   prepend($("#village"), html, 80);
 }
 function chatLine(c) {
   const d = document.createElement("div");
   d.className = `msg ${c.role === "user" ? "user" : "mind"}`;
-  d.innerHTML = c.role === "user" ? esc(c.text) : c.asleep ? '<span class="muted">💤 Ada is asleep.</span>' : tokHTML(c.tokens || [[c.text, .5]]);
+  d.innerHTML = c.role === "user" ? esc(c.text) : c.asleep ? `<span class="muted">💤 ${esc(SYNTH())} is asleep.</span>`
+    : c.who ? `<b>${esc(c.who)}:</b> ${esc(c.text)}` : tokHTML(c.tokens || [[c.text, .5]]);
   $("#chat").append(d); while ($("#chat").children.length > 150) $("#chat").firstChild.remove();
   $("#chat").scrollTop = $("#chat").scrollHeight;
 }
@@ -267,15 +329,35 @@ function tutorLine(e) {
 }
 $$("#adaTabs button").forEach((b) => b.onclick = () => {
   $$("#adaTabs button").forEach((x) => x.classList.toggle("on", x === b));
-  $$("aside .pane").forEach((p) => p.classList.toggle("on", p.id === `pane-${b.dataset.pane}`));
+  $$(".below .pane").forEach((p) => p.classList.toggle("on", p.id === `pane-${b.dataset.pane}`));
 });
+
+// ------------------------------------------------------------------ talking: to the synth, or to a villager you're near
+S.talkTo = null;
+function setTalkTarget(name) {
+  S.talkTo = name && name !== SYNTH() ? name : null;
+  setText($("#sayTo"), `to ${S.talkTo || SYNTH()}`);
+}
+async function sayToSynth(text) {
+  S.pendingChat = document.createElement("div"); S.pendingChat.className = "msg mind pending"; S.pendingChat.textContent = "…";
+  $("#chat").append(S.pendingChat);
+  try { await api("chat", { text }); } catch (e) { toast(e.message); if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; } }
+}
+$("#sayForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const text = $("#sayText").value.trim(); if (!text) return;
+  $("#sayText").value = "";
+  if (S.talkTo) {
+    chatLine({ role: "user", text: `(to ${S.talkTo}) ${text}` });
+    try { const r = await api("visitor", { action: "say", to: S.talkTo, text }); if (r && !/listening/.test(r)) toast(r); } catch (e) { toast(e.message); }
+  } else sayToSynth(text);
+  $("#sayText").blur();
+};
 $("#chatForm").onsubmit = async (ev) => {
   ev.preventDefault();
   const text = $("#chatText").value.trim(); if (!text) return;
   $("#chatText").value = "";
-  S.pendingChat = document.createElement("div"); S.pendingChat.className = "msg mind pending"; S.pendingChat.textContent = "…";
-  $("#chat").append(S.pendingChat);
-  try { await api("chat", { text }); } catch (e) { toast(e.message); if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; } }
+  sayToSynth(text);
 };
 $("#suggestForm").onsubmit = async (ev) => {
   ev.preventDefault();
@@ -284,19 +366,29 @@ $("#suggestForm").onsubmit = async (ev) => {
   try { toast(await api("suggest", { text })); } catch (e) { toast(e.message); }
 };
 
-// modes under the map
-$$("#modes button").forEach((b) => b.onclick = () => {
-  S.mode = b.dataset.mode;
-  $$("#modes button").forEach((x) => x.classList.toggle("on", x === b));
-  for (const m of ["watch", "add", "you"]) $(`#mode-${m}`).hidden = m !== S.mode;
-  if (S.mode !== "add") setTool(null);
-});
+// ------------------------------------------------------------------ modes: watch, visit, add things
+async function setMode(mode) {
+  const was = S.mode;
+  S.mode = mode;
+  $$("#modes button[data-mode]").forEach((x) => x.classList.toggle("on", x.dataset.mode === mode));
+  $("#mode-add").hidden = mode !== "add"; $("#mode-you").hidden = mode !== "you";
+  $("#stage").classList.toggle("bigmap", mode === "add");
+  if (mode !== "add") setTool(null);
+  if (mode === "you" && !MapView.st.world?.visitor) { try { toast(await api("visitor", { action: "join" })); } catch (e) { toast(e.message); } }
+  if (was === "you" && mode !== "you" && MapView.st.world?.visitor) { try { await api("visitor", { action: "leave" }); } catch { /* fine */ } setTalkTarget(null); }
+  if (W3.api) { W3.api.setMode(mode === "you" ? "visit" : "watch"); if (mode !== "you") W3.api.focusOn("synth"); }
+  MapView.setFollow(mode === "you" ? "you" : "all"); $("#follow").value = mode === "you" ? "you" : "all";
+}
+$$("#modes button[data-mode]").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+$("#uiToggle").onclick = () => $("#stage").classList.toggle("bare");
+$("#mapBig").onclick = () => $("#stage").classList.toggle("bigmap");
 $("#follow").onchange = (e) => MapView.setFollow(e.target.value);
+MapView.setFollow("all");
 function setTool(t) {
   S.tool = t; MapView.setTool(t);
   $$("#palette button").forEach((b) => b.classList.toggle("on", b.dataset.kind === t));
-  setText($("#addHint"), t ? (t === "erase" ? "Click things on the map to remove them." : `Click open ground to place the ${t}. Click it again to stop.`)
-    : "Choose something, then click open ground to put it there. Books and signs ask what they should say.");
+  setText($("#addHint"), t ? (t === "erase" ? "Click things on the map to remove them." : `Click open ground on the map to place the ${t}. Click it again to stop.`)
+    : "Choose something, then click the map to put it there. Books and signs ask what they should say.");
 }
 for (const k of [...PLACEABLE, "erase"]) {
   const b = document.createElement("button"); b.dataset.kind = k;
@@ -308,7 +400,7 @@ for (const k of PORTABLE) {
   const b = document.createElement("button"); b.textContent = GLYPH[k]; b.title = `Take a new ${k}`;
   b.onclick = async () => {
     if (!MapView.st.world?.visitor) await api("visitor", { action: "join" });
-    const text = k === "book" ? (prompt("Write the book's words (Ada will read and study them):") || "") : "";
+    const text = k === "book" ? (prompt(`Write the book's words (${SYNTH()} will read and study them):`) || "") : "";
     try { toast(await api("visitor", { action: "hold", kind: k, text })); } catch (e) { toast(e.message); }
   };
   $("#holdPalette").append(b);
@@ -317,33 +409,66 @@ MapView.st.onClick = async ({ x, y }) => {
   if (S.mode === "add" && S.tool) {
     let text = "";
     if (S.tool === "sign") { text = prompt("What should the sign say?") || ""; if (!text) return; }
-    if (S.tool === "book") text = prompt("Write the book's words (empty: the Oracle writes one when Ada reads it):") || "";
+    if (S.tool === "book") text = prompt("Write the book's words (empty: the Oracle writes one when it is read):") || "";
     try { toast(await api("place", { kind: S.tool, x, y, text })); } catch (e) { toast(e.message); }
     return;
   }
   const w = MapView.st.world; if (!w) return;
-  const here = MapView.entitiesAt(x, y).map((e) => GLYPH[e.kind] + " " + e.kind + (e.kind === "sprout" ? ` (${Math.round(e.growth || 0)}% grown${e.watered ? ", watered" : ""})` : ""));
-  const who = [w.ada, ...(w.people || []), w.visitor].filter((b) => b && b.x === x && b.y === y).map((b) => b.name === "you" ? "you" : b.name);
-  const place = w.regions?.[y]?.[x];
-  toast([place && `The ${place}`, ...who, ...here].filter(Boolean).join(" · ") || "Nothing here.");
+  const who = [w.ada, ...(w.people || [])].find((b) => b && Math.abs(b.x - x) + Math.abs(b.y - y) <= 1);
+  if (who) { Community.st.selected = who.name; Community.st.onSelect(who.name); renderAll(); return; }
+  if (W3.api && S.mode === "watch") W3.api.focusOn("overview");
+  const here = MapView.entitiesAt(x, y).map((e) => GLYPH[e.kind] + " " + e.kind + (e.kind === "sprout" ? ` (${Math.round(e.growth || 0)}% grown)` : ""));
+  const names = w.region_names || [], place = names[w.regions?.[y]?.[x]] ?? w.regions?.[y]?.[x];
+  toast([place && `The ${place}`, ...here].filter(Boolean).join(" · ") || "Nothing here.");
 };
-$("#btnJoin").onclick = async () => {
-  const joined = !!MapView.st.world?.visitor;
-  try { toast(await api("visitor", { action: joined ? "leave" : "join" })); } catch (e) { toast(e.message); }
-  if (!joined) { $("#follow").value = "you"; MapView.setFollow("you"); MapView.canvas.focus(); }
-  else { $("#follow").value = "ada"; MapView.setFollow("ada"); }
-};
-$$("[data-you]").forEach((b) => b.onclick = async () => {
-  if (!MapView.st.world?.visitor) await api("visitor", { action: "join" });
-  try { toast(await api("visitor", { action: b.dataset.you })); } catch (e) { toast(e.message); }
-});
+// the 2D map keeps keyboard walking when there is no 3D view
 const KEYS = { ArrowUp: "north", w: "north", ArrowDown: "south", s: "south", ArrowLeft: "west", a: "west", ArrowRight: "east", d: "east",
                f: "take", r: "drop", g: "give", h: "hug" };
 MapView.canvas.addEventListener("keydown", async (e) => {
+  if (W3.api) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key, act = KEYS[k];
   if (!act || !MapView.st.world?.visitor) return;
   e.preventDefault();
   try { const r = await api("visitor", { action: act }); if (r) toast(r); } catch (err) { toast(err.message); }
+});
+
+// ------------------------------------------------------------------ the 3D valley
+let moveBusy = false;
+window.addEventListener("world3d", (ev) => {
+  const api3 = ev.detail;
+  if (!api3) { $("#stage").classList.add("no3d"); return; }
+  try {
+    api3.init($("#stage3d"), { quality: localStorage.getItem("quality3d") || "high" });
+  } catch (e) { console.warn("3D view failed:", e); $("#stage").classList.add("no3d"); return; }
+  W3.api = api3; W3.ready = true;
+  if (MapView.st.world?.terrain) api3.full(MapView.st.world.full ? MapView.st.world : { ...MapView.st.world, full: true, ents: [...MapView.st.ents.values()] });
+  api3.setMode(S.mode === "you" ? "visit" : "watch");
+  api3.onMove = (fx, fy, facing) => {
+    if (moveBusy) return;
+    moveBusy = true;
+    api("visitor", { action: "pos", fx, fy, facing }).catch(() => {}).finally(() => { moveBusy = false; });
+  };
+  api3.onAction = async (a) => {
+    try {
+      if (a.type === "interact") {
+        const r = await api("visitor", { action: "interact", target: a.target });
+        if (r && r.talk_to) { setTalkTarget(r.talk_to); $("#sayText").focus(); }
+        else if (r) toast(r, 4200);
+      } else if (a.type === "talk") { $("#sayText").focus(); }
+      else if (a.type === "give" || a.type === "hug" || a.type === "drop") { const r = await api("visitor", { action: a.type }); if (r) toast(r); }
+      else if (a.type === "slot") { toast(`Slot ${a.index + 1}`); }
+    } catch (e) { toast(e.message); }
+  };
+  api3.onPick = (info) => {
+    if (info.kind === "person" || info.kind === "synth") {
+      const name = info.kind === "synth" ? SYNTH() : info.name;
+      Community.st.selected = name; renderAll();
+    } else if (info.kind === "entity") {
+      const e = MapView.st.ents.get(info.id);
+      if (e?.work) Community.showWork(e.work); else if (e) toast(`${GLYPH[e.kind] || ""} ${e.kind}${e.text ? ": " + e.text : ""}`);
+    }
+  };
+  document.addEventListener("visibilitychange", () => api3.pause(document.hidden || S.view !== "world"));
 });
 
 // ================================================================== academy view

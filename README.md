@@ -1,164 +1,150 @@
-# Ada: a mind that learns language, then lives with it
+# Synthetic Mind: raise a mind from nothing
 
-Ada is a neural network that starts as random weights. A two-part system raises her:
+**Zen** is a synth: a neural network that starts as random numbers and knows no words at all. You
+watch it learn language and live with what it learns, in a 3D valley it shares with seven other
+minds. You can visit, talk, give it things and keep it company.
 
-- **The Academy** teaches her language and concepts. It streams web text from **FineWeb**,
-  studies lessons written by an **Oracle** (a small model the program downloads and runs itself
-  with **llama.cpp**, or any model you run in **Ollama**), drills
-  the facts of her world, and studies her own journal of everything she has lived through.
-- **The World** is where she lives with what she has learned: a valley with a cottage, a
-  garden, an orchard, a meadow, a forest, a lake, a village (bakery, library, workshop and the
-  Oracle's shrine) and an observatory. There are days, nights, seasons and weather, three
-  villagers, animals, needs to look after, and things to grow, cook, bake, craft and read.
+- **It studies.** The Academy trains Zen's brain from scratch on your GPU. It learns from web
+  text streamed from FineWeb, lessons from an Oracle, drills on the facts of its world, and its
+  own life. Zen goes from static, to babble, to first words, phrases and sentences.
+- **It lives.** Zen has six needs, and its own words steer its body. When its brain can write
+  "I go fishing at the dock.", it goes fishing. Until then its needs choose for it, and it studies
+  those choices.
+- **It has neighbours.** Seven villagers are minds too, each with its own small language model
+  (a llama.cpp server on your CPU). Each has needs, an inner monologue, intentions, a diary and
+  friendships. They work, eat, rest, make art and talk with each other and with Zen.
+- **They create.** Paintings, music recordings you can play, sculptures in stone, wood or clay,
+  buildings, and poems. Everything they make stays in the valley and in its Gallery.
 
-The two halves never compete: **the GPU belongs to training**. Ada's brain and the Oracle run on
-the CPU, sharing its cores between them, so by default (the *Together* schedule) the Academy
-trains on the whole GPU all the time while Ada lives, and she picks up each new brain it
-publishes.
-
-## What makes it different
-
-**Her words steer her body.** Whenever she is free to choose, her own brain writes an intention
-("I eat the apple.", "I ask the Oracle why the sky is blue."). If the World can make sense of
-it, she does it. While her words can't yet, her needs choose for her, *with a reason*, and
-those choices go into her journal next to what she sensed and how it turned out. The Academy
-studies the journal, so her brain gradually learns to make those choices itself. The header
-shows the share of her actions that come from her own words: the clearest sign that her
-language is grounded in her world.
-
-**Understanding is measured, not guessed.** The world's ontology (what each thing is, its
-color, what it's made of, what it's for, where it's found) becomes a concept graph. The
-Academy drills those facts, and tests them separately as four-way choices *worded unlike any
-drill* ("To look for a mushroom, go to the ___": forest / library / lake / bakery). A rising
-score means she grasped the idea rather than memorised a sentence. The Oracle adds new facts
-with every lesson, and its background lessons go first to what she gets wrong.
-
-**The page stays responsive.** Three separate processes: the Academy (training), the World
-(living), and the Hub (the web page and the Oracle). The Hub never touches PyTorch, so no
-amount of training can freeze the dashboard, and if the Academy or the World ever crashes, the
-Hub restarts it.
-
-```
-           FineWeb ──┐                          ┌── the Oracle (llama.cpp or Ollama)
-                     ▼                          ▼
-   ┌──────────────────────────┐        ┌─────────────────────┐        ┌──────────────────────────┐
-   │ ACADEMY  (process 1)     │ brain  │ HUB  (process 3)    │ events │ WORLD  (process 2)       │
-   │ trains on web text,      │───────▶│ web page, schedule, │◀──────▶│ the valley, Ada's body,  │
-   │ lessons, journal,        │ files  │ Oracle, supervision │        │ intentions, thoughts,    │
-   │ concept drills; tests    │◀───────┤ (never loads torch) │        │ talk; writes her journal │
-   │ concepts; publishes      │journal └─────────▲───────────┘        └──────────────────────────┘
-   └──────────────────────────┘ lessons          │ WebSocket
-                                          your browser
-```
-
-## Start
-
-**Windows with an NVIDIA GPU**
+## Start (Windows with an NVIDIA GPU)
 
 1. Install Python 3.10 or newer from python.org (tick *Add to PATH*).
-2. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA and
-   the other requirements, prints which GPU it found, and opens <http://127.0.0.1:8765>.
-3. The first time it runs, the built-in Oracle downloads llama.cpp (tens of MB) and its
-   model (Gemma 2 2B, 1.7 GB) into the `oracle/` folder; the Oracle tab shows the progress.
-   [Ollama](https://ollama.com) is optional: choose it on the Oracle tab to use your own models.
+2. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA and the
+   other requirements, and opens <http://127.0.0.1:8765>.
+3. The first time, the voices are downloaded into `oracle/`: llama.cpp (tens of MB), the Oracle's
+   model (Gemma 2 2B, 1.7 GB) and the villagers' model (Qwen 2.5 1.5B, 1.1 GB, shared by all seven).
+   The Oracle tab shows the progress. [Ollama](https://ollama.com) is optional; choose it on the
+   Oracle tab if you'd rather use your own models.
 
-**Linux / macOS:** `./start.sh`. **By hand:**
-`pip install torch --index-url https://download.pytorch.org/whl/cu126` (or the CPU build), then
+**Linux / macOS:** `./start.sh`. **By hand:** install PyTorch for your machine, then
 `pip install -r requirements.txt` and `python run.py`.
 
-Ada is saved in `minds/Ada/` continuously; Ctrl+C saves everything and stops. Start again with
-the same name to continue where she left off.
+Each synth is saved continuously in `minds/<name>/`. Ctrl+C saves everything and stops. Minds made
+with earlier versions (Ada) still work: `python run.py --name Ada`.
 
 ```
-python run.py --name Bo --preset tiny      another mind, a small brain
-python run.py --preset medium              a bigger brain (12 GB+ GPU)
-python run.py --schedule day_night         study only while she sleeps at night
-python run.py --world-device cuda          run her brain on the GPU (training then shares it)
+python run.py                              Zen (created on the first run, resumed after)
+python run.py --name Kai                   another synth, starting from nothing
+python run.py --preset medium              a bigger brain for a new synth (12 GB+ GPU)
+python run.py --schedule day_night         study only while it sleeps at night
+python run.py --oracle ollama              the Oracle and the villagers speak through Ollama
 python run.py --no-fineweb --no-oracle     offline
 ```
 
-| preset | brain | parameters (GPT-2 tokens) | for |
-|---|---|---|---|
-| tiny | 256 wide × 4 layers | ~16M | CPU (uses byte tokens: ~3M) |
-| small | 512 × 8 | ~51M | **8 GB GPUs such as the RTX 3070 (default)** |
-| medium | 768 × 12 | ~124M | 12–16 GB |
-| large | 1024 × 16 | ~250M | 24 GB |
+## Playing
 
-## The dashboard
+**🌍 Valley** is the 3D valley, with an overlay you can hide (◱):
 
-- **🌍 World:** the valley, following Ada (or you, or the whole map). Beside it: her six
-  needs (food, water, rest, warmth, company, fun), what she is doing right now, whether that
-  came from *her own words*, *her needs* or *your idea*, and what she tried to say when her
-  words didn't work yet. Below it are three modes:
-  - **👀 Watch:** click anyone or anything to learn about it.
-  - **🧺 Add things:** put apples, books (with your own words), signs, balls, animals… anywhere.
-  - **🧍 Be there:** join as your own avatar. Walk (WASD), carry things, give them to her (G),
-    hug her (H). She senses you, takes what you hold, and is rewarded for your company.
+- the strip on the left lists every mind with its mood and what it is doing; click one to follow it
+  and see its card;
+- the minimap is at the top right (⤢ enlarges it);
+- the live feed shows conversations, thoughts and new works;
+- the talk bar sits at the bottom.
 
-  The side panel has four tabs:
-  - **💬 Talk:** chat with her. The Oracle suggests the reply she should have given, and she
-    studies it. Or *suggest* something for her to do ("bake bread"); if she understands, she
-    does it.
-  - **💭 Thoughts:** her free-running inner monologue, each word shaded by her confidence.
-  - **📔 Diary:** every intention and how it turned out.
-  - **🏘️ Village:** what the villagers say to her, what she read, and the Oracle's answers to
-    the questions she asks at the shrine.
-- **🎓 Academy:** her developmental stage (Static → Babbling → First words → Phrases →
-  Sentences → Conversational → Articulate), loss and bits-per-byte, concept score against
-  chance, study speed, the Oracle's assessments of her thoughts, what she is studying and
-  from where, a probe that shows what she predicts next, and buttons to publish, test, grow
-  or save.
-- **🧠 Concepts:** how well she understands each kind of fact, every fact with what she
-  chose, and **Teach her a topic**: the Oracle writes a lesson, questions and new facts, and
-  your topics go first.
-- **🔮 Oracle:** choose the built-in Oracle (Gemma 2 2B, Qwen 2.5 1.5B or Llama 3.2 3B, run on
-  the CPU by llama.cpp) or any Ollama model, ask it anything ("Let Ada study this" turns the answer
-  into a lesson), and read every lesson it has written.
-- **🩺 Health:** what looks wrong right now, in plain words; where each process spends its time
-  (training step, waiting for data, thinking, the web server's responsiveness…); the GPU's load,
-  memory and temperature; this browser's frame rate and frozen moments; and every warning and
-  error. **Download report** saves it all, with your settings and recent logs, as one text file
-  to share. Each process also keeps a full log in `minds/<name>/logs/`.
-- **⚙️ Settings:** the schedule (together, day & night, study only, live only), day and night
-  lengths, GPU intensity, what she studies, how she thinks and talks, where her brain and the
-  Oracle run, and how many CPU threads each gets (automatic: half the physical cores each).
+| mode | controls |
+|---|---|
+| 👀 **Watch** | drag to orbit, wheel to zoom, click a mind or a work |
+| 🧍 **Visit** | click to capture the mouse; **WASD** walk, **Shift** run, **Space** hop, **V** first/third person, **E** use or talk to what you face, **G** give Zen what you carry, **H** hug, **Q** drop, **T** talk, **1–6** inventory, **Esc** free the mouse |
+| 🧺 **Add things** | place food, materials, tools, books with your own words, signs and animals on the map |
 
-## How she learns quickly
+What you say goes to Zen, or to the villager you are talking to; they answer with their own voices.
+Zen's replies are its own (babble at first), and the Oracle suggests the reply it should have given,
+which it then studies.
 
-- A modern small transformer: RMSNorm, rotary positions, QK-norm, SwiGLU, tied embeddings,
-  logit soft-capping, zero-initialised residual branches. Blocks can be added later without
-  disturbing what she knows ("grow").
-- The **Muon** optimizer for the transformer's matrices (it learns faster per token than
-  AdamW), bf16, TF32, fused AdamW, and a chunked loss that never holds the full vocabulary of
-  logits in memory.
-- **FineWeb** streamed as random 1000-document row groups from across Common Crawl, with flat
-  memory and a held-out set for honest measurement.
-- **Curriculum from the Oracle**, pitched at her stage: toddler sentences while she babbles,
-  stories and explanations as she grows, targeted at the concepts her tests say she gets wrong.
-- **Her own life as data**: what she sensed, chose, did and heard, weighted by how it turned out.
-- **The batch grows to fill the GPU's free memory** (measured, never by running out: on Windows
-  that silently spills into RAM), and the loss over the vocabulary is computed with its gradient
-  in one pass.
-- **Never broken by a bad step:** unstable steps are skipped, broken weights are never saved
-  or published, and the previous good save is always kept.
+**🧑‍🤝‍🧑 Minds** has Zen's journey (first word, first sentence, first conversation, first song…) and
+a card for every mind: needs, feelings, what it is doing and why, its latest thought, how often it
+acts in its own words, friendships, works and diary.
 
-## Files
+**🖼️ Gallery** holds everything made in the valley:
+
+- paintings, painted from each work's recipe;
+- songs, played in the browser;
+- sculptures, buildings and poems.
+
+**🎓 Academy**, **🧠 Concepts**, **🔮 Oracle**, **⚙️ Settings** and **🩺 Health** show the training,
+what Zen understands, the voices, every setting and the program's own performance. **Download
+report** on the Health tab saves a diagnostics file you can share.
+
+## The valley
+
+The valley is 128 × 96 tiles:
+
+- **The mountains** have an old mine (ore and crystals) and a snowy peak.
+- **A river** runs down to a lake with a beach and Finn's dock.
+- **The village** has a plaza with a well and a fire pit, the bakery, the library, the school, the
+  workshop and forge, the market, the music hall, the painting studio, a park with swings and a
+  frog pond, and the Oracle's shrine on its hill.
+- **Zen's cottage** has a farm with fields, a barn and animal pens, next to an apple orchard.
+- **To the east** is a meadow with beehives and the observatory; **to the south-west**, a deep forest.
+
+Days, nights, seasons and weather pass.
+
+Things to do:
+
+- farm (wheat, carrots, pumpkins), bake, cook, fish, mine, milk the cow, collect eggs and honey;
+- craft tools: axe, fishing rod, pickaxe, chisel, hammer, kite, lantern;
+- trade at the market (coins circulate: sellers are paid, work earns wages);
+- complete the villagers' quests;
+- paint, compose and record, sculpt, build (benches, birdhouses, lamp posts, fountains, flower
+  beds), write, read, swim, fly a kite, build a snowman, stargaze.
+
+**The villagers:** Mira (baker), Theo (librarian), Rowan (smith), Juniper (merchant), Finn (fisher),
+Sage (teacher) and Pip (a child who loves to play).
+
+**How conversations work.** Whoever has something to say starts the conversation and walks up
+to the other mind. Both stop. The speaker composes its line (a "…" bubble shows it thinking) while
+the listener waits. Then the listener composes its reply while the first one waits, for a few turns.
+Every line comes from that speaker's own mind. When Zen is nearby, it overhears and studies the
+conversation.
+
+## How it is built
+
+Three processes, so nothing can freeze anything else:
+
+```
+   FineWeb ──┐                                ┌── llama.cpp servers on the CPU: the Oracle + one per villager
+             ▼                                ▼
+ ┌────────────────────────┐ brain  ┌──────────────────────┐ events ┌─────────────────────────────┐
+ │ ACADEMY (GPU)          │───────▶│ HUB                  │◀──────▶│ WORLD (CPU)                 │
+ │ trains Zen's brain;    │ files  │ web page, schedule,  │        │ the valley, Zen's body and  │
+ │ tests concepts;        │◀───────┤ voices, supervision  │        │ brain, the villagers' minds,│
+ │ publishes new brains   │journal └─────────▲────────────┘        │ conversations, art, journal │
+ └────────────────────────┘ lessons          │ WebSocket           └─────────────────────────────┘
+                                       your browser (three.js)
+```
+
+- **Zen's brain:** a modern small transformer (RMSNorm, rotary positions, QK-norm, SwiGLU, tied
+  embeddings, logit soft-capping) trained with Muon and AdamW in bf16.
+  - **Vocabulary:** 32,768 tokens, trained on FineWeb (`tools/train_tokenizer.py`). It writes any
+    text, fits FineWeb a little better than GPT-2's 50,257, and leaves more of a small brain for
+    thinking.
+  - **Loss:** the vocabulary loss and its gradient are computed in one pass.
+  - **Batch:** sized to the GPU's free memory, measured rather than found by running out (on
+    Windows that would quietly spill into RAM).
+  - **Growth:** the brain grows new layers when learning plateaus.
+- **The GPU is for training.** Zen's brain lives on the CPU, sharing the physical cores with the
+  Oracle. The villagers' servers share one copy of their model. A priority gate lets a few of them
+  generate at once: conversation turns first, then decisions, naming their works, and thoughts.
 
 ```
 run.py               starts the Hub, which starts the Academy and the World
-ada/hub.py           the Hub: processes, schedule, Oracle jobs, browser messages (no torch)
-ada/web.py           the web server inside the Hub
-ada/academy.py       the Academy: training, evaluation, publishing
-ada/life.py          the World process: Ada's day, her brain, talk, journal
-ada/world/sim.py     the valley: places, things, weather, seasons, villagers, needs
-ada/world/agent.py   words to deeds: parsing intentions, needs, plans, actions
-ada/ontology.py      everything in the world and what is true about it
-ada/concepts.py      the concept graph: drills and tests
-ada/oracle.py        the Oracle: lessons, answers, villagers, books, assessments
-ada/localllm.py      the built-in Oracle: downloads and runs llama.cpp's server on the CPU
-ada/model.py         the brain; ada/optim.py Muon; ada/fineweb.py streaming; ada/tokenizer.py
-web/                 the dashboard (no external dependencies)
+ada/academy.py       training, evaluation, publishing        ada/model.py    the brain (and the fused loss)
+ada/life.py          the World process: Zen's day            ada/community.py the villagers' minds, conversations
+ada/world/sim.py     the valley                              ada/world/agent.py  words → plans → actions (for every mind)
+ada/world/art.py     paintings, melodies, sculptures         ada/journey.py  Zen's milestones
+ada/hub.py           processes, schedule, voices, browser    ada/villagers.py  the villagers' voices and prompts
+ada/localllm.py      llama.cpp servers                       ada/oracle.py   the Oracle (built-in or Ollama)
+ada/tokenizer.py     fineweb32k / gpt2 / bytes               ada/fineweb.py  FineWeb streaming
+web/                 the page: world3d.js (three.js), minds.js, art.js, app.js
 tests/               python -m pytest tests
 ```
-
-Earlier versions (one process doing everything) are in the v0.x releases.

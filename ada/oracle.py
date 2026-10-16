@@ -1,9 +1,9 @@
-"""The Oracle: a local Ollama model that knows far more than Ada and helps her learn.
+"""The Oracle: a local language model that knows far more than the synth and helps it learn.
 
-It never touches her weights. It writes: lessons pitched at her stage (aimed first at the
-concepts her tests show she gets wrong, and at topics you ask for), answers to questions (hers,
-asked at the shrine, and yours), the villagers' words, the books in the library, the reply she
-should have given you, and periodic assessments of how she uses language. Lessons and answers go
+It never touches the synth's weights. It writes: lessons pitched at its stage (aimed first at the
+concepts its tests show it gets wrong, and at topics you ask for), answers to questions (its own,
+asked at the shrine, and yours), the books in the library, the reply the synth
+should have given you, and periodic assessments of how it uses language. Lessons and answers go
 into the curriculum the Academy studies; new facts go into the concept graph.
 """
 from __future__ import annotations
@@ -148,16 +148,21 @@ class Oracle:
             return {}
 
     # -- what the Oracle writes ---------------------------------------------------------
-    SYSTEM = ("You are the Oracle, a wise and gentle teacher of Ada, a young artificial mind who is learning "
-              "language and the world from nothing. Write plain text only: no markdown, lists, emojis or preamble.")
+    name = "Zen"                     # the synth the Oracle teaches (the Hub sets it)
+
+    @property
+    def SYSTEM(self) -> str:
+        return (f"You are the Oracle, a wise and gentle teacher of {self.name}, a young synth (an artificial mind) "
+                "who is learning language and the world from nothing. Write plain text only: no markdown, lists, "
+                "emojis or preamble.")
 
     def lesson_pack(self, topic: str, stage: int, focus: list[str] | None = None) -> dict:
         """A lesson, questions with answers, and facts for the concept graph."""
         hint = f" Make sure to cover: {'; '.join(focus)}." if focus else ""
         d = self._json(self.SYSTEM,
-                       f"Teach Ada about {topic}.{hint} Use {LEVEL[min(stage, 6)]}. Return JSON with keys: "
+                       f"Teach {self.name} about {topic}.{hint} Use {LEVEL[min(stage, 6)]}. Return JSON with keys: "
                        '"lesson": a short paragraph of 4 to 8 sentences; '
-                       '"qa": 3 objects with "q" (a question Ada might ask) and "a" (a short answer); '
+                       f'"qa": 3 objects with "q" (a question {self.name} might ask) and "a" (a short answer); '
                        f'"facts": up to 8 objects with "s", "r", "o" where "r" is one of: {RELATIONS}, and "s" and '
                        '"o" are one or two lowercase words (example: {"s": "moon", "r": "is", "o": "round"}).',
                        temperature=0.8, max_tokens=700)
@@ -166,33 +171,26 @@ class Oracle:
         facts = [x for x in d.get("facts", []) if isinstance(x, dict)]
         return {"topic": topic, "lesson": lesson, "qa": [q for q in qa if q[0] and q[1]], "facts": facts}
 
-    def answer(self, question: str, stage: int, asker: str = "Ada") -> str:
-        who = "Ada asks you" if asker == "Ada" else "Ada's friend asks you"
-        if asker == "Ada" and not re.search(r"[a-z]{3}", question.lower()):
-            return self.chat(self.SYSTEM, "Ada tries to ask a question but her words are still sounds. "
+    def answer(self, question: str, stage: int, asker: str = "synth", **_) -> str:
+        """asker 'you': the synth's human friend asks; anything else: the synth asks."""
+        synth = asker != "you"
+        who = f"{self.name} asks you" if synth else f"{self.name}'s friend asks you"
+        if synth and not re.search(r"[a-z]{3}", question.lower()):
+            return self.chat(self.SYSTEM, f"{self.name} tries to ask a question but its words are still sounds. "
                                           f"Say something kind and simple about asking questions, using {LEVEL[min(stage, 6)]}. "
                                           "Two sentences.", max_tokens=120)
-        level = LEVEL[min(stage, 6)] if asker == "Ada" else "clear, friendly English"
+        level = LEVEL[min(stage, 6)] if synth else "clear, friendly English"
         return self.chat(self.SYSTEM, f'{who}: "{question}"\nAnswer in two to four sentences using {level}.',
                          max_tokens=260)
 
-    def npc(self, name: str, role: str, ada_said: str, stage: int, season: str, weather: str, place: str) -> str:
-        heard = (f'Ada says to you: "{ada_said}"' if re.search(r"[a-z]{3}\s+[a-z]{2,}", ada_said.lower())
-                 else "Ada comes to you and makes some sounds; she is still learning to talk.")
-        return self.chat(
-            f"You are {name}, the {role} in a small village. You talk with Ada, a young artificial mind who is "
-            "learning words. Speak warmly in one or two short sentences, in character. Mention your work or the "
-            "world around you. Plain text only.",
-            f"{heard} It is {season}, the weather is {weather}, you are in the {place}. Use {LEVEL[min(stage, 6)]}.",
-            temperature=0.9, max_tokens=90)
-
-    def tutor(self, history: list, user: str, mind: str, stage: int) -> str:
-        convo = "\n".join(f"{'Friend' if r == 'user' else 'Ada'}: {t}" for r, t in history[-6:])
+    def tutor(self, history: list, user: str, mind: str, stage: int, *_) -> str:
+        n = self.name
+        convo = "\n".join(f"{'Friend' if r == 'user' else n}: {t}" for r, t in history[-6:])
         return self.chat(self.SYSTEM,
-                         f"Ada is talking with her friend.\n{convo}\nFriend: {user}\nAda tried to say: \"{mind}\"\n\n"
-                         "Write the reply Ada should learn to give: first person, honest about being a young mind who "
+                         f"{n} is talking with its friend.\n{convo}\nFriend: {user}\n{n} tried to say: \"{mind}\"\n\n"
+                         f"Write the reply {n} should learn to give: first person, honest about being a young mind who "
                          f"is still learning, warm, at most three sentences, using {LEVEL[min(stage + 1, 6)]}. "
-                         "Reply only with Ada's words.", max_tokens=150)
+                         f"Reply only with {n}'s words.", max_tokens=150)
 
     def book(self, stage: int, topic: str | None = None) -> str:
         topic = topic or random.choice(TOPICS)
@@ -200,16 +198,16 @@ class Oracle:
                                       f"{topic}, using {LEVEL[min(stage + 1, 6)]}. Start with a title line.",
                          temperature=0.9, max_tokens=400)
 
-    def fact(self, topic: str, stage: int) -> str:
-        return self.chat(self.SYSTEM, f"Ada looks through a telescope. Tell her one wonderful true fact about "
+    def fact(self, topic: str, stage: int, *_) -> str:
+        return self.chat(self.SYSTEM, f"{self.name} looks through a telescope. Tell it one wonderful true fact about "
                                       f"{topic} in two sentences, using {LEVEL[min(stage, 6)]}.", max_tokens=120)
 
     def assess(self, thoughts: list[str], self_rate: float) -> dict:
         sample = "\n".join(f"- {t}" for t in thoughts[-8:])
         d = self._json(self.SYSTEM,
-                       f"These are recent inner thoughts of Ada, an artificial mind learning language from scratch:\n"
+                       f"These are recent inner thoughts of {self.name}, an artificial mind learning language from scratch:\n"
                        f"{sample}\n\nRate them 0 to 10 for spelling (real words), grammar, coherence and meaning, "
-                       'and say in one short sentence what she is learning now. Return JSON: {"spelling": n, '
+                       'and say in one short sentence what it is learning now. Return JSON: {"spelling": n, '
                        '"grammar": n, "coherence": n, "meaning": n, "note": "..."}', temperature=0.2, max_tokens=200)
         try:
             return {k: float(d.get(k, 0)) for k in ("spelling", "grammar", "coherence", "meaning")} | \

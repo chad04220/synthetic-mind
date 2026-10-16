@@ -101,7 +101,14 @@ class OracleConfig:
     # Where Ollama runs the Oracle. "cpu" (default): always on the CPU, so the GPU is kept for
     # training. "auto": on the CPU while the Academy studies and on the GPU otherwise. "gpu": always.
     placement: str = "cpu"
-    cpu_threads: int = 0             # Ollama's threads on the CPU; 0 = the physical cores her brain leaves free
+    cpu_threads: int = 0             # the Oracle's threads on the CPU; 0 = the physical cores the synth's brain leaves free
+    # Every villager has its own voice: a llama.cpp server of its own, on the CPU.
+    villager_voices: bool = True
+    village_model: str = "qwen2.5-1.5b"
+    villager_threads: int = 2
+    banter: bool = True                # villagers chat with each other (the synth overhears and learns)
+    banter_seconds: float = 75.0
+    villager_thought_seconds: float = 60.0   # how often each villager thinks out loud
 
 
 CONFIG_VERSION = 2   # 2: Ada's brain and the Oracle default to the CPU; the schedule to "together"
@@ -120,8 +127,8 @@ class ScheduleConfig:
 @dataclass
 class AdaConfig:
     version: int = CONFIG_VERSION
-    name: str = "Ada"
-    tokenizer: str = "gpt2"
+    name: str = "Zen"
+    tokenizer: str = "fineweb32k"
     preset: str = "small"
     brain: BrainConfig = field(default_factory=BrainConfig)
     academy: AcademyConfig = field(default_factory=AcademyConfig)
@@ -182,7 +189,8 @@ CHOICES = {
     "world.device": ("cpu", "cuda", "auto"),
     "oracle.placement": ("cpu", "auto", "gpu"),
     "oracle.backend": ("builtin", "ollama"),
-    "oracle.builtin_model": ("gemma-2-2b", "qwen2.5-1.5b", "llama-3.2-3b"),
+    "oracle.builtin_model": ("gemma-2-2b", "qwen2.5-1.5b", "qwen2.5-0.5b", "llama-3.2-3b"),
+    "oracle.village_model": ("gemma-2-2b", "qwen2.5-1.5b", "qwen2.5-0.5b", "llama-3.2-3b"),
 }
 
 LIVE = {
@@ -194,7 +202,8 @@ LIVE = {
     "world.device": str, "world.cpu_threads": int, "oracle.cpu_threads": int, "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
     "world.thought_tokens": int, "world.thought_temperature": float, "world.thoughts_grounded": bool,
     "world.intent_temperature": float, "world.reply_tokens": int, "world.reply_temperature": float,
-    "oracle.backend": str, "oracle.builtin_model": str, "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,
+    "oracle.backend": str, "oracle.builtin_model": str, "oracle.villager_voices": bool, "oracle.village_model": str,
+    "oracle.villager_threads": int, "oracle.banter": bool, "oracle.banter_seconds": float, "oracle.villager_thought_seconds": float, "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,
     "oracle.npc_voices": bool, "oracle.placement": str, "oracle.tutor_replies": bool, "oracle.lesson_seconds": float,
 }
 

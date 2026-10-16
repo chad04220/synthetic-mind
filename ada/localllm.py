@@ -1,9 +1,11 @@
-"""The built-in Oracle: a llama.cpp server with a small model, running on the CPU.
+"""The built-in voices: llama.cpp servers with small models, running on the CPU.
+
+The Oracle has its own server, and so does every villager (see villagers.py).
 
 Nothing to install by hand. On first use the Hub downloads llama.cpp's prebuilt server for this
 computer (from llama.cpp's GitHub releases) and the chosen model (a GGUF file from Hugging Face)
-into the `oracle/` folder next to run.py, starts `llama-server` on a free local port with the
-Oracle's share of the CPU threads, and keeps it running. The GPU is never touched: the CPU build
+into the `oracle/` folder next to run.py, starts each `llama-server` on a free local port with its
+share of the CPU threads, and keeps them running. The GPU is never touched: the CPU build
 of llama.cpp is used, so the GPU stays entirely with the Academy.
 
 Ollama remains available as the other Oracle backend (Settings).
@@ -27,8 +29,10 @@ from pathlib import Path
 # key: (label, Hugging Face repo, file, size in bytes). All ungated, so no Hugging Face login.
 CATALOG = {
     "gemma-2-2b": ("Gemma 2 2B Instruct", "bartowski/gemma-2-2b-it-GGUF", "gemma-2-2b-it-Q4_K_M.gguf", 1708582752),
-    "qwen2.5-1.5b": ("Qwen 2.5 1.5B Instruct (lightest)", "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "qwen2.5-1.5b": ("Qwen 2.5 1.5B Instruct (light)", "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
                      "qwen2.5-1.5b-instruct-q4_k_m.gguf", 1117320736),
+    "qwen2.5-0.5b": ("Qwen 2.5 0.5B Instruct (tiny, fastest)", "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+                     "qwen2.5-0.5b-instruct-q4_k_m.gguf", 491400032),
     "llama-3.2-3b": ("Llama 3.2 3B Instruct (strongest, slowest)", "bartowski/Llama-3.2-3B-Instruct-GGUF",
                      "Llama-3.2-3B-Instruct-Q4_K_M.gguf", 2019377696),
 }
@@ -59,8 +63,15 @@ def free_port() -> int:
 
 
 class LocalLLM:
-    def __init__(self, folder: Path, log=None):
+    """One llama-server: the Oracle's, or one villager's voice. Each runs as its own process on its
+    own port; the program and the model files are shared (downloaded once), and several servers
+    loading the same model file share its memory, because llama.cpp maps it rather than copying it."""
+
+    _install = threading.Lock()      # one download at a time, shared by every server
+
+    def __init__(self, folder: Path, log=None, role: str = "oracle"):
         self.folder = folder
+        self.role = role
         self.log = log or (lambda text, level="info": None)
         self.lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
@@ -73,6 +84,8 @@ class LocalLLM:
         self.error = ""
         self.failed_at = 0.0
         self.busy = False
+        self.ctx, self.slots = 8192, 2
+        self.closed = False          # the program is shutting down: never start again
 
     # ------------------------------------------------------------------ state
     @property
@@ -90,7 +103,7 @@ class LocalLLM:
         return out
 
     def info(self) -> dict:
-        return {"status": self.status, "detail": self.detail, "progress": round(self.progress, 3),
+        return {"role": self.role, "status": self.status, "detail": self.detail, "progress": round(self.progress, 3),
                 "error": self.error, "model": self.model_key, "threads": self.threads}
 
     def wants(self, key: str, threads: int) -> bool:
@@ -104,23 +117,29 @@ class LocalLLM:
         return True
 
     # ------------------------------------------------------------------ setup
-    def ensure(self, key: str, threads: int) -> None:
+    @property
+    def who(self) -> str:
+        return "the built-in Oracle" if self.role == "oracle" else f"{self.role}'s voice"
+
+    def ensure(self, key: str, threads: int, ctx: int = 8192, slots: int = 2) -> None:
         """Download what is missing and (re)start the server. Runs on a background thread."""
         with self.lock:
-            if self.busy:
+            if self.busy or self.closed:
                 return
             self.busy = True
         try:
             key = key if key in CATALOG else DEFAULT_MODEL
             self.stop()
-            self.model_key, self.threads, self.error = key, threads, ""
-            exe = self._server()
-            model = self._model(key)
+            self.model_key, self.threads, self.error, self.ctx, self.slots = key, threads, "", ctx, slots
+            self.status, self.detail = "waiting", "Waiting for downloads to finish"
+            with LocalLLM._install:
+                exe = self._server()
+                model = self._model(key)
             self._start(exe, model, threads)
         except Exception as e:  # noqa: BLE001 - shown to the user, retried later
             self.status, self.error, self.failed_at = "error", f"{type(e).__name__}: {e}", time.time()
             self.detail = ""
-            self.log(f"built-in Oracle failed: {self.error}", "warning")
+            self.log(f"{self.who} failed: {self.error}", "warning")
         finally:
             self.busy = False
 
@@ -237,32 +256,51 @@ class LocalLLM:
 
     # ------------------------------------------------------------------ the server
     def _start(self, exe: Path, model: Path, threads: int) -> None:
-        self.status, self.detail, self.progress = "starting", f"Starting the Oracle ({self.label()})", 0.0
+        self.status, self.detail, self.progress = "starting", f"Starting {self.who} ({self.label()})", 0.0
+        if self.closed:
+            raise RuntimeError("shutting down")
         port = free_port()
         args = [str(exe), "-m", str(model), "--host", "127.0.0.1", "--port", str(port),
-                "-t", str(threads), "-c", "8192", "-np", "2", "-ngl", "0", "--no-webui"]
-        logf = open(self.folder / "llama-server.log", "a", encoding="utf-8", errors="replace")
+                "-t", str(threads), "-c", str(self.ctx), "-np", str(self.slots), "-ngl", "0", "--no-webui"]
+        if self.role != "oracle" and not getattr(self, "_no_extras", False):
+            # Villagers share one copy of the model: without repacking, every server maps the same
+            # file instead of keeping its own rearranged copy of the weights (about 1 GB each).
+            args.append("--no-repack")
+        (self.folder / "logs").mkdir(parents=True, exist_ok=True)
+        logf = open(self.folder / "logs" / f"llama-server-{self.role}.log", "a", encoding="utf-8", errors="replace")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
         self.proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                      cwd=str(exe.parent), creationflags=flags)
         logf.close()
-        (self.folder / "llama-server.pid").write_text(str(self.proc.pid), encoding="utf-8")
+        self._pid_file().write_text(str(self.proc.pid), encoding="utf-8")
         self.url = f"http://127.0.0.1:{port}"
         deadline = time.time() + 180
         while time.time() < deadline:
             if self.proc.poll() is not None:
+                if "--no-repack" in args and not getattr(self, "_no_extras", False):
+                    self._no_extras = True              # an older llama.cpp without that option
+                    return self._start(exe, model, threads)
                 raise RuntimeError(f"llama-server stopped (exit code {self.proc.returncode}); "
-                                   f"see {self.folder / 'llama-server.log'}")
+                                   f"see {self.folder / 'logs' / f'llama-server-{self.role}.log'}")
             try:
                 with self._get(self.url + "/health", timeout=2) as r:
                     if r.status == 200:
                         self.status, self.detail, self.progress = "ready", "", 1.0
-                        self.log(f"the built-in Oracle is ready: {self.label()} on the CPU with {threads} threads")
+                        self.log(f"{self.who} is ready: {self.label()} on the CPU with {threads} threads")
                         return
             except (urllib.error.URLError, OSError):
                 pass                                          # still loading the model (503) or starting
             time.sleep(0.5)
         raise RuntimeError("llama-server didn't become ready within 3 minutes")
+
+    def close(self) -> None:
+        """Stop for good (the program is exiting), including a server that is still starting."""
+        self.closed = True
+        self.stop()
+        deadline = time.time() + 15
+        while self.busy and time.time() < deadline:
+            time.sleep(0.1)
+        self.stop()
 
     def stop(self) -> None:
         p, self.proc = self.proc, None
@@ -276,9 +314,12 @@ class LocalLLM:
                 p.kill()
         self.stop_leftover()
 
+    def _pid_file(self) -> Path:
+        return self.folder / f"llama-server-{self.role}.pid"
+
     def stop_leftover(self) -> None:
         """Stop a server left running by an earlier run that didn't shut down cleanly."""
-        pid_file = self.folder / "llama-server.pid"
+        pid_file = self._pid_file()
         if not pid_file.exists():
             return
         try:
@@ -295,7 +336,7 @@ class LocalLLM:
     # ------------------------------------------------------------------ talking to it
     def chat(self, system: str, prompt: str, temperature: float, max_tokens: int, as_json: bool) -> str:
         if not self.ready:
-            raise RuntimeError(self.detail or self.error or "the built-in Oracle isn't running yet")
+            raise RuntimeError(self.detail or self.error or f"{self.who} isn't running yet")
         # Some small models' chat templates (Gemma's) have no system role: put it in the message.
         body = {"messages": [{"role": "user", "content": f"{system}\n\n{prompt}"}],
                 "temperature": temperature, "max_tokens": max_tokens, "stream": False}

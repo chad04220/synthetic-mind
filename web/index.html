@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ada</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/world3d.css">
 </head>
 <body>
 <header class="top">
@@ -15,15 +16,18 @@
   <span class="chip" id="clock">…</span>
   <span class="chip" id="sched">…</span>
   <button id="btnSleep">Sleep now</button>
+  <button id="btnHelp" title="How it works">?</button>
   <div class="kpis">
     <div class="kpi"><span>Stage</span><b id="kStage">–</b></div>
     <div class="kpi"><span>Studied</span><b id="kTokens">–</b></div>
     <div class="kpi"><span>Concepts known</span><b id="kConcepts">–</b></div>
-    <div class="kpi" title="How many of her recent actions came from her own words"><span>Acts on her own words</span><b id="kSelf">–</b></div>
+    <div class="kpi" title="How many of the synth's recent actions came from its own words"><span>Acts in its own words</span><b id="kSelf">–</b></div>
   </div>
 </header>
 <nav class="main" id="nav">
-  <button data-view="world" class="on">🌍 World</button>
+  <button data-view="world" class="on">🌍 Valley</button>
+  <button data-view="minds">🧑‍🤝‍🧑 Minds</button>
+  <button data-view="gallery">🖼️ Gallery</button>
   <button data-view="academy">🎓 Academy</button>
   <button data-view="concepts">🧠 Concepts</button>
   <button data-view="oracle">🔮 Oracle</button>
@@ -35,74 +39,80 @@
 <main>
 <!-- ====================================================== WORLD -->
 <section class="view on" id="view-world">
-  <div class="world-grid">
-    <div>
-      <div class="map-wrap">
-        <canvas id="map" tabindex="0" aria-label="Ada's world"></canvas>
-        <span class="map-label" id="mapLabel"></span>
-        <div class="map-tools">
-          <select id="follow" title="Who the camera follows"><option value="ada">Follow Ada</option><option value="you">Follow you</option><option value="all">Whole valley</option></select>
-        </div>
+  <div class="stage" id="stage">
+    <div id="stage3d"></div>
+    <div class="ov ov-tl"><div class="pill" id="ovClock">…</div><div class="pill dim" id="ovPlace"></div></div>
+    <div class="ov ov-left glass" id="mindStrip" aria-label="The minds of the valley"></div>
+    <div class="ov ov-right">
+      <div class="minimap glass" id="minimapWrap">
+        <canvas id="map" tabindex="0" aria-label="Map of the valley"></canvas>
+        <div class="mm-tools"><select id="follow" title="What the map shows"><option value="all">Whole valley</option><option value="ada">Follow the synth</option><option value="you">Follow you</option></select>
+          <button id="mapBig" title="Bigger map">⤢</button></div>
       </div>
-      <div class="seg" id="modes">
-        <button data-mode="watch" class="on">👀 Watch</button>
-        <button data-mode="add">🧺 Add things</button>
-        <button data-mode="you">🧍 Be there</button>
-      </div>
-      <div class="mode" id="mode-watch"><div class="hint">Ada chooses what to do in her own words when she can; until then her needs decide for her, and she studies those choices at night. Click anyone or anything on the map to learn about it.</div></div>
-      <div class="mode" id="mode-add" hidden>
-        <div class="palette" id="palette"></div>
-        <div class="hint" id="addHint">Choose something, then click open ground to put it there. Books and signs ask what they should say.</div>
-      </div>
-      <div class="mode" id="mode-you" hidden>
-        <div class="row">
-          <button id="btnJoin" class="primary">Join the world</button>
-          <div class="dpad">
-            <button data-you="north" title="W / ↑">▲</button><button data-you="west" title="A / ←">◀</button>
-            <button data-you="hug" class="mid" title="H">hug</button>
-            <button data-you="east" title="D / →">▶</button><button data-you="south" title="S / ↓">▼</button>
-          </div>
-          <div class="row" style="flex-direction:column;align-items:stretch">
-            <button data-you="take" title="F">pick up</button><button data-you="drop" title="R">put down</button>
-            <button data-you="give" title="G">give to Ada</button>
-          </div>
-        </div>
-        <div class="hint">You carry: <b id="youCarry">nothing</b> · take a new one: <span class="palette" id="holdPalette" style="display:inline-flex"></span></div>
-        <div class="hint">Click the map, then WASD/arrows walk, F picks up, R puts down, G gives to Ada, H hugs. Anything you say in the Talk tab, Ada hears.</div>
-      </div>
-      <div class="card" style="margin-top:12px"><h3 style="margin-top:0">What happened</h3><ul class="log" id="log"></ul></div>
+      <div class="glass mindcard" id="mindCard"></div>
     </div>
-
-    <aside>
-      <div class="card">
-        <div class="row"><h2 style="margin:0" id="adaTitle">Ada</h2><span class="muted" id="adaWhere"></span></div>
-        <h3>Needs</h3>
-        <div class="needs" id="needs"></div>
-        <div class="intent">
-          <div class="muted" style="font-size:11px">NOW</div>
-          <div class="what" id="intent">…</div>
-          <div class="muted" id="intentWhy"></div>
-          <div class="tried" id="tried"></div>
-        </div>
-        <h3 title="Share of her last decisions that came from her own words">Acting on her own words <span id="selfPct"></span></h3>
-        <div class="meter"><i id="selfBar" style="width:0"></i></div>
+    <div class="ov ov-feed glass" id="liveFeed"></div>
+    <div class="ov ov-bottom">
+      <div class="seg glass" id="modes">
+        <button data-mode="watch" class="on" title="Watch the valley; drag to look around, click to inspect">👀 Watch</button>
+        <button data-mode="you" title="Walk in the valley yourself: WASD + mouse">🧍 Visit</button>
+        <button data-mode="add" title="Put things in the valley">🧺 Add things</button>
+        <button id="uiToggle" title="Hide or show the overlay">◱</button>
       </div>
-      <div class="card" style="margin-top:12px">
-        <div class="subtabs" id="adaTabs">
-          <button data-pane="talk" class="on">💬 Talk</button><button data-pane="thoughts">💭 Thoughts</button>
-          <button data-pane="diary">📔 Diary</button><button data-pane="village">🏘️ Village</button>
-        </div>
-        <div class="pane on" id="pane-talk">
-          <div class="chat" id="chat"></div>
-          <form class="inline" id="chatForm"><input id="chatText" placeholder="Say something to Ada…" autocomplete="off"><button class="primary">Send</button></form>
-          <form class="inline" id="suggestForm" title="If she understands, she does it, and learns from it"><input id="suggestText" placeholder="Suggest what she does, e.g. bake bread" autocomplete="off"><button>Suggest</button></form>
-        </div>
-        <div class="pane" id="pane-thoughts"><div class="muted" style="margin-bottom:6px">Her inner monologue, generated freely by her brain. Brighter words were more certain.</div><div class="feed" id="thoughts"></div></div>
-        <div class="pane" id="pane-diary"><div class="feed" id="diary"></div></div>
-        <div class="pane" id="pane-village"><div class="feed" id="village"></div></div>
+      <div class="glass tray" id="mode-add" hidden><div class="palette" id="palette"></div><div class="hint" id="addHint">Choose something, then click the map to put it there.</div></div>
+      <div class="glass tray compact" id="mode-you" hidden>
+        <div class="hotbar" id="hotbar"></div>
+        <details class="takenew"><summary title="Take a new thing into your hands">＋</summary><div class="palette" id="holdPalette"></div></details>
+        <span class="keys" title="E use/talk · G give · H hug · Q drop · T talk · V camera">E · G · H · Q · T</span>
       </div>
-    </aside>
+      <form class="glass talkbar" id="sayForm"><span class="to" id="sayTo">to Zen</span><input id="sayText" placeholder="Say something…" autocomplete="off"><button class="primary">Send</button></form>
+    </div>
   </div>
+
+  <div class="world-grid below">
+    <div class="card">
+      <div class="row"><h2 style="margin:0" id="adaTitle">Zen</h2><span class="muted" id="adaWhere"></span></div>
+      <h3>Needs</h3>
+      <div class="needs" id="needs"></div>
+      <div class="intent">
+        <div class="muted" style="font-size:11px">NOW</div>
+        <div class="what" id="intent">…</div>
+        <div class="muted" id="intentWhy"></div>
+        <div class="tried" id="tried"></div>
+      </div>
+      <h3 title="Share of its last decisions that came from its own words">Acting on its own words <span id="selfPct"></span></h3>
+      <div class="meter"><i id="selfBar" style="width:0"></i></div>
+      <h3>What happened</h3><ul class="log" id="log"></ul>
+    </div>
+    <div class="card">
+      <div class="subtabs" id="adaTabs">
+        <button data-pane="talk" class="on">💬 Talk</button><button data-pane="thoughts">💭 Thoughts</button>
+        <button data-pane="diary">📔 Diary</button><button data-pane="village">🏘️ Village</button>
+      </div>
+      <div class="pane on" id="pane-talk">
+        <div class="chat" id="chat"></div>
+        <form class="inline" id="chatForm"><input id="chatText" placeholder="Say something to Zen…" autocomplete="off"><button class="primary">Send</button></form>
+        <form class="inline" id="suggestForm" title="If it understands, it does it, and learns from it"><input id="suggestText" placeholder="Suggest what it does, e.g. go fishing" autocomplete="off"><button>Suggest</button></form>
+      </div>
+      <div class="pane" id="pane-thoughts"><div class="muted" style="margin-bottom:6px">The synth's inner monologue, written freely by its own brain. Brighter words were more certain.</div><div class="feed" id="thoughts"></div></div>
+      <div class="pane" id="pane-diary"><div class="feed" id="diary"></div></div>
+      <div class="pane" id="pane-village"><div class="feed" id="village"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================== MINDS -->
+<section class="view" id="view-minds">
+  <div class="card journey"><div class="row"><h2 style="margin:0">🌱 <span id="jName">Zen</span>'s journey</h2><span class="muted">from knowing nothing to speaking</span></div><div class="timeline" id="journey"></div></div>
+  <div class="minds-grid" id="mindsGrid"></div>
+  <div class="card" style="margin-top:14px"><h2>Life in the valley</h2><div class="feed community" id="communityFeed"></div></div>
+</section>
+
+<!-- ====================================================== GALLERY -->
+<section class="view" id="view-gallery">
+  <div class="card"><div class="row"><h2 style="margin:0">🖼️ The valley's gallery</h2><span class="muted">Everything the minds have made. It stays.</span></div>
+    <div class="gchips" id="galleryChips"></div></div>
+  <div class="gallery" id="gallery"></div>
 </section>
 
 <!-- ====================================================== ACADEMY -->
@@ -259,6 +269,17 @@
       <label class="switch"><input type="checkbox" data-set="oracle.enabled"><span></span>Oracle on</label>
       <div class="sliders"><label title="Only for Ollama (the built-in Oracle always runs on the CPU). On an 8 GB GPU the Oracle and the Academy can't both fit in GPU memory.">Ollama runs on <select data-set="oracle.placement"><option value="cpu">CPU (GPU kept for training)</option><option value="auto">CPU while she studies, GPU otherwise</option><option value="gpu">Always the GPU</option></select><output></output></label>
         <label title="CPU threads for the Oracle (built-in or Ollama). 0 = automatic: the physical cores her brain leaves free.">Oracle's CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="oracle.cpu_threads"><output></output></label></div>
+      <h3>Villagers' voices</h3>
+      <label class="switch"><input type="checkbox" data-set="oracle.villager_voices"><span></span>Each villager has its own voice (its own llama.cpp server)</label>
+      <label class="switch"><input type="checkbox" data-set="oracle.banter"><span></span>Villagers start conversations with each other</label>
+      <div class="sliders">
+        <label>Villagers' model <select data-set="oracle.village_model">
+          <option value="qwen2.5-1.5b">Qwen 2.5 1.5B · 1.1 GB (default)</option><option value="qwen2.5-0.5b">Qwen 2.5 0.5B · 0.5 GB (fastest)</option>
+          <option value="gemma-2-2b">Gemma 2 2B · 1.7 GB</option><option value="llama-3.2-3b">Llama 3.2 3B · 2.0 GB (slowest)</option></select><output></output></label>
+        <label title="CPU threads for each villager's server">Threads per villager <input type="range" min="1" max="8" step="1" data-set="oracle.villager_threads"><output></output></label>
+        <label>Seconds between villager conversations <input type="range" min="20" max="600" step="5" data-set="oracle.banter_seconds"><output></output></label>
+        <label>Seconds between a villager's thoughts <input type="range" min="15" max="600" step="5" data-set="oracle.villager_thought_seconds"><output></output></label>
+      </div>
       <label class="switch"><input type="checkbox" data-set="oracle.background_teaching"><span></span>Write lessons while she studies</label>
       <label class="switch"><input type="checkbox" data-set="oracle.npc_voices"><span></span>Villagers speak with the Oracle's words</label>
       <label class="switch"><input type="checkbox" data-set="oracle.tutor_replies"><span></span>Suggest the reply she should have given</label>
@@ -268,7 +289,37 @@
   </div>
 </section>
 </main>
+<dialog id="welcome">
+  <div class="wel">
+    <div class="wel-orb"></div>
+    <h1>Meet <span class="synthname">Zen</span></h1>
+    <p class="lead"><span class="synthname">Zen</span> is a synth: a neural network that begins as random numbers, knowing no words at all.
+      It learns language by studying, and by living in a valley full of other minds.</p>
+    <div class="wel-grid">
+      <div><b>🎓 It studies</b><span>The Academy trains its brain on your GPU from web text, lessons and its own life. Watch it go from static to babble to first words and sentences.</span></div>
+      <div><b>🌍 It lives</b><span>Its own words steer its body: when it can say "I go fishing", it goes fishing. Until then its needs decide, and it learns from that.</span></div>
+      <div><b>🧑‍🤝‍🧑 It has neighbours</b><span>Seven villagers, each a mind with its own language model, needs, thoughts and friendships. They talk with each other and with <span class="synthname">Zen</span>, one turn at a time.</span></div>
+      <div><b>🎨 They create</b><span>Paintings, songs you can play, sculptures, buildings and poems: all kept in the Gallery for good.</span></div>
+    </div>
+    <h3>You can</h3>
+    <ul>
+      <li><b>👀 Watch:</b> drag to look around, click anyone to see their mind.</li>
+      <li><b>🧍 Visit:</b> walk the valley with <b>WASD</b> and the mouse; <b>E</b> talks or picks up, <b>G</b> gives <span class="synthname">Zen</span> what you carry, <b>H</b> hugs.</li>
+      <li><b>💬 Talk:</b> say anything to <span class="synthname">Zen</span> or to the villager you face. The Oracle suggests the reply <span class="synthname">Zen</span> should learn.</li>
+      <li><b>🧺 Add things:</b> place apples, books with your own words, materials and tools.</li>
+    </ul>
+    <p class="muted">The first time, the Oracle's and the villagers' voices are downloaded (about 3 GB) and started on your CPU; the Oracle tab shows the progress. Your GPU is kept for training.</p>
+    <form method="dialog"><button class="primary big">Let's go</button></form>
+  </div>
+</dialog>
 <script src="/static/world.js"></script>
+<script src="/static/art.js"></script>
+<script src="/static/minds.js"></script>
 <script src="/static/app.js"></script>
+<script type="module">
+  // The 3D valley loads as a module; if WebGL isn't available the page keeps the 2D map.
+  import("/static/world3d.js").then((m) => window.dispatchEvent(new CustomEvent("world3d", { detail: m.default || window.World3D })))
+    .catch((e) => { console.warn("3D view unavailable:", e); window.dispatchEvent(new CustomEvent("world3d", { detail: null })); });
+</script>
 </body>
 </html>

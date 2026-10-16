@@ -17,7 +17,7 @@ from .hub import Hub
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 
-WORLD = {"chat": ["text"], "suggest": ["text"], "visitor": ["action", "kind", "text"],
+WORLD = {"chat": ["text"], "suggest": ["text"], "visitor": ["action", "kind", "text", "fx", "fy", "facing", "target", "to"],
          "place": ["kind", "x", "y", "text"], "sleep_now": [], "wake_now": [], "think": []}
 ACADEMY = {"publish": [], "grow": [], "save": [], "evaluate": [], "probe": ["text"]}
 
@@ -131,7 +131,7 @@ def create_app(hub: Hub) -> FastAPI:
             await sock.send_text(dumps(init))
             eid, wseq, aseq = init["event_id"], init["world_seq"], -1
             settings = hub.settings()
-            local = hub.local.info()
+            local = [v.info() for v in hub.fleet.values()]
             while True:
                 await asyncio.sleep(0.25)
                 msg = {"type": "tick"}
@@ -149,7 +149,7 @@ def create_app(hub: Hub) -> FastAPI:
                         msg["oracle"] = hub.oracle_info()
                     if any(e["kind"] == "concepts" for e in evs):
                         msg["concepts"] = hub.concept_report
-                li = hub.local.info()
+                li = [v.info() for v in hub.fleet.values()]
                 if li != local:                                  # the built-in Oracle's setup progress
                     local = li
                     msg["oracle"] = hub.oracle_info()

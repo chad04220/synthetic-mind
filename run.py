@@ -45,11 +45,11 @@ def gpu_present() -> bool:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--name", default="Ada", help="which mind to create or resume")
+    ap.add_argument("--name", default="Zen", help="which synth to create or resume (Ada, from earlier versions, too)")
     ap.add_argument("--preset", choices=["tiny", "small", "medium", "large"], default=None,
                     help="brain size for a NEW mind (default: small with a GPU, tiny without)")
-    ap.add_argument("--tokenizer", choices=["gpt2", "bytes"], default=None,
-                    help="for a NEW mind (default: gpt2 with a GPU, bytes without)")
+    ap.add_argument("--tokenizer", choices=["fineweb32k", "gpt2", "bytes"], default=None,
+                    help="for a NEW mind (default: fineweb32k, a 32k vocabulary trained on FineWeb)")
     ap.add_argument("--minds", default=str(ROOT / "minds"), help="folder where minds live")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
@@ -60,7 +60,7 @@ def main():
     ap.add_argument("--oracle", choices=["builtin", "ollama"], default=None,
                     help="the Oracle's backend: built-in (llama.cpp on the CPU, default) or Ollama")
     ap.add_argument("--world-device", choices=["auto", "cuda", "cpu"], default=None,
-                    help="where Ada's brain runs while she lives (cpu leaves the GPU to the Academy)")
+                    help="where the synth's brain runs while it lives (cpu leaves the GPU to the Academy)")
     ap.add_argument("--compile", action="store_true", help="torch.compile training (Linux/WSL)")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
@@ -82,8 +82,7 @@ def main():
         print(f"Resuming {cfg.name}.")
     else:
         gpu = gpu_present()
-        # GPT-2's 50k-token vocabulary is a lot for a CPU; raw bytes keep a CPU-only brain quick.
-        cfg = AdaConfig(name=args.name, tokenizer=args.tokenizer or ("gpt2" if gpu else "bytes"))
+        cfg = AdaConfig(name=args.name, tokenizer=args.tokenizer or "fineweb32k")
         cfg.apply_preset(args.preset or ("small" if gpu else "tiny"))
         print(f"Creating {cfg.name} with a {cfg.preset} brain.")
     if args.schedule:

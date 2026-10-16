@@ -1,10 +1,16 @@
 """Tokenizers. The network is trained from scratch; only the text<->id mapping is borrowed.
 
-"gpt2" uses tiktoken's GPT-2 BPE (about 3.5x fewer tokens per text than bytes, so far
-more language per training step). "bytes" needs no download and lets you watch the
-mind learn to spell from raw characters.
+"fineweb32k" (new minds) is a 32,768-token byte-level BPE trained on FineWeb itself
+(tools/train_tokenizer.py, shipped as ada/data/fineweb32k.tiktoken). It writes any text, its
+pieces fit the web text the Academy studies, and at this size half of a small brain is no
+longer a lookup table of rare word pieces. "gpt2" uses tiktoken's GPT-2 BPE (50,257 tokens; the
+minds made before it keep it). "bytes" needs no download and lets you watch the mind learn to
+spell from raw characters.
 """
 from __future__ import annotations
+
+import base64
+from pathlib import Path
 
 # Role tokens mark who is speaking or what kind of text follows. <|intent|> is what Ada decides to
 # do; the World parses it into an action, so her own words steer her body.
@@ -96,7 +102,44 @@ class GPT2Tokenizer(Tokenizer):
         return self._enc.decode_single_token_bytes(tid)
 
 
+FW32_FILE = Path(__file__).resolve().parent / "data" / "fineweb32k.tiktoken"
+FW32_VOCAB = 32760          # learned tokens; with the 8 role tokens: 32,768
+# GPT-4's pre-tokenisation (contractions, words, numbers of up to 3 digits, punctuation, spaces).
+FW32_PATTERN = (r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*"""
+                r"""|\s*[\r\n]+|\s+(?!\S)|\s+""")
+
+
+class FineWeb32kTokenizer(Tokenizer):
+    kind = "fineweb32k"
+
+    def __init__(self):
+        import tiktoken
+
+        ranks = {}
+        for line in FW32_FILE.read_text(encoding="ascii").splitlines():
+            if line:
+                tok, rank = line.split()
+                ranks[base64.b64decode(tok)] = int(rank)
+        n = len(ranks)
+        self.special = {s: n + i for i, s in enumerate(SPECIALS)}
+        self._special_ids = set(self.special.values())
+        self._enc = tiktoken.Encoding(name="fineweb32k", pat_str=FW32_PATTERN, mergeable_ranks=ranks,
+                                      special_tokens=self.special)
+        self.n_real = n + len(SPECIALS)
+        self.vocab_size = _pad64(self.n_real)
+
+    def encode(self, text: str) -> list[int]:
+        return self._enc.encode_ordinary(text)
+
+    def token_bytes(self, tid: int) -> bytes:
+        if tid in self._special_ids or tid >= self.n_real:
+            return b""
+        return self._enc.decode_single_token_bytes(tid)
+
+
 def make_tokenizer(kind: str) -> Tokenizer:
+    if kind == "fineweb32k":
+        return FineWeb32kTokenizer()
     if kind == "gpt2":
         try:
             return GPT2Tokenizer()

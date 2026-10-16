@@ -9,10 +9,10 @@ const GLYPH = {
   well: "⛲", workbench: "🛠️", shrine: "🔮", sign: "🪧", chest: "🧰", sprout: "🌱", cat: "🐈", dog: "🐕",
   bird: "🐦", fish: "🐟",
 };
-const PEOPLE = { Mira: ["👩‍🍳", "#f4a261"], Theo: ["🧑‍🏫", "#8ecae6"], Rowan: ["🧑‍🌾", "#90be6d"] };
+const PEOPLE = {};      // name -> [glyph, colour], from the World
 const PORTABLE = ["apple", "berry", "mushroom", "bread", "wheat", "wood", "stone", "seed", "coin", "book", "ball", "flower", "bucket", "axe"];
 const PLACEABLE = [...PORTABLE, "lamp", "sign", "music box", "cat", "dog", "bird"];
-const BLOCKED = new Set([1, 3, 4, 8]);
+const BLOCKED = new Set([1, 3, 4, 8, 13, 15, 18]);
 const EMOJI_FONT = `"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
 
 const MapView = (() => {
@@ -24,20 +24,27 @@ const MapView = (() => {
   function grassColor(season) {
     return { spring: "#4c8c3f", summer: "#468737", autumn: "#7c8a3a", winter: "#9bb0a2" }[season] || "#4c8c3f";
   }
-  const COLORS = ["", "#2f6fb0", "#d8c48a", "", "#7d8088", "", "#b39a6a", "#c4a477", "#6b5545", "#8a5a2b", "#6b4a2f"];
+  const COLORS = ["", "#2f6fb0", "#d8c48a", "", "#7d8088", "", "#b39a6a", "#c4a477", "#6b5545", "#8a5a2b", "#6b4a2f",
+                  "#9c6b3c", "#b8b2a7", "#6b6b73", "#eef3f7", "", "#a47148", "", "", "#4a4540"];
+  const dims = (w) => [w?.W || 64, w?.H || 40];
 
   function hash(x, y) { let h = x * 374761393 + y * 668265263; h = (h ^ (h >> 13)) * 1274126177; return ((h ^ (h >> 16)) >>> 0) / 4294967295; }
 
   function buildTerrain(w, ts) {
-    const c = document.createElement("canvas"); c.width = 64 * ts; c.height = 40 * ts;
+    const [MW, MH] = dims(w);
+    const c = document.createElement("canvas"); c.width = MW * ts; c.height = MH * ts;
     const t = c.getContext("2d"), grass = grassColor(w.season);
-    for (let y = 0; y < 40; y++) for (let x = 0; x < 64; x++) {
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
       const k = w.terrain[y][x], r = hash(x, y), X = x * ts, Y = y * ts, cx = X + ts / 2, cy = Y + ts / 2;
       t.fillStyle = COLORS[k] || grass; t.fillRect(X, Y, ts, ts);
       t.fillStyle = `rgba(0,0,0,${r * .07})`; t.fillRect(X, Y, ts, ts);
       if (k === 7) { t.strokeStyle = "rgba(0,0,0,.12)"; t.beginPath(); t.moveTo(X, Y + ts / 2); t.lineTo(X + ts, Y + ts / 2); t.stroke(); }
       if (k === 10) { t.strokeStyle = "rgba(0,0,0,.25)"; for (let i = 1; i < 3; i++) { t.beginPath(); t.moveTo(X, Y + i * ts / 3); t.lineTo(X + ts, Y + i * ts / 3); t.stroke(); } }
       if (k === 1) { t.strokeStyle = "rgba(255,255,255,.16)"; t.beginPath(); t.arc(cx - ts * .15, cy, ts * .18, 3.4, 6); t.stroke(); }
+      if (k === 15) { t.strokeStyle = "#8b5a2b"; t.lineWidth = Math.max(1, ts * .1); t.beginPath(); t.moveTo(X, cy); t.lineTo(X + ts, cy); t.moveTo(cx, Y + ts * .2); t.lineTo(cx, Y + ts * .8); t.stroke(); }
+      if (k === 17) for (let i = 0; i < 3; i++) { t.strokeStyle = "rgba(20,60,20,.5)"; t.beginPath(); const gx = X + ts * (.25 + .25 * i); t.moveTo(gx, Y + ts * .8); t.lineTo(gx + ts * .05, Y + ts * .35); t.stroke(); }
+      if (k === 18) { t.fillStyle = w.season === "winter" ? "#dfe9e1" : "#1f4d2b"; t.beginPath(); t.moveTo(cx, Y + ts * .05); t.lineTo(X + ts * .85, Y + ts * .85); t.lineTo(X + ts * .15, Y + ts * .85); t.fill(); }
+      if (k === 11 || k === 16) { t.strokeStyle = "rgba(0,0,0,.25)"; for (let i = 1; i < 4; i++) { t.beginPath(); t.moveTo(X + i * ts / 4, Y); t.lineTo(X + i * ts / 4, Y + ts); t.stroke(); } }
       if (k === 3) {
         t.fillStyle = "#5b3b22"; t.fillRect(cx - ts * .07, cy, ts * .14, ts * .42);
         t.fillStyle = w.season === "autumn" ? "#b5651d" : w.season === "winter" ? "#557055" : "#2d5e2a";
@@ -56,9 +63,11 @@ const MapView = (() => {
   }
 
   function view() {
-    if (st.follow === "all" || !st.world?.ada) return { x: 0, y: 0, w: 64, h: 40 };
-    const w = st.world, f = st.follow === "you" && w.visitor ? w.visitor : w.ada;
-    return { x: Math.min(Math.max(f.x + .5 - 16, 0), 32), y: Math.min(Math.max(f.y + .5 - 10, 0), 20), w: 32, h: 20 };
+    const [MW, MH] = dims(st.world);
+    if (st.follow === "all" || !st.world?.ada) return { x: 0, y: 0, w: MW, h: MH };
+    const w = st.world, f = st.follow === "you" && w.visitor ? w.visitor
+      : st.follow !== "ada" && (w.people || []).find((p) => p.name === st.follow) || w.ada;
+    return { x: Math.min(Math.max(f.x + .5 - 16, 0), MW - 32), y: Math.min(Math.max(f.y + .5 - 10, 0), MH - 20), w: 32, h: 20 };
   }
 
   function glide(key, tx, ty) {
@@ -126,7 +135,7 @@ const MapView = (() => {
     g.globalAlpha = 1;
     // villagers
     for (const p of w.people || []) {
-      const [glyph, color] = PEOPLE[p.name] || ["🙂", "#ccc"];
+      const [glyph, color] = [p.glyph || PEOPLE[p.name]?.[0] || "🙂", p.color || PEOPLE[p.name]?.[1] || "#ccc"];
       const q = glide("p" + p.name, p.x, p.y), cx = q[0] * ts + ts / 2, cy = q[1] * ts + ts / 2;
       g.fillStyle = color; g.beginPath(); g.arc(cx, cy, ts * .42, 0, 7); g.fill();
       g.font = `${ts * .6}px ${EMOJI_FONT}`; g.fillText(p.sleeping ? "😴" : glyph, cx, cy + ts * .04);
@@ -215,6 +224,7 @@ const MapView = (() => {
   return {
     st,
     setWorld(full) {
+      for (const [k, v] of Object.entries(full.kinds || {})) GLYPH[k] = v.glyph;
       st.world = full; st.ents = new Map((full.ents || []).map((e) => [e.id, e])); st.dirty = true;
     },
     applyDelta(d) {
