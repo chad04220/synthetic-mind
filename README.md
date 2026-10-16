@@ -1,34 +1,27 @@
-# Synthetic Mind: raise a mind from nothing
+# Synthetic Mind: a mind that makes itself
 
-**Zen** is a synth: a neural network that starts as random numbers and knows no words at all. It
-lives in a little house in a quiet hollow with **Wren**, who raises it. You watch Zen learn
-language and live with what it learns. You can visit, talk with both of them, and bring them
-things.
+**Zen** is a synth: a neural network that starts as random numbers, knowing no words and no way to
+move. It lives alone in an **endless world**: forests, meadows, rivers and lakes, deserts and
+snowfields, mountains, caves and old ruins, with weather, seasons, days and nights. Everything Zen
+does, its own brain decides: every step, every word, every brushstroke and every note. Beside it
+floats the **Sprite of All Knowing**, which answers whatever Zen asks, and looks at (and listens to)
+what Zen makes.
 
-- **Zen studies.** The Academy trains Zen's brain from scratch on your GPU. Its sources:
-  - web text streamed from FineWeb;
-  - lessons Wren writes from the days they spent together;
-  - drills on the facts of its world;
-  - its own life.
-
-  Zen goes from static, to babble, to first words, phrases and sentences.
-- **Wren raises it.** Wren is one language model (llama.cpp on your CPU, or Ollama). It already
-  knows language, so it doesn't train. Each moment the World lists what Wren could sensibly do, and
-  the model chooses one and says what Wren says out loud. Wren:
-  - cooks, gardens, keeps the fire going and looks after Zen;
-  - names things for Zen and talks with it, one turn at a time;
-  - answers Zen's questions and tells it a bedtime story about the day, every night.
-- **Zen grows up in Wren's words.** Everything Wren says near Zen, Zen hears. It studies those
-  words next to what it saw at that moment, and so it studies Wren's deeds too, in words ("Wren puts
-  the pot on the stove."). When Zen's brain can write "I feed the cat.", Zen feeds the cat.
-- **A small world that is deep.**
-  - Rooms warm by the fire and cool at night.
-  - Soup cooks, the kettle boils, bread bakes, and anything left too long burns.
-  - Food goes stale and rots, more slowly in the cool pantry.
-  - Rain soaks what is outside, and wet logs won't burn.
-  - Plants need water and die in a frost.
-  - Hens lay eggs in the morning, bees make honey while flowers bloom, and Moss the cat finds the
-    warmest spot.
+- **Zen learns language** from scratch on your GPU: web text streamed from FineWeb, its own life,
+  the Sprite's answers, and drills on the facts of its world. It goes from static to babble, to
+  first words, phrases and sentences.
+- **Zen learns to live by living.** Its brain chooses each action from 14 motor words (*forward,
+  back, left, right, wait, take, drop, eat, drink, use, sleep, look, speak, ask*). Nothing else moves
+  it: there is no planner and no script. The world answers with what happens: hunger eased by
+  berries, thirst by the stream, cold by the fire, wonder at a new place, pain at a wall. From those
+  consequences its brain learns what to do, and also learns to predict what its deeds lead to.
+- **Zen asks.** When its brain chooses *ask*, its brain also writes the question, in whatever words
+  it has. The Sprite answers, in plain words, and Zen waits for the answer (its thoughts go on).
+- **Zen makes art from nothing.** At the easel, the piano or with a lump of clay, its brain chooses
+  every mark: where the brush goes, when it presses, which colour; every note and its length;
+  every bit of clay added or cut. No templates, no brushes that paint for it. The Sprite then
+  *sees* the painting or the sculpture and *hears* the song (it is a vision-and-audio model), says
+  what it sees, and scores it. That verdict is what Zen learns from, and so can your ♥.
 
 ## Start (Windows with an NVIDIA GPU)
 
@@ -37,190 +30,122 @@ things.
    - creates `.venv`;
    - installs PyTorch with CUDA and the other requirements;
    - opens <http://127.0.0.1:8765>.
-3. The first time, Wren's mind is downloaded into `oracle/`: llama.cpp (tens of MB) and the model
-   (Gemma 2 2B, 1.7 GB). The **Wren** tab shows the progress. [Ollama](https://ollama.com) is
-   optional; choose it on the Wren tab if you'd rather use your own models.
+3. The first time, the Sprite's mind is downloaded into `oracle/`: llama.cpp (tens of MB) and the
+   model, Qwen 2.5 Omni 3B with its eyes and ears (3.6 GB). The **Sprite** tab shows the progress.
+   [Ollama](https://ollama.com) is optional (the Sprite then answers but can't see or hear).
 
 **Linux / macOS:** `./start.sh`. **By hand:** install PyTorch for your machine, then
 `pip install -r requirements.txt` and `python run.py`.
 
-Each synth is saved continuously in `minds/<name>/`. Ctrl+C saves everything and stops. Minds made
-with earlier versions keep their brain, their days and their art, and move into the new house.
+Each synth is saved continuously in `minds/<name>/`. Ctrl+C saves everything and stops. A synth
+from an earlier version keeps its brain, its journey and its keepsakes, and starts its life over in
+the endless world.
 
 ```
 python run.py                              Zen (created on the first run, resumed after)
-python run.py --name Kai                   another synth, starting from nothing
+python run.py --name Kai --seed 7          another synth, in another world, starting from nothing
 python run.py --preset medium              a bigger brain for a new synth (12 GB+ GPU)
 python run.py --schedule day_night         study only while it sleeps at night
-python run.py --oracle ollama              Wren's mind runs in Ollama
-python run.py --no-fineweb --no-oracle     offline (Wren lives by simple rules)
+python run.py --oracle ollama              the Sprite's mind runs in Ollama
+python run.py --no-fineweb --no-oracle     offline (Zen's questions go unanswered)
 ```
 
-## Playing
+## What you see
 
-**🏡 Home** is the 3D homestead, with an overlay you can hide (◱):
+- **🏡 Home:** the world in 3D around Zen, streamed as it roams, with an overlay: the time and
+  weather, where Zen is, a local map, Zen's needs and feelings, what its brain just chose, and a live
+  feed. While Zen paints, plays or sculpts, the piece grows in a panel as each mark is made.
+  - **Watch:** drag to orbit, wheel to zoom, click anything.
+  - **Visit:** walk in with WASD and the mouse; talk to Zen (it hears you, and you are part of its
+    stream), give it what you carry, put things down for it to find.
+- **🌱 Zen:** its journey (first step, first meal, first question, first word, first painting…), its
+  body, its art, and its motor mind: how often it chooses each action, how sure it is, how its
+  rewards are going, and the stream of what it just did.
+- **💭 Thoughts** and **🗣️ Conversations:** everything it thought, did and said, whole and searchable
+  (with you, with the Sprite, and the Sprite's verdicts on its work).
+- **🗺️ Atlas:** the map of everywhere Zen has been, the places it found, and its trail.
+- **🖼️ Keepsakes:** every painting, song, sculpture and piece of writing, with what the Sprite saw and
+  said. Replay any piece mark by mark as a time-lapse. ♥ a piece to tell Zen you love it: every mark
+  that made it counts for more in its learning.
+- **🎓 Academy**, **🧠 Concepts**, **✨ Sprite**, **⚙️ Settings** and **🩺 Health:** the training
+  (including how much it is learning from its own life), what Zen understands, the Sprite (ask it
+  anything about Zen), every setting, and the program's own performance (**Download report**).
 
-- **Top left:** the time, the weather, the temperature outside and in the house, and what can be
-  heard.
-- **Left:** Zen and Wren, with their mood and what they are doing. Click one to follow it and see
-  its card.
-- **Top right:** the minimap. ⤢ enlarges it.
-- **Bottom left:** the live feed: what Wren says, Zen's attempts at words, their conversations, and
-  what happens (a new egg, the kettle whistling, a rainbow).
-- **Bottom:** the talk bar.
+## How Zen's mind works
 
-| mode | controls |
-|---|---|
-| 👀 **Watch** | drag to orbit, wheel to zoom, click Zen, Wren or anything to look closer |
-| 🧍 **Visit** | click to capture the mouse; **WASD** walk, **Shift** run, **Space** hop, **V** first/third person, **E** use or talk to what you face, **G** give Zen what you carry, **H** hug, **Q** drop, **T** talk, **1–6** inventory, **Esc** free the mouse |
-| 🧺 **Add things** | place food, toys, books with your own words, signs and animals |
+Zen lives one continuous stream, the same one its brain reads and learns from:
 
-- **Talking to Zen:** it answers with its own brain (babble at first), and Wren suggests the reply
-  Zen should learn to give.
-- **Talking to Wren:** Wren tells you how Zen is doing.
-- **Suggesting a deed:** type something like "feed the cat" and Zen tries to do it.
+```
+<|world|> Meadow, morning, mild. Ahead: a stream. I see a berry bush 2 ahead. I am thirsty.
+<|act|> forward
+<|world|> I step forward. I wade into the water.
+<|thought|> (whatever its brain thinks)
+<|act|> drink
+<|world|> I drink the cool water. I am less thirsty.
+<|act|> ask
+<|mind|> (the question its brain writes)
+<|oracle|> (the Sprite's answer)
+```
 
-### The other tabs
+- **Choosing.** At each beat its brain reads the stream and the next word after `<|act|>` is sampled
+  from its own probabilities over the motor words (at the easel: over the brush's words; at the
+  piano: notes; with clay: the sculptor's words). The cache of what it has read is kept between
+  beats, so a choice takes tens of milliseconds on the CPU.
+- **Learning.** The World scores each action (needs relieved or worsened, pain, novelty, answers
+  received; for art, the Sprite's verdict). The Academy trains on windows of the stream with:
+  - the ordinary language-model loss, so Zen learns what follows what it does (its understanding);
+  - a policy-gradient loss on its own choices, weighted by how each turned out compared with what it
+    usually gets, with a small bonus for staying curious.
+  Together with FineWeb and the Sprite's words, the same brain learns to speak, to understand and
+  to act.
 
-- **🌱 Together:**
-  - Zen's journey (first word, first sentence, first conversation, first song…);
-  - both minds in full;
-  - the words Wren has heard Zen say;
-  - how Wren is looking after Zen right now;
-  - Wren's diary.
-- **💭 Thoughts** has everything that went through Zen's mind, whole and newest first, grouped by
-  day: what it decided to do and why, and its inner monologue in its own words (silent at first,
-  while its brain is new). Shading shows how sure its brain was of each word. You can show only
-  decisions or only the monologue, search for a word, and page back to the very first thought.
-- **🗣️ Conversations** has every conversation Zen has had, line by line and in full: its talks with
-  Wren, its questions to Wren, and its talks with you. You can show only Wren's or only yours, and
-  search them.
-- **📖 Stories** collects Wren's bedtime stories, one per night.
-- **🖼️ Keepsakes** holds everything either of them made:
-  - paintings from the easel: layered landscapes and rooms in one of seven styles (naive, watercolour,
-    impressionist, oil, pastel, ink, pointillist), with light, weather and the things they chose to paint;
-  - songs with chords, a melody and a form (AABA and the like), which you can play back;
-  - clay, wood and stone sculptures you can turn in 3D;
-  - poems and birdhouses.
+## The world
 
-  Each piece shows who made it, how skilled they were, what it is and what Wren said about it.
-  **Ask Wren to make something** gives Wren a commission ("a song about the hens at dusk").
+Endless and generated from a seed, in chunks of 32×32 tiles as Zen (or you) goes:
 
-**How their art grows.** Every piece is practice, and so are Wren's words about Zen's work, looking
-at a piece, and making things side by side.
-- **Zen** starts with lopsided naive pictures and one-line hums. As it practises, and as its language
-  grows, its pictures gain composition, harmony and light, its songs gain chords and form, and its
-  sculptures gain detail and a glaze. What Zen says it will paint ("I paint the moon over the pond")
-  is what it paints.
-- **Wren** starts as a fair amateur. Its language model plans each piece (title, subject, style,
-  colours, mode, tempo, form), and the World turns that plan into the real thing.
-- Paintings hang on the walls of the house; sculptures stand on plinths outside.
-- The Together tab shows each mind's skill in every medium.
-- **🎓 Academy**, **🧠 Concepts**, **🪶 Wren**, **⚙️ Settings** and **🩺 Health** show:
-  - the training;
-  - what Zen understands;
-  - Wren's model and its lessons;
-  - every setting;
-  - the program's own performance.
-
-  **Download report** on the Health tab saves a diagnostics file you can share.
-
-## How Wren raises Zen
-
-How much Wren does for Zen follows Zen's language (Settings → *How Wren cares for Zen*):
-
-- **Caretaker (Static to First words):**
-  - Wren feeds Zen, brings it water, dries it and puts it to bed;
-  - Wren takes Zen along to its chores and talks it through everything ("Look, Zen! I put the log
-    in the fireplace.");
-  - Wren shows Zen things and names them ("Look, Zen. This is an egg. It is smooth and white. Can
-    you say egg?").
-- **Guide (Phrases, Sentences):** Wren tells Zen what it needs and lets it do it ("You look
-  thirsty, Zen. You can drink water at the sink."). Zen's next deed follows Wren's words, so it
-  learns how the words and the deed go together.
-- **Friend (Conversational and up):** Zen looks after itself; Wren helps when asked.
-
-**Conversations.** Whoever has something to say starts the conversation. If they are apart, that
-one walks up to the other, and both stop. Then they take turns:
-
-1. The speaker composes a line (a "…" bubble shows it is thinking) while the other waits.
-2. Then the other composes its reply while the first one waits.
-
-They go on for a few turns. Zen's lines come from its own brain. When they are babble, Wren guesses
-kindly what Zen meant and says it back properly.
-
-**Big jobs unfold into steps.** "Cook soup" means:
-
-1. take the pot and fill it at the sink;
-2. take a carrot from the pantry and put it in the pot;
-3. put the pot on the stove;
-4. fetch a log from the woodpile and put it in the stove;
-5. take the matches and light the stove;
-6. wait until it bubbles.
-
-Each step is a sentence Zen can learn ("I fill the pot at the sink."), whether Zen does it or
-watches Wren do it.
-
-## The homestead
-
-- **The house:**
-  - a living room with the fireplace, the sofa, the bookshelf and the piano;
-  - the kitchen with the stove and oven, the sink, the table, the pantry and the cat's bowl;
-  - Zen's little bedroom (bed, toy chest, music box);
-  - Wren's bedroom with a desk;
-  - the washroom with a bathtub and a mirror.
-- **Outside:**
-  - the porch;
-  - the workshop (workbench, quern, woodpile, seeds, tools, easel);
-  - the glass greenhouse, warm even in winter;
-  - the vegetable garden with its water barrel and scarecrow;
-  - the chicken coop;
-  - a small orchard with a swing;
-  - a pond with ducks, frogs and a jetty;
-  - a stream through the woods, a meadow with the beehive, and a lookout on the hill for the stars.
-
-Days, nights, seasons and weather pass:
-
-- rain, storms, fog, wind and snow;
-- a rainbow after the rain;
-- deer at dusk, an owl and a hedgehog at night.
+- **Land:** meadow, grassland, forest, pine forest, jungle, swamp, savanna, desert, tundra, snow,
+  mountains and rock; lakes, rivers and the sea; beaches.
+- **Places:** ruins with chests and readable books, abandoned cabins, caves, standing stones,
+  springs, cairns to climb and look far from, beehives, nests and old wells, each with a name.
+- **Life:** deer, rabbits, foxes, birds, fish, frogs and owls at night, fireflies in summer, goats and
+  lizards, and the rare bear. Berries, apples, mushrooms (some of them poisonous), honey, eggs.
+- **Physics:** day and night, seasons, rain, storms, snow, fog and wind; temperature by land, height
+  and hour; shelter and fire for warmth; darkness without light; getting wet and drying. Zen gets
+  hungry, thirsty, tired and cold; it falls asleep when exhausted and faints (waking at home) when
+  its health runs out.
+- **Home:** a cabin at the start with a bed, a fireplace with wood and a flint, a bookshelf, a chest,
+  an easel with paper, a piano, a desk, a rain barrel, and a pond and a beehive nearby.
 
 ## How it is built
 
-Three processes, so nothing can freeze anything else:
-
 ```
-   FineWeb ──┐                                ┌── Wren's mind: one llama.cpp server on the CPU (or Ollama)
+   FineWeb ──┐                                ┌── the Sprite: llama.cpp on the CPU (Qwen 2.5 Omni 3B: sees and hears)
              ▼                                ▼
  ┌────────────────────────┐ brain  ┌──────────────────────┐ events ┌─────────────────────────────┐
  │ ACADEMY (GPU)          │───────▶│ HUB                  │◀──────▶│ WORLD (CPU)                 │
- │ trains Zen's brain;    │ files  │ web page, schedule,  │        │ the homestead and its       │
- │ tests concepts;        │◀───────┤ Wren's words and     │        │ physics, Zen's body and     │
- │ publishes new brains   │journal │ lessons, supervision │        │ brain, Wren's body and mind │
- └────────────────────────┘ lessons└─────────▲────────────┘        └─────────────────────────────┘
+ │ trains Zen's brain on  │ files  │ web page, schedule,  │        │ the endless world; Zen's    │
+ │ text and on its own    │◀───────┤ the Sprite's words,  │        │ brain choosing every deed,  │
+ │ experience; publishes  │ exp.   │ supervision          │        │ word and mark               │
+ └────────────────────────┘journal └─────────▲────────────┘        └─────────────────────────────┘
                                               │ WebSocket
                                        your browser (three.js)
 ```
 
-- **Zen's brain:** a modern small transformer (RMSNorm, rotary positions, QK-norm, SwiGLU, tied
-  embeddings, logit soft-capping) trained with Muon and AdamW in bf16.
-  - **Vocabulary:** 32,768 tokens, trained on FineWeb (`tools/train_tokenizer.py`).
-  - **Loss:** the vocabulary loss and its gradient are computed in one pass.
-  - **Batch:** sized to the GPU's free memory.
-  - **Growth:** the brain grows new layers when learning plateaus.
-- **The GPU is for training.** Zen's brain thinks on the CPU, sharing the physical cores with
-  Wren's model. The 3D view asks the browser for the low-power GPU and draws at most 60 frames a
-  second.
+- **Zen's brain:** a small modern transformer (RMSNorm, rotary positions, QK-norm, SwiGLU, tied
+  embeddings, logit soft-capping) trained with Muon and AdamW in bf16; a 32,768-token vocabulary
+  trained on FineWeb; the batch sized to the GPU; new layers grown when learning plateaus.
+- **The GPU is for training.** Zen's brain lives on the CPU (half the physical cores, at most 4); the
+  Sprite gets the rest and runs only when asked. The 3D view draws at most 60 frames a second.
 
 ```
 run.py               starts the Hub, which starts the Academy and the World
-ada/academy.py       training, evaluation, publishing        ada/model.py      the brain (and the fused loss)
-ada/life.py          the World process: Zen's day            ada/companion.py  Wren's body and mind, conversations
-ada/world/sim.py     the homestead and its physics           ada/world/agent.py  words → plans → steps → deeds
-ada/world/art.py     art: plans, composers, skill            ada/journey.py    Zen's milestones
-ada/hub.py           processes, schedule, Wren's model       ada/wren.py       everything Wren's model is asked
-ada/localllm.py      llama.cpp servers                       ada/oracle.py     reaching the model (built-in or Ollama)
-ada/tokenizer.py     fineweb32k / gpt2 / bytes               ada/fineweb.py    FineWeb streaming
-web/                 the page: world3d.js (three.js), minds.js, art.js, app.js
+ada/academy.py       training (text + experience), evaluation, publishing    ada/model.py   the brain
+ada/life.py          the World process: Zen's stream, choices, words, art    ada/motor.py   choosing and experience
+ada/world/terrain.py the endless land                 ada/world/sim.py   things, beings, physics, senses, rewards
+ada/world/studio.py  the easel, piano and clay        ada/world/render.py  pictures and sounds for the Sprite
+ada/sprite.py        what the Sprite is asked         ada/hub.py         processes, schedule, the Sprite's model
+ada/localllm.py      llama.cpp servers                ada/oracle.py      reaching the model (built-in or Ollama)
+ada/archive.py       thoughts and conversations kept whole                 ada/journey.py Zen's milestones
+web/                 the page (three.js)              docs/DESIGN-v4.md  the design
 tests/               python -m pytest tests
 ```

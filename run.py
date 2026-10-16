@@ -55,12 +55,13 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--schedule", choices=["day_night", "together", "academy", "world"], default=None)
     ap.add_argument("--no-fineweb", action="store_true")
-    ap.add_argument("--no-oracle", action="store_true")
-    ap.add_argument("--ollama-url", default=None, help="use Ollama at this address as the Oracle")
+    ap.add_argument("--no-oracle", action="store_true", help="no Sprite: Zen's questions go unanswered")
+    ap.add_argument("--ollama-url", default=None, help="use Ollama at this address for the Sprite's mind")
     ap.add_argument("--oracle", choices=["builtin", "ollama"], default=None,
-                    help="the Oracle's backend: built-in (llama.cpp on the CPU, default) or Ollama")
+                    help="the Sprite's mind: built-in (llama.cpp on the CPU, default; it sees and hears) or Ollama")
     ap.add_argument("--world-device", choices=["auto", "cuda", "cpu"], default=None,
                     help="where the synth's brain runs while it lives (cpu leaves the GPU to the Academy)")
+    ap.add_argument("--seed", type=int, default=None, help="the seed of a new synth's endless world")
     ap.add_argument("--compile", action="store_true", help="torch.compile training (Linux/WSL)")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
@@ -84,6 +85,8 @@ def main():
         gpu = gpu_present()
         cfg = AdaConfig(name=args.name, tokenizer=args.tokenizer or "fineweb32k")
         cfg.apply_preset(args.preset or ("small" if gpu else "tiny"))
+        if args.seed:
+            cfg.world.seed = args.seed
         print(f"Creating {cfg.name} with a {cfg.preset} brain.")
     if args.schedule:
         cfg.schedule.mode = args.schedule
