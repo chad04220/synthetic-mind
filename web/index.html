@@ -124,8 +124,9 @@
 <!-- ====================================================== THOUGHTS -->
 <section class="view" id="view-thoughts">
   <div class="card page-head"><div class="ph-row"><span class="ph-icon">💭</span>
-    <div class="ph-text"><h1><span class="synthname">Zen</span>'s thoughts</h1><p>Every thought <span class="synthname">Zen</span> has had, whole, newest first. Shading shows how sure its brain was of each word: faint words were guesses.</p></div>
-    <div class="ph-actions"><input type="search" id="thSearch" placeholder="Find a word…" aria-label="Find a word in its thoughts">
+    <div class="ph-text"><h1><span class="synthname">Zen</span>'s thoughts</h1><p>Everything that goes through <span class="synthname">Zen</span>'s mind, whole, newest first: what it decides to do and why, and its inner monologue in its own words (silent at first, while its brain is new). Shading shows how sure its brain was of each word.</p></div>
+    <div class="ph-actions"><div class="seg" id="thKind"><button data-kind="" class="on">All</button><button data-kind="intent">Decisions</button><button data-kind="thought">Monologue</button></div>
+      <input type="search" id="thSearch" placeholder="Find a word…" aria-label="Find a word in its thoughts">
       <label class="switch"><input type="checkbox" id="thShade" checked><span></span><span class="sw-text">Shading</span></label></div></div></div>
   <div class="arch" id="thList" aria-live="polite"></div>
   <div class="arch-more"><button id="thMore" hidden>Show older thoughts</button><span class="muted" id="thEnd"></span></div>

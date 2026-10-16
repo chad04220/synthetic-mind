@@ -471,3 +471,6 @@ figure.work .built { height: 100%; }
 .arch-text .tk { font-family: inherit; font-size: inherit; }
 .arch-text .tk.c0 { opacity: .5; } .arch-text .tk.c1 { opacity: .66; } .arch-text .tk.c2 { opacity: .8; }
 .arch-text .tk.c3 { opacity: .92; } .arch-text .tk.c4 { opacity: 1; font-weight: 600; }
+.arch-item.thought.decision { border-left-color: var(--warm); }
+.arch-item.thought.decision .arch-text { font-size: 15px; font-weight: 600; }
+.arch-why { font-weight: 400; color: var(--muted); font-size: 14px; margin-top: 2px; font-style: italic; }

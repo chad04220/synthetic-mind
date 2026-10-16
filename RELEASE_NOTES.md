@@ -1,3 +1,18 @@
+# Synthetic Mind v3.3.1
+
+- **The Thoughts tab shows what Zen decides, too.** In your report, Zen's brain was brand new
+  (training step 0), so its own monologue was still silence, and the tab stayed empty, even though
+  Zen was plainly thinking "I look in the mirror. I wonder what I look like." That line is Zen's
+  decision and its reason, which the tab didn't keep. Now it does:
+  - each decision, with its reason and where it came from (its needs, its own words, Wren's words
+    or your idea);
+  - its monologue in its own words, as before. A new brain's monologue is mostly silence; words
+    come as it learns;
+  - **All / Decisions / Monologue** to show one or the other; search covers both.
+- Decisions are kept from this version on.
+
+---
+
 # Synthetic Mind v3.3.0
 
 - **💭 Thoughts, a tab of its own.** Every thought Zen has, kept whole on disk

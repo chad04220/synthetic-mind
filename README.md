@@ -88,9 +88,10 @@ python run.py --no-fineweb --no-oracle     offline (Wren lives by simple rules)
   - the words Wren has heard Zen say;
   - how Wren is looking after Zen right now;
   - Wren's diary.
-- **💭 Thoughts** has every thought Zen has had, whole and newest first, grouped by day. Shading
-  shows how sure its brain was of each word. You can search for a word and page back to the very
-  first thought.
+- **💭 Thoughts** has everything that went through Zen's mind, whole and newest first, grouped by
+  day: what it decided to do and why, and its inner monologue in its own words (silent at first,
+  while its brain is new). Shading shows how sure its brain was of each word. You can show only
+  decisions or only the monologue, search for a word, and page back to the very first thought.
 - **🗣️ Conversations** has every conversation Zen has had, line by line and in full: its talks with
   Wren, its questions to Wren, and its talks with you. You can show only Wren's or only yours, and
   search them.

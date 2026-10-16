@@ -152,7 +152,8 @@ function onEvent(e) {
   switch (e.kind) {
     case "thought": addThought(e); S.lastThought = e; Journal.live("thoughts", e); break;
     case "talk_end": Journal.live("conversations", e); break;
-    case "intent": case "did": addDeed(e); break;
+    case "intent": addDeed(e); Journal.live("thoughts", e); break;
+    case "did": addDeed(e); break;
     case "wren_intent": addWrenMind(e); break;
     case "talk_start": addDialogue(e); break;
     case "tried": S.tried = e; break;
@@ -734,7 +735,7 @@ const Journal = (() => {
     thoughts: { list: "#thList", more: "#thMore", end: "#thEnd", search: "#thSearch", noun: "thoughts" },
     conversations: { list: "#tkList", more: "#tkMore", end: "#tkEnd", search: "#tkSearch", noun: "conversations" },
   };
-  const st = { thoughts: { loaded: false, oldest: null, busy: false, q: "" }, conversations: { loaded: false, oldest: null, busy: false, q: "", who: "" } };
+  const st = { thoughts: { loaded: false, oldest: null, busy: false, q: "", who: "" }, conversations: { loaded: false, oldest: null, busy: false, q: "", who: "" } };
   const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const dayKey = (e) => `Day ${e.day ?? "?"}`;
   const whoName = (w) => w === "you" ? "you" : w === "companion" ? S.companion : w;
@@ -754,11 +755,20 @@ const Journal = (() => {
   }
 
   // ---- thoughts
+  const WHY = { self: "🗣️ in its own words", needs: "🧭 from its needs", you: "🙋 your idea", companion: "🪶 Wren's words" };
   function thoughtEl(e) {
+    if (e.kind === "intent") {
+      const d = document.createElement("article"); d.className = "arch-item thought decision";
+      const from = (WHY[e.source] || "").replace("Wren", S.companion || "Wren");
+      d.innerHTML = `<div class="arch-text">${esc(e.text || "")}${e.reason ? `<div class="arch-why">${esc(e.reason)}</div>` : ""}</div>
+        <div class="arch-meta">decides${from ? ` · ${esc(from)}` : ""} · ${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)}</div>`;
+      d._e = e;
+      return d;
+    }
     const d = document.createElement("article"); d.className = "arch-item thought";
     const shade = $("#thShade").checked && e.tokens?.length;
     d.innerHTML = `<div class="arch-text">${shade ? tokHTML(e.tokens) : esc(e.text || "") || '<span class="muted">(silence)</span>'}</div>
-      <div class="arch-meta">${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)} · brain v${e.brain ?? "?"}</div>`;
+      <div class="arch-meta">its own words · ${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)} · brain v${e.brain ?? "?"}</div>`;
     d._e = e;
     return d;
   }
@@ -786,9 +796,9 @@ const Journal = (() => {
   const make = (kind, e) => kind === "thoughts" ? thoughtEl(e) : talkEl(e);
   const matches = (kind, e) => {
     const s = st[kind];
-    if (kind === "conversations" && s.who && e.with !== s.who) return false;
+    if (s.who && (kind === "thoughts" ? e.kind || "thought" : e.with) !== s.who) return false;
     if (!s.q) return true;
-    const text = kind === "thoughts" ? e.text || "" : (e.lines || []).map((l) => l[1] || "").join(" ");
+    const text = kind === "thoughts" ? `${e.text || ""} ${e.reason || ""}` : (e.lines || []).map((l) => l[1] || "").join(" ");
     return text.toLowerCase().includes(s.q.toLowerCase());
   };
 
@@ -827,7 +837,7 @@ const Journal = (() => {
       $(k.more).hidden = !r.more;
       const n = $(k.list).querySelectorAll(".arch-item").length;
       setText($(k.end), r.more ? "" : n ? `That's all of them${s.q ? ` with “${s.q}”` : ""}.` :
-        s.q ? `None with “${s.q}”.` : kind === "thoughts" ? `No thoughts yet. They start once ${SYNTH()} is awake.` : `No conversations yet.`);
+        s.q ? `None with “${s.q}”.` : kind === "thoughts" ? (s.who === "thought" ? `No words of its own yet: while its brain is new, ${SYNTH()}'s monologue is mostly silence.` : `Nothing yet. ${SYNTH()}'s thoughts start once it is awake.`) : `No conversations yet.`);
       s.loaded = true;
     } catch (err) { setText($(k.end), `Couldn't load: ${err.message}`); }
     s.busy = false;
@@ -839,7 +849,11 @@ const Journal = (() => {
     if (!st[kind].loaded) return;                         // loaded with everything when the tab opens
     let e;
     const ws = MapView.st.world || {}, when = { t: ev.t || Date.now() / 1000, day: ws.day, time: ws.time };
-    if (kind === "thoughts") { if (!(ev.text || "").trim()) return; e = { ...when, text: ev.text, tokens: ev.tokens, brain: ev.brain }; }
+    if (kind === "thoughts") {
+      if (!(ev.text || "").trim()) return;
+      e = ev.kind === "intent" ? { ...when, kind: "intent", text: ev.text, reason: ev.reason || "", source: ev.source || "" }
+        : { ...when, kind: "thought", text: ev.text, tokens: ev.tokens, brain: ev.brain };
+    }
     else if (ev.kind === "talk_end") {
       if (!ev.lines?.length) return;
       const other = (ev.members || []).find((m) => m !== SYNTH()) || S.companion;
@@ -866,6 +880,10 @@ const Journal = (() => {
     $(k.search).oninput = (ev) => { clearTimeout(timers[kind]); timers[kind] = setTimeout(() => { st[kind].q = ev.target.value.trim(); load(kind, true); }, 300); };
   }
   $("#thShade").onchange = () => { for (const el of $$("#thList .arch-item")) { const n = thoughtEl(el._e); n.dataset.day = el.dataset.day; el.replaceWith(n); } };
+  $$("#thKind button").forEach((b) => b.onclick = () => {
+    $$("#thKind button").forEach((x) => x.classList.toggle("on", x === b));
+    st.thoughts.who = b.dataset.kind; load("thoughts", true);
+  });
   $$("#tkWho button").forEach((b) => b.onclick = () => {
     $$("#tkWho button").forEach((x) => x.classList.toggle("on", x === b));
     st.conversations.who = b.dataset.who; load("conversations", true);

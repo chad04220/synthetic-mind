@@ -208,15 +208,19 @@ class Hub:
     def keep(self, ev: dict):
         """Zen's thoughts and conversations go to the archive in full (the live feeds keep only the latest)."""
         kind, ws, z, wren = ev["kind"], self.world_state, self.cfg.name, self.cfg.companion
-        if kind not in ("thought", "talk_end", "chat", "answer"):
+        if kind not in ("thought", "intent", "talk_end", "chat", "answer"):
             return
         t = self.archive_t = max(ev["t"], getattr(self, "archive_t", 0.0) + 1e-6)   # unique: pages never skip one
         when = {"t": round(t, 6), "day": ws.get("day"), "time": ws.get("time", "")}
         if kind == "thought":
             if not (ev.get("text") or "").strip():
                 return                                     # a silent moment: nothing to read
-            self.archive.add("thoughts", when | {"text": ev.get("text", ""), "tokens": ev.get("tokens") or [],
-                                                 "brain": ev.get("brain")})
+            self.archive.add("thoughts", when | {"kind": "thought", "text": ev.get("text", ""),
+                                                 "tokens": ev.get("tokens") or [], "brain": ev.get("brain")})
+        elif kind == "intent":                             # what it decides to do, and why
+            if (ev.get("text") or "").strip():
+                self.archive.add("thoughts", when | {"kind": "intent", "text": ev["text"], "reason": ev.get("reason") or "",
+                                                     "source": ev.get("source") or ""})
         elif kind == "talk_end":
             lines = [[w, l] for w, l in ev.get("lines") or []]
             if lines:

@@ -1071,6 +1071,8 @@ def test_every_thought_and_conversation_is_kept_whole(tmp_path):
     hub.event("thought", text=long, tokens=[["I", 0.9]], brain=4)
     for i in range(130):
         hub.event("thought", text=f"thought {i}", tokens=[], brain=4)
+    hub.event("thought", text="", tokens=[], brain=4)                    # a silent moment is not kept
+    hub.event("intent", text="I look in the mirror.", source="needs", reason="I wonder what I look like.")
     hub.event("talk_end", talk=1, members=["Wren", "Z"], lines=[("Wren", "Look, Z!"), ("Z", "moon " * 50)], topic="the moon")
     hub.event("chat", user="Hello Z", text="Hello you", tokens=[])
     hub.event("chat", user="Sleepy?", text="", asleep=True)                # asleep: nothing was said
@@ -1079,7 +1081,11 @@ def test_every_thought_and_conversation_is_kept_whole(tmp_path):
 
     a = Archive(tmp_path / "Z")
     first = a.page("thoughts", limit=100)
-    assert len(first["items"]) == 100 and first["more"] and first["items"][0]["text"] == "thought 129"
+    assert len(first["items"]) == 100 and first["more"] and first["items"][0]["text"] == "I look in the mirror."
+    decided = a.page("thoughts", who="intent")["items"]
+    assert len(decided) == 1 and decided[0]["reason"] == "I wonder what I look like." and decided[0]["source"] == "needs"
+    assert a.page("thoughts", q="wonder")["items"][0]["kind"] == "intent"
+    assert len(a.page("thoughts", who="thought", limit=500)["items"]) == 131
     rest = a.page("thoughts", before=first["items"][-1]["t"], limit=100)
     assert not rest["more"] and rest["items"][-1]["text"] == long and rest["items"][-1]["day"] == 3
     assert a.page("thoughts", q="HENS")["items"][0]["text"] == long

@@ -46,8 +46,8 @@ class Archive:
                 yield rest
 
     def page(self, kind: str, before: float | None = None, limit: int = 60, q: str = "", who: str = "") -> dict:
-        """Entries older than `before` (a time), newest first, optionally only those mentioning `q`
-        or (conversations) only those with `who`."""
+        """Entries older than `before` (a time), newest first, optionally only those mentioning `q`, and
+        only those with `who` (conversations) or of kind `who` (thoughts: "thought" or "intent")."""
         limit = max(1, min(500, int(limit or 60)))
         q = (q or "").strip().lower()
         out, more = [], False
@@ -58,10 +58,11 @@ class Archive:
                 continue
             if before is not None and e.get("t", 0) >= before:
                 continue
-            if who and e.get("with") != who:
+            if who and (e.get("kind", "thought") if kind == "thoughts" else e.get("with")) != who:
                 continue
             if q:
-                text = e.get("text", "") if kind == "thoughts" else " ".join(l[1] or "" for l in e.get("lines", []))
+                text = (e.get("text", "") + " " + (e.get("reason") or "")) if kind == "thoughts" else \
+                    " ".join(l[1] or "" for l in e.get("lines", []))
                 if q not in text.lower():
                     continue
             if len(out) == limit:
