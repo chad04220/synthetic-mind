@@ -68,7 +68,7 @@ class AcademyConfig:
     # the language-model loss (what follows what it does) and the policy-gradient loss on its actions.
     mix_experience: float = 0.25
     pg_coef: float = 1.0             # weight of the policy-gradient loss
-    entropy_coef: float = 0.01       # keeps it curious: a bonus for not being too sure of one action
+    entropy_coef: float = 0.05       # keeps it curious: a bonus for not being too sure of one action
 
 
 @dataclass

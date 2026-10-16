@@ -107,7 +107,7 @@ const Chunks = (() => {
         else if (/bush/.test(fn)) { r *= 0.8; gg *= 0.88; b *= 0.8; }
         else if (/rock|boulder/.test(fn)) { r = r * 0.6 + 50; gg = gg * 0.6 + 48; b = b * 0.6 + 46; }
         else if (/flower/.test(fn)) { r = r * 0.85 + 30; b = b * 0.9 + 12; }
-        if (c.h[t] > 300 && bn !== "desert") { const s = Math.min(1, (c.h[t] - 300) / 80); r += (238 - r) * s; gg += (243 - gg) * s; b += (248 - b) * s; }
+        if (c.h[t] > 1000 && bn !== "desert") { const s = Math.min(1, (c.h[t] - 1000) / 150); r += (238 - r) * s; gg += (243 - gg) * s; b += (248 - b) * s; }
       }
       const o = t * 4; d.data[o] = r; d.data[o + 1] = gg; d.data[o + 2] = b; d.data[o + 3] = 255;
     }

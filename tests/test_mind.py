@@ -197,3 +197,31 @@ def test_the_sprite_judges_what_it_sees():
     assert v.critique("poem", text="sun sun tree")["score"] == 3
     eyes.senses = False
     assert v.critique("painting", image=b"png") == {}   # a model that can't see doesn't pretend to
+
+
+def test_its_own_actions_are_not_imitated_only_reinforced(mind):
+    """The language-model loss skips its action words: copying its past choices would turn chance into habit."""
+    from ada.academy import Academy
+
+    tok = make_tokenizer("bytes")
+    motor = motor_ids(tok)
+    act = tok["<|act|>"]
+    ctx = [tok["<|world|>"]] + tok.encode("A wall is in the way.")
+    for _ in range(60):                          # it did 'back' again and again, and it never helped (advantage 0)
+        ids = ctx + [act, motor[MOTOR.index("back")]]
+        append_jsonl(mind / "experience.jsonl", {"ids": ids, "acts": [[len(ids) - 1, MOTOR.index("back"), 0.0, 0]], "ret": 0.0})
+    q = mp.Queue()
+    a = Academy(mind, Link("academy", q, q, mind))
+    a.ingest()
+
+    def p_back():
+        with torch.no_grad():
+            h = a.brain.hidden(torch.tensor([ctx + [act]], device=a.device))
+            z = a.brain.motor_logits(h[0, -1], torch.tensor(motor, device=a.device)).float()
+            return float(torch.softmax(z, -1)[MOTOR.index("back")])
+
+    before = p_back()
+    a.handle({"cmd": "resume"})
+    for _ in range(30):
+        a.train_step()
+    assert p_back() < before + 0.05              # no habit from mere repetition

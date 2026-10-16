@@ -513,6 +513,7 @@ function init(container, opts = {}) {
   S.glowTex = radialTex([[0, "rgba(255,255,255,1)"], [0.25, "rgba(255,255,255,.55)"], [0.6, "rgba(255,255,255,.12)"], [1, "rgba(255,255,255,0)"]]);
   S.blobTex = radialTex([[0, "rgba(0,0,0,.5)"], [0.55, "rgba(0,0,0,.28)"], [1, "rgba(0,0,0,0)"]]);
   makeAtlas();
+  templates();
   S.entBB = new Billboards(S.atlasTex, { mode: "cyl", cut: true, lit: true, cap: 256, a2c: S.quality === "high" });
   S.blobBB = new Billboards(S.blobTex, { mode: "flat", lit: false, cap: 256 });
   S.glowBB = new Billboards(S.glowTex, { mode: "sph", additive: true, lit: false, cap: 256 });
@@ -618,15 +619,16 @@ class Buf {
     this.p = grow(this.p, 3); this.no = grow(this.no, 3); this.c = grow(this.c, 3); this.v = grow(this.v, 2); this.s = grow(this.s, 1); this.cap = cap;
   }
   need(k) { if (this.n + k > this.cap) this.alloc(Math.max(this.cap * 2, this.n + k + 1024)); }
-  geometry() {
+  geometry(sphere) {
     if (!this.n) return null;
     const g = new THREE.BufferGeometry(), n = this.n;
-    g.setAttribute("position", new THREE.BufferAttribute(this.p.slice(0, n * 3), 3));
-    g.setAttribute("normal", new THREE.BufferAttribute(this.no.slice(0, n * 3), 3));
-    g.setAttribute("color", new THREE.BufferAttribute(this.c.slice(0, n * 3), 3));
-    g.setAttribute("aVeg", new THREE.BufferAttribute(this.v.slice(0, n * 2), 2));
-    g.setAttribute("aSway", new THREE.BufferAttribute(this.s.slice(0, n), 1));
-    g.computeBoundingSphere(); return g;
+    g.setAttribute("position", new THREE.BufferAttribute(this.p.subarray(0, n * 3), 3));
+    g.setAttribute("normal", new THREE.BufferAttribute(this.no.subarray(0, n * 3), 3));
+    g.setAttribute("color", new THREE.BufferAttribute(this.c.subarray(0, n * 3), 3));
+    g.setAttribute("aVeg", new THREE.BufferAttribute(this.v.subarray(0, n * 2), 2));
+    g.setAttribute("aSway", new THREE.BufferAttribute(this.s.subarray(0, n), 1));
+    if (sphere) g.boundingSphere = sphere; else g.computeBoundingSphere();
+    return g;
   }
 }
 // a template: a few low-poly parts merged, flat-shaded, in object space (y up, standing on y = 0)
@@ -805,18 +807,23 @@ const featAt = (x, y) => { const r = tileRef(x, y); return r ? S.meta?.FEATURES?
 // ───────────────────────────────────────────────────────────── chunk meshes, built a step at a time
 function chunkJobs(ch) {
   const d = dat(ch.cx, ch.cy); if (!d) return [];
-  const steps = [() => buildTerrain(ch, d), () => buildWater(ch, d)];
-  for (let r = 0; r < N; r += 8) steps.push(() => buildFeatures(ch, d, r, r + 8));
-  steps.push(() => finishFeatures(ch), () => buildPois(ch, d));
+  const steps = [], T = (name, f) => { f.label = name; steps.push(f); };
+  for (let r = 0; r < N; r += 8) T("terrain", () => buildTerrain(ch, d, r, r + 8));
+  T("terrain-mesh", () => finishTerrain(ch)); T("water", () => buildWater(ch, d));
+  for (let r = 0; r < N; r += 4) T("features", () => buildFeatures(ch, d, r, r + 4));
+  T("features-mesh", () => finishFeatures(ch)); T("pois", () => buildPois(ch, d));
   return steps;
 }
 function neighbourhood(cx, cy) { for (const [a, b] of [[0, 0], [1, 0], [0, 1], [1, 1], [-1, 0], [0, -1]]) if (!dat(cx + a, cy + b)) return false; return true; }
-function buildTerrain(ch, d) {
-  const V = N + 1, n = V * V, pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3), veg = new Float32Array(n * 2), sw = new Float32Array(n);
-  const x0 = ch.cx * N, y0 = ch.cy * N, B = S.meta.BIOMES || [], snowT = S.live.season === "winter";
+const OCEAN_FLOOR = C("#c8b98c");
+function buildTerrain(ch, d, r0, r1) {
+  const V = N + 1, n = V * V;
+  const tb = ch.tb || (ch.tb = { pos: new Float32Array(n * 3), nor: new Float32Array(n * 3), col: new Float32Array(n * 3), veg: new Float32Array(n * 2), sw: new Float32Array(n) });
+  const { pos, nor, col, veg } = tb;
+  const x0 = ch.cx * N, y0 = ch.cy * N, B = S.meta.BIOMES || [];
   const H = (i, j) => bedAt(x0 + i, y0 + j, d.bed[clamp(j, 0, N - 1) * N + clamp(i, 0, N - 1)]);
   const col1 = new THREE.Color(), col2 = new THREE.Color();
-  for (let j = 0; j < V; j++) for (let i = 0; i < V; i++) {
+  for (let j = r0; j < (r1 >= N ? V : r1); j++) for (let i = 0; i < V; i++) {
     const k = j * V + i, gx = x0 + i, gy = y0 + j, y = H(i, j);
     pos[k * 3] = i + 0.5; pos[k * 3 + 1] = y; pos[k * 3 + 2] = j + 0.5;
     const nx = -(H(i + 1, j) - H(i - 1, j)) / 2, nz = -(H(i, j + 1) - H(i, j - 1)) / 2, l = Math.hypot(nx, 1, nz);
@@ -830,7 +837,7 @@ function buildTerrain(ch, d) {
     let grassy = pal[2];
     if (w) {
       col1.lerp(BED_C, w === 2 ? 0.7 : 0.4);
-      if (bn === "ocean" || w === 2) col1.lerp(C("#c8b98c"), 0.35);
+      if (bn === "ocean" || w === 2) col1.lerp(OCEAN_FLOOR, 0.35);
       grassy = 0;
     } else {
       let nearW = false;
@@ -843,6 +850,9 @@ function buildTerrain(ch, d) {
     col[k * 3] = col1.r; col[k * 3 + 1] = col1.g; col[k * 3 + 2] = col1.b;
     veg[k * 2 + 1] = grassy;
   }
+}
+function finishTerrain(ch) {
+  const V = N + 1, x0 = ch.cx * N, y0 = ch.cy * N, { pos, nor, col, veg, sw } = ch.tb; ch.tb = null;
   const idx = new Uint16Array(N * N * 6); let o = 0;
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const a = j * V + i, b = a + 1, c = a + V, e = c + 1;
@@ -919,13 +929,26 @@ function buildFeatures(ch, d, r0, r1) {
     if (rule.t === "reeds" && d.c.water[t]) y = Math.max(y, d.wat[t] - 0.45);
     const s = (big ? 0.85 + h3 * 0.45 : 0.8 + h3 * 0.5) * (rule.t === "pine" && /snow|tundra|mountain/.test(bn) ? 0.85 : 1);
     const tint = rule.t === "flowers" ? FLOWER_C[Math.floor(h3 * FLOWER_C.length)] : { f: 0.9 + h2 * 0.2 };
-    emit(b, tpl, wx - x0, y - 0.04, wz - y0, s, s * (0.9 + h1 * 0.25), h2 * Math.PI * 2, tint, rule.leafy ? 0.05 + h3 * 0.95 : 0, BIO3[bn]?.[2] || 1);
+    const small = SMALL.has(rule.t), bb = small ? (ch.sb || (ch.sb = new Buf(16384))) : b;
+    emit(bb, tpl, wx - x0, y - 0.04, wz - y0, s, s * (0.9 + h1 * 0.25), h2 * Math.PI * 2, tint, rule.leafy ? 0.05 + h3 * 0.95 : 0, BIO3[bn]?.[2] || 1);
   }
 }
+// small plants (grass, flowers, ferns, reeds, drifts) go in their own mesh: no shadows, and hidden when far away
+const SMALL = new Set(["grass", "tuft", "flowers", "fern", "reeds", "drift"]);
 function finishFeatures(ch) {
-  const g = ch.fb?.geometry(); ch.fb = null; if (!g) return;
-  const m = new THREE.Mesh(g, S.featMat); m.castShadow = S.quality === "high"; m.receiveShadow = true; m.name = "features";
-  ch.group.add(m); ch.feat = m;
+  const sph = () => new THREE.Sphere(new THREE.Vector3(N / 2, ch.midY ?? 0, N / 2), N * 0.75 + 12);
+  const g = ch.fb?.geometry(sph()); ch.fb = null;
+  if (g) { const m = new THREE.Mesh(g, S.featMat); m.castShadow = S.quality === "high"; m.receiveShadow = true; m.name = "features"; ch.group.add(m); ch.feat = m; }
+  const g2 = ch.sb?.geometry(sph()); ch.sb = null;
+  if (g2) { const m = new THREE.Mesh(g2, S.featMat); m.receiveShadow = true; m.name = "small"; ch.group.add(m); ch.small = m; }
+}
+// near chunks show their small plants; far ones only trees and stones
+function updateDetail() {
+  const t = S.cam.target, far = S.quality === "low" ? 30 : 44;
+  for (const ch of S.chunks.values()) if (ch.small) {
+    const dx = Math.max(0, Math.abs(t.x - (ch.cx + 0.5) * N) - N / 2), dz = Math.max(0, Math.abs(t.z - (ch.cy + 0.5) * N) - N / 2);
+    ch.small.visible = Math.hypot(dx, dz) < far;
+  }
 }
 
 // ───────────────────────────────────────────────────────────── places (points of interest)
@@ -989,15 +1012,31 @@ function disposeChunk(ch) {
 // spend at most BUDGET_MS a frame building
 function runJobs() {
   const t0 = performance.now();
-  while (S.jobs.length && performance.now() - t0 < BUDGET_MS) {
+  while (S.jobs.length && performance.now() - t0 < (S.budgetMs || BUDGET_MS)) runOne();
+  if (S.loading) { const ready = [...S.chunks.values()].some((c) => c.done); S.loading.hidden = ready; }
+  scheduleIdle();
+}
+function runOne() {
+  {
     const ch = S.jobs[0];
     const step = ch.steps.shift();
     const s0 = performance.now();
     try { step && step(); } catch (e) { console.error("chunk build:", e); ch.steps.length = 0; }
-    S.stats.jobMax = Math.max(S.stats.jobMax, performance.now() - s0);
+    const js = performance.now() - s0; S.stats.jobMax = Math.max(S.stats.jobMax, js);
+    if (step) { const k = step.label || "?", jb = S.stats.jobBy || (S.stats.jobBy = {}); (jb[k] || (jb[k] = [])).push(+js.toFixed(1)); if (jb[k].length > 400) jb[k].shift(); }
     if (!ch.steps.length) { S.jobs.shift(); ch.done = true; ch.group.visible = true; S.stats.built++; ch.born = U.time.value; }
   }
-  if (S.loading) { const ready = [...S.chunks.values()].some((c) => c.done); S.loading.hidden = ready; }
+}
+// keep building between frames when the browser is idle (each step stays short)
+function scheduleIdle() {
+  if (S.idleQ || !S.jobs.length || S.paused) return;
+  const ric = window.requestIdleCallback || ((f) => setTimeout(() => f({ timeRemaining: () => 8, didTimeout: false }), 30));
+  S.idleQ = ric((dl) => {
+    S.idleQ = null;
+    let n = 0;
+    while (S.jobs.length && !S.paused && (dl.timeRemaining() > 6 || (dl.didTimeout && n === 0))) { runOne(); n++; }
+    scheduleIdle();
+  }, { timeout: 250 });
 }
 // rebuild everything (season change, quality change)
 function rebuildAll() { for (const ch of [...S.chunks.values()]) disposeChunk(ch); S.focusKey = ""; }
@@ -2079,7 +2118,7 @@ function frame(now) {
   updateClouds(dt);
   updateCamera(dt);
   updateChunks(S.cam.target.x, S.cam.target.z);
-  runJobs();
+  runJobs(); updateDetail();
   syncEnts(); updateRoofs(dt); updateEasel(dt);
   updateSprites(dt, t);
   updateBow();

@@ -270,12 +270,12 @@ function spark(cv, vals) {
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
   const g = cv.getContext("2d"); g.clearRect(0, 0, W, H);
   if (!vals.length) { g.fillStyle = css("--muted"); g.font = `${11 * dpr}px system-ui`; g.fillText("no deeds yet", 4 * dpr, H / 2); return; }
-  const mx = Math.max(0.05, ...vals.map(Math.abs)), mid = H / 2, bw = W / Math.max(40, vals.length);
+  const sorted = vals.map(Math.abs).sort((a, b) => a - b), mx = Math.max(0.05, sorted[Math.floor(sorted.length * 0.9)] * 1.6), mid = H / 2, bw = W / Math.max(40, vals.length);
   g.fillStyle = css("--line"); g.fillRect(0, mid, W, Math.max(1, dpr * 0.6));
   const good = css("--good"), bad = css("--bad");
-  vals.forEach((v, i) => { const h = Math.max(1, Math.abs(v) / mx * (H / 2 - 2 * dpr)); g.fillStyle = v >= 0 ? good : bad; g.globalAlpha = 0.75; g.fillRect(W - (vals.length - i) * bw, v >= 0 ? mid - h : mid, Math.max(1, bw - dpr), h); });
+  vals.forEach((v, i) => { const h = Math.max(1, Math.min(1, Math.abs(v) / mx) * (H / 2 - 2 * dpr)); g.fillStyle = v >= 0 ? good : bad; g.globalAlpha = 0.75; g.fillRect(W - (vals.length - i) * bw, v >= 0 ? mid - h : mid, Math.max(1, bw - dpr), h); });
   g.globalAlpha = 1; g.strokeStyle = css("--accent"); g.lineWidth = 1.6 * dpr; g.beginPath();
-  let ema = 0; vals.forEach((v, i) => { ema = i ? ema * 0.9 + v * 0.1 : v; const x = W - (vals.length - i - 0.5) * bw, y = mid - ema / mx * (H / 2 - 2 * dpr); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+  let ema = 0; vals.forEach((v, i) => { ema = i ? ema * 0.9 + v * 0.1 : v; const x = W - (vals.length - i - 0.5) * bw, y = mid - Math.max(-1, Math.min(1, ema / mx)) * (H / 2 - 2 * dpr); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
 }
 
 function tokHTML(tokens) {
@@ -290,7 +290,7 @@ function prepend(box, html, max = 120, cls = "") {
 function addThought(e) { prepend($("#thoughts"), `${tokHTML(e.tokens || (e.text ? [[e.text, 0.5]] : null))}<div class="meta">brain v${e.brain ?? "?"} · ${clock(e.t)}</div>`); }
 function deedHTML(e) {
   const r = +e.reward || 0, rc = r > 0.005 ? "pos" : r < -0.005 ? "neg" : "zero";
-  return `<span class="act ${e.ok === false ? "fail" : ""}" title="${esc(e.action)}">${MOTOR_ICON[e.action] || "•"} ${esc(e.action || "")}</span><span class="dtext">${esc(e.text || "")}</span><span class="rw ${rc}" title="reward">${fmtR(r)}</span>`;
+  return `<span class="actk ${e.ok === false ? "fail" : ""}" title="${esc(e.action)}">${MOTOR_ICON[e.action] || "•"} ${esc(e.action || "")}</span><span class="dtext">${esc(e.text || "")}</span><span class="rw ${rc}" title="reward">${fmtR(r)}</span>`;
 }
 function addDeed(e) {
   S.lastDid = e; S.dids.push(e); if (S.dids.length > 200) S.dids.shift();

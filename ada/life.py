@@ -137,6 +137,7 @@ class Life:
         self.vocab = {"motor": motor_ids(self.tok)} | {m: studio.vocab_ids(self.tok, m) for m in studio.VOCABS}
         self.act_tok = self.tok["<|act|>"]
         self.last_percept = ""
+        self.last_fail = ("", "", 0)                  # (word, consequence, how many times in a row)
         self.next_motor = 0.0
         self.waiting: dict | None = None              # a question to the Sprite, in flight
         self.session = None                           # a piece of art in the making
@@ -279,6 +280,14 @@ class Life:
         self.exp.act(i, VOCAB_INDEX["motor"])
         r = w.act(word, context_text=self.last_thought) or {}
         reward = float(r.get("reward", 0.0)) + float(w.reward_since_last())
+        # the same failure again and again hurts more each time (a bruise, not a rule)
+        same = not r.get("ok", True) and (word, r.get("text")) == self.last_fail[:2]
+        self.last_fail = (word, r.get("text"), self.last_fail[2] + 1 if same else 0) if not r.get("ok", True) else ("", "", 0)
+        if same:
+            n = self.last_fail[2]
+            reward -= min(0.4, 0.03 * n)
+            if n in (2, 5, 10, 20):
+                r["text"] = (r.get("text") or "") + " Ouch, again. It hurts."
         self.exp.reward(reward)
         st = self.motor_stats
         st["steps"] += 1

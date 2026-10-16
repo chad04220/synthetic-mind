@@ -319,10 +319,13 @@ class Academy:
         if not act:
             return
         t = torch.tensor(rows, dtype=torch.long, device=self.device)
-        x, y = t[:, :-1], t[:, 1:]
+        x, y = t[:, :-1], t[:, 1:].clone()
+        # Its own actions are not copied as text: only the policy gradient shapes what it does.
+        # (Imitating its own past choices would only deepen whatever habits chance gave it.)
+        y[torch.tensor(pos_b, device=self.device), torch.tensor(pos_t, device=self.device)] = -1
         with self.autocast():
             h = self.brain.hidden(x)
-            lm = self.brain.chunked_loss(h, y, masked=False)
+            lm = self.brain.chunked_loss(h, y, masked=True)
             hp = h[torch.tensor(pos_b, device=self.device), torch.tensor(pos_t, device=self.device)]
         chosen_all, ents, advs = [], [], []
         for v, words in enumerate(self.vocabs):
