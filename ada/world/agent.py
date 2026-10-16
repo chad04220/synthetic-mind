@@ -549,8 +549,11 @@ def prerequisite(w: World, g: Goal, me: Being):
     if v in ("take", "harvest"):
         if v == "harvest" or (o in KINDS and not KINDS[o].get("portable") and o != "plant"):
             return None
-        if full:
-            return Goal("drop", me.carrying[0]["kind"]) if not carried(me, "basket") else None
+        basket = carried(me, "basket")
+        room = basket is not None and len(basket.get("items", [])) < KINDS["basket"]["container"]
+        if full and not room:
+            spare = next((e for e in me.carrying if e["kind"] != "basket"), me.carrying[0])
+            return Goal("drop", spare["kind"], reason="My hands are full.")
         return None
     if v in ("put", "give", "show", "drop") and o:
         if o not in KINDS:

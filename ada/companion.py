@@ -578,6 +578,10 @@ class Companion:
         if rotten or ag.carried_any(b, ("rotten food", "burnt food")):
             k = rotten["kind"] if rotten else ag.carried_any(b, ("rotten food", "burnt food"))["kind"]
             add(f"Put the {k} in the compost", G("put", k, "compost bin"), 3.2)
+        if len(b.carrying) >= ag.HANDS - 1:               # full hands: put something away first
+            e = next((e for e in b.carrying if e["kind"] != "basket"), None)
+            if e and not (KINDS[e["kind"]].get("fresh") or e.get("home")):
+                add(f"Put down the {e['kind']}", G("drop", e["kind"]), 3.8)
         for e in b.carrying:
             if KINDS[e["kind"]].get("fresh") and e["kind"] in ("carrot", "potato", "apple", "pear", "plum", "egg",
                                                                "tomato", "beans", "mint", "bread", "berries"):
@@ -587,7 +591,7 @@ class Companion:
             for e in b.carrying:                       # put tools back where they belong
                 if e.get("home") and e["kind"] in ("matches", "axe", "watering can", "fishing rod", "towel", "bucket",
                                                    "hammer", "chisel", "basket", "kettle", "pot"):
-                    add(f"Put the {e['kind']} back", G("tidy", e["kind"]), 3.4 if len(b.carrying) >= 3 else 2.2)
+                    add(f"Put the {e['kind']} back", G("tidy", e["kind"]), 4.2 if len(b.carrying) >= 3 else 2.2)
                     break
         hive = w.nearest("beehive", (62, 24))
         if hive and hive.get("honey", 0) >= 2 and not night:
