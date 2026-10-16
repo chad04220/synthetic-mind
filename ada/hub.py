@@ -45,6 +45,7 @@ class Hub:
         self._finding_seen: dict[str, float] = {}
         self.started = time.time()
         self.ws_bytes = 0
+        self.ollama_loaded: list[dict] = []
         self.ctx = mp.get_context("spawn")
         self.outbox = self.ctx.Queue(maxsize=5000)
         self.inboxes = {n: self.ctx.Queue() for n in CHILDREN}
@@ -291,6 +292,13 @@ class Hub:
             want = ("resume", "full")
         else:
             want = ("pause", "live-only mode")
+        studying = want[0] == "resume"
+        place = self.cfg.oracle.placement
+        use_gpu = place == "gpu" or (place == "auto" and not studying)
+        if use_gpu != self.oracle.use_gpu or want != self.academy_wanted and not use_gpu:
+            self.oracle.use_gpu = use_gpu
+            if not use_gpu:
+                self.pool.submit(self._free_oracle_gpu)
         if want != self.academy_wanted:
             self.academy_wanted = want
             if want[0] == "resume":
@@ -306,6 +314,10 @@ class Hub:
         self._last_diag = now
         self._last_diag_prev = getattr(self, "_last_diag_prev", self.started)
         self.gpu = gpu_readings()
+        if self.oracle.models:
+            self.ollama_loaded = self.oracle.loaded()
+            self.perf.gauge("ollama_gpu_mb", sum(m["vram_mb"] for m in self.ollama_loaded))
+            self.perf.gauge("oracle_on_gpu", 1 if self.oracle.use_gpu else 0)
         self.perf.gauge("kb_sent_to_browsers_per_s", round(self.ws_bytes / 1024 / max(1.0, now - self._last_diag_prev), 1))
         self.ws_bytes, self._last_diag_prev = 0, now
         try:
@@ -383,7 +395,8 @@ class Hub:
         out.append(block("World", {"day": w.get("day"), "phase": w.get("phase"), "mind": w.get("mind"),
                                    "ada": {k: (w.get("ada") or {}).get(k) for k in ("place", "needs", "sleeping")}}))
         out.append(block("Oracle", {k: v for k, v in self.oracle_info().items() if k != "models"} |
-                         {"models": [m["name"] for m in self.oracle.models]}))
+                         {"models": [m["name"] for m in self.oracle.models], "runs_on_gpu": self.oracle.use_gpu,
+                          "loaded_in_ollama": self.ollama_loaded}))
         out.append(block("Settings", self.cfg.to_dict()))
         def line(t, src, p):
             stamp = time.strftime("%H:%M:%S", time.localtime(t))
@@ -430,6 +443,11 @@ class Hub:
     @property
     def stage(self) -> int:
         return int(self.academy_status.get("stage", 0) or 0)
+
+    def _free_oracle_gpu(self):
+        freed = self.oracle.unload_from_gpu()
+        if freed:
+            self.log.info(f"asked Ollama to free GPU memory for the Academy: {', '.join(freed)}")
 
     def _refresh_oracle(self):
         before = self.oracle.model

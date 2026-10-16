@@ -1,3 +1,29 @@
+# Ada v1.1.2
+
+## Training speed: finding out why it's slow, and two likely fixes
+
+A Health report showed the Academy training at about 6,900 tokens per second on an RTX 3070:
+roughly a tenth of what that card should manage, with nearly all the time in the forward and
+backward pass. The most common cause on Windows is GPU memory running out: Windows then quietly
+spills it into ordinary RAM, which can make the GPU 10 to 50 times slower.
+
+- **The Oracle no longer competes for GPU memory while Ada studies.** New setting *Oracle runs on*
+  (default: CPU while she studies, GPU otherwise). When studying starts, the Hub asks Ollama to free
+  the GPU memory its model holds (Ollama otherwise keeps it loaded for minutes, even with the Oracle
+  off).
+- **Training needs about 0.5 GB less GPU memory** (the loss is computed in smaller pieces).
+- **The report now shows exactly where training time goes:**
+  - a GPU speed test when the Academy starts (with PyTorch, CUDA and free memory in the log);
+  - every 100 steps, one step timed on the GPU itself: forward, loss over the vocabulary, backward;
+  - GPU memory free, reserved and peak, and how much of the GPU's measured speed training uses;
+  - what Ollama holds in GPU memory.
+- New Health findings: "training uses only N% of what this GPU can do" (with the likely reason),
+  "the GPU itself is slow", and "Ollama is holding GPU memory while the Academy studies".
+
+If training is still slow, send a new report: it now pinpoints the cause.
+
+---
+
 # Ada v1.1.1
 
 ## Fixed: the world froze every few seconds

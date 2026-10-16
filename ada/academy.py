@@ -211,10 +211,14 @@ class Academy:
                 self.status_line = "waiting for something to study (FineWeb: %s)" % self.fineweb.status
                 return False
             x, y = b
+            profile = self.device.type == "cuda" and self.step % 100 == 1
             with perf.time("forward + backward"):
-                with self.autocast():
-                    loss = self.brain(x, y)
-                (loss / a.grad_accum).backward()
+                if profile:
+                    loss = self.profiled(x, y, a.grad_accum)
+                else:
+                    with self.autocast():
+                        loss = self.brain(x, y)
+                    (loss / a.grad_accum).backward()
                 total += float(loss.detach()) / a.grad_accum
             ntok += x.numel()
         with perf.time("optimizer"):
@@ -254,6 +258,54 @@ class Academy:
             with perf.time("resting (intensity)"):
                 time.sleep(min(0.5, dt * rest))
         return True
+
+    def profiled(self, x, y, accum: int):
+        """One training pass timed part by part on the GPU itself (every 100 steps)."""
+        torch = self.torch
+        ev = [torch.cuda.Event(enable_timing=True) for _ in range(4)]
+        ev[0].record()
+        with self.autocast():
+            h = self.brain.hidden(x)
+            ev[1].record()
+            loss = self.brain.chunked_loss(h, y)
+        ev[2].record()
+        (loss / accum).backward()
+        ev[3].record()
+        torch.cuda.synchronize()
+        perf = self.link.perf
+        perf.gauge("profile_forward_ms", round(ev[0].elapsed_time(ev[1]), 1))
+        perf.gauge("profile_loss_ms", round(ev[1].elapsed_time(ev[2]), 1))
+        perf.gauge("profile_backward_ms", round(ev[2].elapsed_time(ev[3]), 1))
+        return loss
+
+    def gpu_speed_test(self):
+        """How fast this GPU multiplies matrices right now: the ceiling for training speed."""
+        torch = self.torch
+        if self.device.type != "cuda":
+            return
+        try:
+            n = 4096
+            dt = self.amp or torch.float16
+            a = torch.randn(n, n, device=self.device, dtype=dt)
+            b = torch.randn(n, n, device=self.device, dtype=dt)
+            for _ in range(3):
+                a @ b
+            torch.cuda.synchronize()
+            t = time.perf_counter()
+            for _ in range(20):
+                a @ b
+            torch.cuda.synchronize()
+            tflops = 20 * 2 * n ** 3 / (time.perf_counter() - t) / 1e12
+            del a, b
+            torch.cuda.empty_cache()
+            self.link.perf.gauge("gpu_test_tflops", round(tflops, 1))
+            free, total = torch.cuda.mem_get_info()
+            self.link.log(f"GPU speed test: {tflops:.1f} TFLOPS ({torch.cuda.get_device_name()}, "
+                          f"{free / 2**20:.0f} of {total / 2**20:.0f} MB free, PyTorch {torch.__version__}, "
+                          f"CUDA {torch.version.cuda}, flash attention "
+                          f"{'on' if torch.backends.cuda.flash_sdp_enabled() else 'off'})")
+        except Exception as e:
+            self.link.warn(f"GPU speed test failed: {type(e).__name__}: {e}")
 
     def point(self, loss: float | None = None) -> dict:
         p = {"step": self.step, "tokens": self.tokens, "loss": None if loss is None else round(loss, 4),
@@ -508,6 +560,7 @@ class Academy:
     def loop(self):
         self.fineweb.enabled = self.cfg.academy.fineweb
         self.fineweb.start()
+        self.gpu_speed_test()
         self.ingest()
         if not (self.folder / "brain" / "latest.pt").exists():
             self.publish("her first brain")   # the World needs something to live with, even if it's noise
@@ -549,7 +602,16 @@ class Academy:
                 perf.gauge("fineweb_ready_docs", len(self.fineweb.docs))
                 perf.gauge("batch_tokens", self.cfg.academy.batch_size * self.cfg.brain.seq_len * self.cfg.academy.grad_accum)
                 if self.device.type == "cuda":
-                    perf.gauge("gpu_memory_peak_mb", round(self.torch.cuda.max_memory_allocated() / 2**20))
+                    cuda = self.torch.cuda
+                    perf.gauge("gpu_memory_peak_mb", round(cuda.max_memory_allocated() / 2**20))
+                    perf.gauge("gpu_memory_reserved_mb", round(cuda.memory_reserved() / 2**20))
+                    free, total = cuda.mem_get_info()
+                    perf.gauge("gpu_free_mb", round(free / 2**20))
+                    perf.gauge("gpu_total_mb", round(total / 2**20))
+                    cuda.reset_peak_memory_stats()
+                    if not self.paused and self.tps:
+                        # rough useful work done per second: 6 x parameters x tokens
+                        perf.gauge("training_tflops", round(6 * self.brain.n_params() * self.tps / 1e12, 2))
                 self.link.maybe_send_perf()
             if not did:
                 time.sleep(0.1)

@@ -42,6 +42,7 @@ class Oracle:
         self.url, self.model = url.rstrip("/"), model
         self.models: list[dict] = []
         self.error = ""
+        self.use_gpu = True          # False: ask Ollama to run the model on the CPU
 
     # -- Ollama -------------------------------------------------------------------
     def _req(self, path: str, body: dict | None = None, timeout: float = 180.0) -> dict:
@@ -79,10 +80,33 @@ class Oracle:
         body = {"model": self.model, "stream": False,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
                 "options": {"temperature": temperature, "num_predict": max_tokens}}
+        if not self.use_gpu:
+            body["options"]["num_gpu"] = 0       # keep the Oracle out of GPU memory
         if as_json:
             body["format"] = "json"
         r = self._req("/api/chat", body)
         return clean((r.get("message") or {}).get("content", ""))
+
+    def loaded(self) -> list[dict]:
+        """Models Ollama has in memory right now, and how much of each sits in GPU memory."""
+        try:
+            return [{"name": m.get("name"), "vram_mb": round((m.get("size_vram") or 0) / 2**20),
+                     "size_mb": round((m.get("size") or 0) / 2**20)}
+                    for m in self._req("/api/ps", timeout=3).get("models", [])]
+        except (urllib.error.URLError, OSError, ValueError):
+            return []
+
+    def unload_from_gpu(self) -> list[str]:
+        """Ask Ollama to free the GPU memory its models hold (they reload on the next request)."""
+        freed = []
+        for m in self.loaded():
+            if m["vram_mb"] > 0:
+                try:
+                    self._req("/api/generate", {"model": m["name"], "keep_alive": 0}, timeout=30)
+                    freed.append(f"{m['name']} ({m['vram_mb']} MB)")
+                except (urllib.error.URLError, OSError, ValueError):
+                    pass
+        return freed
 
     def _json(self, system: str, prompt: str, **kw) -> dict:
         try:

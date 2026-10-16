@@ -128,7 +128,7 @@ class Brain(nn.Module):
     def _ce(self, h, t):
         return F.cross_entropy(self.logits(h), t, ignore_index=-1, reduction="sum")
 
-    def chunked_loss(self, h, targets, chunk: int = 2048, reduction: str = "mean"):
+    def chunked_loss(self, h, targets, chunk: int = 1024, reduction: str = "mean"):
         """Cross-entropy without materialising the full (tokens x vocabulary) logits."""
         h = h.reshape(-1, h.size(-1))
         t = targets.reshape(-1)

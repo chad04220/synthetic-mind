@@ -88,6 +88,9 @@ class OracleConfig:
     npc_voices: bool = True            # villagers speak with the Oracle's words
     tutor_replies: bool = True         # suggest the reply Ada should have given you
     assess_minutes: float = 10.0
+    # Where Ollama runs the Oracle. "auto": on the CPU while the Academy studies (so they don't
+    # fight over GPU memory) and on the GPU otherwise. "gpu" or "cpu": always there.
+    placement: str = "auto"
 
 
 @dataclass
@@ -152,6 +155,7 @@ CHOICES = {
     "schedule.day_training": ("pause", "gentle"),
     "academy.intensity": ("full", "balanced", "gentle"),
     "world.device": ("auto", "cuda", "cpu"),
+    "oracle.placement": ("auto", "gpu", "cpu"),
 }
 
 LIVE = {
@@ -164,7 +168,7 @@ LIVE = {
     "world.thought_tokens": int, "world.thought_temperature": float, "world.thoughts_grounded": bool,
     "world.intent_temperature": float, "world.reply_tokens": int, "world.reply_temperature": float,
     "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,
-    "oracle.npc_voices": bool, "oracle.tutor_replies": bool, "oracle.lesson_seconds": float,
+    "oracle.npc_voices": bool, "oracle.placement": str, "oracle.tutor_replies": bool, "oracle.lesson_seconds": float,
 }
 
 

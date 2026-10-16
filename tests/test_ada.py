@@ -442,3 +442,55 @@ def test_a_slow_brain_never_stalls_the_world(mind):
     replies = [d for k, d in life.link.sent if k == "reply" and d["rid"] == "r1"]
     assert replies and "text" in replies[0]["result"]
     assert any(d.get("kind") == "intent" for k, d in life.link.sent)   # her needs decided while she searched for words
+
+
+def test_the_oracle_leaves_gpu_memory_to_the_academy(tmp_path):
+    from ada.hub import Hub
+
+    seen = []
+
+    class Fake(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path == "/api/ps":
+                self._send({"models": [{"name": "tiny:1b", "size": 2 << 30, "size_vram": 2 << 30}]})
+            else:
+                self._send({"models": [{"name": "tiny:1b", "size": 1, "details": {}}]})
+
+        def do_POST(self):
+            seen.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            self._send({"message": {"content": "ok"}})
+
+        def _send(self, d):
+            b = json.dumps(d).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    cfg = AdaConfig(name="G", tokenizer="bytes")
+    cfg.oracle.url = f"http://127.0.0.1:{srv.server_port}"
+    hub = Hub(cfg, tmp_path)
+    hub.oracle.refresh()
+    hub.send = lambda *a, **k: None
+    hub.phase = "night"                                   # the Academy studies
+    hub.apply_schedule()
+    hub.pool.shutdown(wait=True)                          # let the unload request finish
+    assert hub.oracle.use_gpu is False
+    assert ("/api/generate", {"model": "tiny:1b", "keep_alive": 0}) in seen
+    hub.oracle.chat("system", "hello")
+    assert seen[-1][1]["options"]["num_gpu"] == 0
+    srv.shutdown()
+
+
+def test_slow_training_on_a_fast_gpu_is_flagged():
+    from ada.diag import findings
+
+    academy_perf = {"timings": {}, "gauges": {"studying": 1, "device": "cuda", "gpu_test_tflops": 40.0,
+                                              "training_tflops": 1.2, "gpu_free_mb": 300}}
+    text = " ".join(f["text"] for f in findings({"academy": academy_perf}, [], None, {}))
+    assert "1.2 of the 40 TFLOPS" in text and "spilling" in text

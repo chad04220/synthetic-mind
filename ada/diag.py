@@ -166,6 +166,19 @@ def findings(perf: dict, gpu: list, client: dict | None, restarts: dict) -> list
     if studying and gpu and gpu[0].get("util_percent") is not None and gpu[0]["util_percent"] < 50 and ag.get("device") == "cuda":
         add("info", "academy", f"The GPU is only {gpu[0]['util_percent']:.0f}% busy while studying: the CPU side (data, Python) "
             "is the limit. A bigger batch or brain would use the GPU better.")
+    test, used = ag.get("gpu_test_tflops"), ag.get("training_tflops")
+    if studying and test and used is not None and used < 0.08 * test:
+        why = ("GPU memory is nearly full, so Windows is probably spilling it into ordinary RAM, which is very slow"
+               if ag.get("gpu_free_mb") is not None and ag["gpu_free_mb"] < 600 else
+               "see the step profile below: forward, loss over the vocabulary, backward")
+        add("warn", "academy", f"Training uses about {used:.1f} of the {test:.0f} TFLOPS this GPU reached in a quick test "
+            f"({used / test:.0%}). Something is holding it back: {why}.")
+    if test is not None and test < 4 and ag.get("device") == "cuda":
+        add("warn", "gpu", f"The GPU managed only {test:.1f} TFLOPS in the start-up test. It may be in a power-saving state, "
+            "throttling, or short of memory.")
+    if studying and hg.get("ollama_gpu_mb", 0) > 500:
+        add("warn", "gpu", f"Ollama is holding {hg['ollama_gpu_mb']:.0f} MB of GPU memory while the Academy studies. "
+            "Settings → Oracle runs on: 'CPU while studying' frees it.")
     if gpu and gpu[0].get("mem_total_mb") and gpu[0]["mem_used_mb"] / gpu[0]["mem_total_mb"] > 0.92:
         add("warn", "gpu", "GPU memory is over 92% full; Windows may start swapping it, which is very slow. Use a smaller "
             "batch or brain, or close other GPU programs (Ollama models also live in GPU memory).")
