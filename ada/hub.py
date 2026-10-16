@@ -97,7 +97,7 @@ class Hub:
         self.last_teach = 0.0
         self.last_assess = time.time()
         self.last_refresh = time.time()
-        self.topics: deque = deque()               # topics you asked the Oracle to teach
+        self.topics: deque = deque()               # topics you asked Wren to teach
         self.lessons_written = 0
         self.graph = ConceptGraph(self.folder / "concepts.json")
 
@@ -164,8 +164,8 @@ class Hub:
             try:
                 self._teach_tick()
                 self._assess_tick()
-            except Exception as e:  # never let the Oracle take the Hub down
-                self.event("error", text=f"Oracle: {type(e).__name__}: {e}")
+            except Exception as e:  # never let the model take the Hub down
+                self.event("error", text=f"{self.cfg.companion}'s mind: {type(e).__name__}: {e}")
 
     # ------------------------------------------------------------------ messaging
     def send(self, child: str, cmd: str, rid: str | None = None, **args):
@@ -442,7 +442,7 @@ class Hub:
         w = self.world_state
         out.append(block("World", {"day": w.get("day"), "phase": w.get("phase"), "mind": w.get("mind"),
                                    "ada": {k: (w.get("ada") or {}).get(k) for k in ("place", "needs", "sleeping")}}))
-        out.append(block("Oracle", {k: v for k, v in self.oracle_info().items() if k != "models"} |
+        out.append(block("Wren's mind (language model)", {k: v for k, v in self.oracle_info().items() if k != "models"} |
                          {"models": [m["name"] for m in self.oracle.models], "runs_on_gpu": self.oracle.use_gpu,
                           "loaded_in_ollama": self.ollama_loaded}))
         out.append(block("Settings", self.cfg.to_dict()))
@@ -516,15 +516,15 @@ class Hub:
             self.send("world", "voice", ready=ready)
 
     def _release_ollama(self):
-        """With the built-in Oracle in use, free the memory an Ollama model we used still holds."""
+        """With the built-in model in use, free the memory an Ollama model we used still holds."""
         for m in self.oracle.loaded():
             if m["name"] == self.cfg.oracle.model and self.oracle.unload(m["name"]):
-                self._local_log(f"asked Ollama to unload {m['name']} ({m['size_mb']} MB): the built-in Oracle is in use")
+                self._local_log(f"asked Ollama to unload {m['name']} ({m['size_mb']} MB): the built-in model is in use")
 
     def _local_log(self, text: str, level: str = "info"):
         if level == "warning":
             self.log.warning(text)
-            self.event("error", text=f"Built-in Oracle: {text}", src="hub")
+            self.event("error", text=f"{self.cfg.companion}'s mind: {text}", src="hub")
         else:
             self.log.info(text)
             self.event("log", text=text, src="hub")
@@ -540,7 +540,7 @@ class Hub:
         if self.oracle.model and self.oracle.model != self.cfg.oracle.model:
             self.set("oracle.model", self.oracle.model)
         if self.oracle.models and not before:
-            self.event("log", text=f"The Oracle is here: {self.oracle.model}", src="hub")
+            self.event("log", text=f"{self.cfg.companion}'s mind is here: {self.oracle.model}", src="hub")
 
     def oracle_ready(self) -> bool:
         return self.cfg.oracle.enabled and self.oracle.ready
@@ -594,7 +594,7 @@ class Hub:
             try:
                 self.teach(topic, priority, focus)
             except Exception as e:
-                self.event("error", text=f"Oracle lesson on {topic}: {type(e).__name__}: {e}")
+                self.event("error", text=f"{self.cfg.companion}'s lesson on {topic}: {type(e).__name__}: {e}")
             finally:
                 self.teaching = False
 

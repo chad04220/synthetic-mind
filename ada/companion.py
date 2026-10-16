@@ -68,6 +68,8 @@ class Companion:
         self.life = life
         self.suggestion = None
         self.recent_labels: deque = deque(maxlen=6)
+        self.failed: dict[str, float] = {}            # option label -> when it last failed
+        self.current_label = ""
         self.plan: ag.Plan | None = None
         self.waiting: tuple | None = None            # (request id, since, options) while the model chooses
         self.late: tuple | None = None               # a question the model is still answering after Wren moved on
@@ -280,6 +282,7 @@ class Companion:
             return False
         p.perception = self.w.perceive(me=self.b)
         self.plan = p
+        self.current_label = label
         self.intent = {"text": label or ag.say(goal, self.name), "goal": ag.say(goal, self.name), "t": time.time()}
         self.life.link.send("event", kind="wren_intent", text=self.intent["text"], reason=goal.reason)
         say = self.pending_line or line
@@ -314,6 +317,8 @@ class Companion:
                 self.narrate(narration)
         if ok:
             self.consequences(info)
+        elif self.current_label:
+            self.failed[self.current_label] = self.now()
         if ok and p.then:
             nxt = p.then.pop(0)
             p2, why = ag.plan(w, nxt, self.b, depth=p.depth)
@@ -443,6 +448,8 @@ class Companion:
         recent = [x for x in self.recent_labels]
 
         def add(label, goal, score, kind="chore", line="", suggest=None):
+            if self.now() - self.failed.get(label, -1e9) < 90:
+                return                                  # it just tried that and it didn't work: not again yet
             if kind in ("play", "rest", "self", "talk", "teach") and score < 6:
                 score -= 1.2 * recent.count(label)          # variety: not the same pastime again and again
             out.append(Option(label, goal, score + self.rng.random() * 0.3, kind, line, suggest))

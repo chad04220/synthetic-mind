@@ -1018,7 +1018,7 @@ function buildVegetation(G, season) {
       for (let i = 0; i < 3; i++) {
         const pz = y + 0.2 + i * 0.3;
         sc.ridge.add(cx, pz, mat4(cx, top + 0.035, pz, 0.96, 0.07, 0.15), vary(COL.soilRidge, r(), 0.08));
-        if (season.field !== "none") for (let j = 0; j < 3; j++) {
+        if (season.field !== "none" && !S.kinds.plant) for (let j = 0; j < 3; j++) { // (a world with plant entities shows bare tilled soil)
           const px = x + 0.18 + j * 0.32 + (r() - 0.5) * 0.06;
           const [col, s] = season.field === "wheat" ? [C("#e0bb52"), 1.8] : season.field === "young" ? [C("#7cc74a"), 0.8] : [C("#a98f52"), 0.6];
           sc.tuft.add(px, pz, mat4(px, top + 0.06, pz, s * 0.7, s, s * 0.7, r() * 6), vary(col, r(), 0.1));
@@ -1027,6 +1027,21 @@ function buildVegetation(G, season) {
     } else if (k === 19) { // cave: a few glowing crystals
       if (r() < 0.3) { const px = x + 0.3 + r() * 0.4, pz = y + 0.3 + r() * 0.4, s = 0.15 + r() * 0.1;
         sc.crystal.add(px, pz, mat4(px, top + s * 0.5, pz, s, s, s, r() * 6, (r() - 0.5) * 0.5), C(r() < 0.5 ? "#9fd4ff" : "#c9a6ff")); }
+    } else if (k === 0 && buildingAt(x, y) < 0 && (reg === "meadow" || reg === "lookout" || reg === "woods" || reg === "pond") && r() < 0.07) {
+      // the wilder corners: a round bush, or a clump of flowers on long stems
+      const px = x + 0.3 + r() * 0.4, pz = y + 0.3 + r() * 0.4;
+      if (r() < 0.55) {
+        const s = 0.22 + r() * 0.14;
+        const bc = vary(shade(season.leaf[0], 0.85), r(), 0.12);
+        sc.canopy.add(px, pz, mat4(px, top + s * 0.55, pz, s * 1.2, s * 0.95, s * 1.2, r() * 6), bc);
+        sc.canopy.add(px + s * 0.8, pz + s * 0.3, mat4(px + s * 0.8, top + s * 0.4, pz + s * 0.3, s * 0.8, s * 0.7, s * 0.8, r() * 6), shade(bc, 0.92));
+        sc.tuft.add(px, pz, mat4(px + 0.2, top, pz, 1.1, 1, 1.1, r() * 6), vary(season.tuft, r(), 0.12));
+      } else if (sname !== "winter") {
+        const cols = ["#ffd166", "#ffffff", "#ff8fab", "#c77dff", "#7bdff2"], col = C(cols[Math.floor(r() * cols.length)]);
+        for (let i = 0; i < 3; i++) { const qx = px + (r() - 0.5) * 0.3, qz = pz + (r() - 0.5) * 0.3, s = 1.1 + r() * 0.4;
+          sc.tuft.add(qx, qz, mat4(qx, top, qz, s * 0.8, s * 1.3, s * 0.8, r() * 6), vary(season.tuft, r(), 0.12));
+          sc.bloom.add(qx, qz, mat4(qx, top + 0.26 + r() * 0.08, qz, 0.085, 0.06, 0.085, r() * 6), vary(col, r(), 0.06)); }
+      }
     } else if ((k === 0 || k === 15) && hi && r() < 0.4) { // decorative grass tufts
       const n = 1 + Math.floor(r() * 2);
       for (let i = 0; i < n; i++) { const px = x + 0.1 + r() * 0.8, pz = y + 0.1 + r() * 0.8, s = 0.7 + r() * 0.6;
@@ -1729,7 +1744,7 @@ function makeFigure(name, color, role = "", isPlayer = false, hat = null) {
   g.add(mesh(B));
   // a blanket, shown only while lying in bed (local +z is up then)
   const blanket = new THREE.Mesh(UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0x7fb3a6 }));
-  blanket.position.set(0, 0.36, 0.08); blanket.scale.set(0.9, 0.86, 0.34); blanket.visible = false; blanket.castShadow = true; g.add(blanket);
+  blanket.position.set(0, 0.34, 0.1); blanket.scale.set(0.9, 0.8, 0.24); blanket.visible = false; blanket.castShadow = true; g.add(blanket);
   S.scene.add(g);
   return { group: g, parts, mat: fmat, blanket, x: 0, z: 0, y: 0, heading: 0, walk: 0, moving: false, init: false };
 }
@@ -1882,7 +1897,8 @@ function updateEnv(dt) {
   // clouds
   S.cloudMat.color.copy(new THREE.Color(1, 1, 1).multiplyScalar(E.cloudCol));
   S.cloudMat.emissive.copy(E.hor).multiplyScalar(0.45);
-  S.cloudMat.opacity = 0.95 - 0.55 * smooth(40, 90, S.camera.position.y);
+  S.cloudMat.opacity = 0.95 - 0.88 * smooth(24, 50, S.camera.position.y);
+  S.clouds.visible = S.cloudMat.opacity > 0.1;
 }
 
 // ───────────────────────────────────────────────────────────── per-frame updates
@@ -1959,7 +1975,7 @@ function updatePeople(dt) {
     // lying on the back in bed: feet toward the foot end, head on the pillow
     const tx = bed ? bed.px - bed.hx * 0.86 : p.x + 0.5, tz = bed ? bed.pz - bed.hz * 0.86 : p.y + 0.5;
     const speed = moveToward(f, tx, tz, dt);
-    const ground = bed ? bed.top + 0.1 : standYAt(f.x, f.z); f.y = lerp(f.y || ground, ground, damp(10, dt));
+    const ground = bed ? bed.top + 0.06 : standYAt(f.x, f.z); f.y = lerp(f.y || ground, ground, damp(10, dt));
     const target = bed ? Math.atan2(-bed.hx, -bed.hz) : speed > 0.2 ? Math.atan2(f.dirX, f.dirZ) : faceAngle(p.facing);
     f.heading = turnTo(f.heading, target, damp(bed ? 14 : 10, dt));
     animateFigure(f, dt, bed ? 0 : speed, p.sleeping);
@@ -2078,7 +2094,7 @@ function updateSprites(dt, t) {
         const gs = (e.kind === "fireplace" ? 1.1 : 0.55) * fl;
         G.push(f.fire.x, f.fire.y + 0.1, f.fire.z, gs, gs, 0, 0, 1, 1, 1, 0.5, 0.18, 0.18 + night * 0.17);
         lit.push({ x: f.fire.x, y: f.fire.y + 0.35, z: f.fire.z, fire: true, hearth: true, col: [1, 0.55, 0.2], fl, power: k.light || (e.kind === "fireplace" ? 6 : 2) });
-        if (e.kind === "fireplace") for (const ch of S.chimneys || []) if (ch.id === e.id) puffs.push([ch.p.x, ch.p.y, ch.p.z, 0.85, 3.6, 1.15, 0.78, 0.11]);
+        if (e.kind === "fireplace") for (const ch of S.chimneys || []) if (ch.id === e.id) puffs.push([ch.p.x, ch.p.y, ch.p.z, 0.7, 3.6, 1.1, 0.66, 0.11]);
       }
       if (e.steam) { const f2 = S.furn?.get(e.id); const p = f2?.top || new THREE.Vector3(e.px, ground + 0.8, e.pz); puffs.push([p.x, p.y + 0.1, p.z, 0.6, 1.0, 0.4, 0.97, 0.45]); }
       if (e.smoke) puffs.push([e.px, ground + 0.9, e.pz, 0.9, 1.3, 0.55, 0.28, 0.5]);
@@ -2349,7 +2365,7 @@ function snapCamera() {
 }
 function focusPoint() {
   const c = S.cam, w = S.world;
-  if (c.focus === "overview" && w) return tmpV2.set(w.W / 2, 1.5, w.H / 2).clone();
+  if (c.focus === "overview" && w) return tmpV2.set(w.W / 2, 1.5, w.H * 0.56).clone();
   if (S.mode === "visit" && S.local.init) return new THREE.Vector3(S.local.x, S.local.y + (c.fp ? 0.82 : 0.95) + (c.fp ? S.local.hop : S.local.hop * 0.4), S.local.z);
   if (c.focus === "you" && S.avatar?.group.visible) return S.avatar.group.position.clone().add(new THREE.Vector3(0, 0.8, 0));
   if (c.focus.startsWith("person:")) { const f = S.people.get(c.focus.slice(7)); if (f) return f.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)); }
@@ -2717,7 +2733,7 @@ function setQuality(q) {
 function focusOn(what) {
   if (!S.inited) return;
   const c = S.cam;
-  if (what === "overview") { c.focus = "overview"; c.tDist = Math.max(S.world?.W || 128, S.world?.H || 96) * 0.95; c.tPitch = 0.95; }
+  if (what === "overview") { c.focus = "overview"; c.tDist = Math.max(S.world?.W || 128, S.world?.H || 96) * 1.02; c.tPitch = 0.98; }
   else if (what === "you") { c.focus = "you"; if (S.mode === "visit") { c.tYaw = c.yaw = S.local.heading + Math.PI; c.tPitch = c.pitch = 0.32; } else { c.tDist = 11; c.tPitch = 0.65; } }
   else if (what && what !== "synth" && S.people.has(what)) { c.focus = "person:" + what; if (S.mode !== "visit") { c.tDist = 12; c.tPitch = 0.7; } }
   else { c.focus = "synth"; if (S.mode !== "visit") { c.tDist = 13; c.tPitch = 0.72; } }

@@ -746,7 +746,16 @@ def _cook_steps(w: World, g: Goal, me: Being):
                     return Goal("take", k)
             return f"There is nothing to put in the {want}."
         return Goal("put", "pot", "stove")
+    return _stove_ready(w)
+
+
+def _stove_ready(w: World):
+    """The stove lit, with wood enough to finish the job."""
     stove = _stove(w)
+    if stove is None:
+        return "There is no stove."
+    if stove.get("fuel", 0) < 200:
+        return Goal("put", "log", "stove", reason="The stove needs more wood.")
     if not stove.get("lit"):
         return Goal("light", "stove")
     return None
@@ -774,8 +783,7 @@ def _bake_steps(w: World, g: Goal, me: Being):
         if locate(w, me, k) is None:
             return f"There is no {k} for the {want}."
         return Goal("take", k)
-    if not _stove(w).get("lit"):
-        return Goal("light", "stove")
+    return _stove_ready(w)
     return None
 
 
@@ -793,8 +801,9 @@ def _tea_steps(w: World, g: Goal, me: Being):
         if held.get("water", 0) < 0.3:
             return Goal("fill", "kettle")
         return Goal("put", "kettle", "stove")
-    if not _stove(w).get("lit"):
-        return Goal("light", "stove")
+    ready = _stove_ready(w)
+    if ready:
+        return ready
     if g.obj == "tea":
         for k in ("cup", "mint"):
             if not carried(me, k):
