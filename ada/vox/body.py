@@ -224,12 +224,6 @@ class Body:
         elif self.anim in ("walk", "swim", "climb"):
             self.anim = "idle"
 
-    def _solid_box(self, bx, by, bz):
-        bid = self.world.get(bx, by, bz)
-        if SOLID[bid]:
-            return HEIGHT[bid]
-        return 0.0
-
     def _move(self, dx, dy, dz):
         hw = self.w / 2
         was_ground = self.on_ground
@@ -284,84 +278,57 @@ class Body:
         return False
 
     def _clip_y(self, x0, x1, y0, y1, z0, z1, d):
-        if d == 0:
-            return 0.0
-        get = self.world.get
-        xs = range(_f(x0 + EPS), _f(x1 - EPS) + 1)
-        zs = range(_f(z0 + EPS), _f(z1 - EPS) + 1)
-        if d < 0:
-            lo = _f(y0 + d) - 0
-            for by in range(_f(y0 - EPS), lo - 1, -1):
-                for bx in xs:
-                    for bz in zs:
-                        bid = get(bx, by, bz)
-                        if SOLID[bid]:
-                            top = by + HEIGHT[bid]
-                            if top <= y0 + EPS and top > y0 + d:
-                                d = top - y0
-                if by + 1 <= y0 + d:
-                    break
-            return d
-        hi = _f(y1 + d)
-        for by in range(_f(y1 - EPS) if y1 - _f(y1) > EPS else _f(y1), hi + 1):
-            for bx in xs:
-                for bz in zs:
-                    bid = get(bx, by, bz)
-                    if SOLID[bid] and by >= y1 - EPS and by < y1 + d:
-                        d = by - y1
-        return d
+        return self._clip(1, x0, y0, z0, x1, y1, z1, d)
 
     def _clip_x(self, x0, x1, y0, y1, z0, z1, d):
-        if d == 0:
-            return 0.0
-        get = self.world.get
-        ys = range(_f(y0 + EPS) - (1 if y0 - _f(y0) < 0.5 else 0), _f(y1 - EPS) + 1)
-        zs = range(_f(z0 + EPS), _f(z1 - EPS) + 1)
-        if d > 0:
-            for bx in range(_f(x1 - EPS) + (0 if x1 - _f(x1) > EPS else 0), _f(x1 + d) + 1):
-                if bx < x1 - EPS:
-                    continue
-                for by in ys:
-                    for bz in zs:
-                        bid = get(bx, by, bz)
-                        if SOLID[bid] and by + HEIGHT[bid] > y0 + EPS and by < y1 - EPS:
-                            d = min(d, bx - x1)
-            return max(d, 0.0)
-        for bx in range(_f(x0 + EPS) - 1, _f(x0 + d) - 1, -1):
-            if bx + 1 > x0 + EPS:
-                continue
-            for by in ys:
-                for bz in zs:
-                    bid = get(bx, by, bz)
-                    if SOLID[bid] and by + HEIGHT[bid] > y0 + EPS and by < y1 - EPS:
-                        d = max(d, bx + 1 - x0)
-        return min(d, 0.0)
+        return self._clip(0, x0, y0, z0, x1, y1, z1, d)
 
     def _clip_z(self, x0, x1, y0, y1, z0, z1, d):
+        return self._clip(2, x0, y0, z0, x1, y1, z1, d)
+
+    def _clip(self, axis, x0, y0, z0, x1, y1, z1, d):
+        """Largest movement ≤ |d| along ``axis`` before the box hits a solid block box."""
         if d == 0:
             return 0.0
         get = self.world.get
-        ys = range(_f(y0 + EPS) - (1 if y0 - _f(y0) < 0.5 else 0), _f(y1 - EPS) + 1)
-        xs = range(_f(x0 + EPS), _f(x1 - EPS) + 1)
-        if d > 0:
-            for bz in range(_f(z1 - EPS), _f(z1 + d) + 1):
-                if bz < z1 - EPS:
-                    continue
-                for by in ys:
-                    for bx in xs:
-                        bid = get(bx, by, bz)
-                        if SOLID[bid] and by + HEIGHT[bid] > y0 + EPS and by < y1 - EPS:
-                            d = min(d, bz - z1)
-            return max(d, 0.0)
-        for bz in range(_f(z0 + EPS) - 1, _f(z0 + d) - 1, -1):
-            if bz + 1 > z0 + EPS:
+        ex0, ey0, ez0, ex1, ey1, ez1 = x0, y0, z0, x1, y1, z1
+        if axis == 0:
+            ex0, ex1 = min(x0, x0 + d), max(x1, x1 + d)
+        elif axis == 1:
+            ey0, ey1 = min(y0, y0 + d), max(y1, y1 + d)
+        else:
+            ez0, ez1 = min(z0, z0 + d), max(z1, z1 + d)
+        for by in range(_f(ey0), _f(ey1 - EPS) + 1):
+            if by < 0 or by > 255:
                 continue
-            for by in ys:
-                for bx in xs:
+            for bx in range(_f(ex0), _f(ex1 - EPS) + 1):
+                for bz in range(_f(ez0), _f(ez1 - EPS) + 1):
                     bid = get(bx, by, bz)
-                    if SOLID[bid] and by + HEIGHT[bid] > y0 + EPS and by < y1 - EPS:
-                        d = max(d, bz + 1 - z0)
-        return min(d, 0.0)
+                    if not SOLID[bid]:
+                        continue
+                    top = by + HEIGHT[bid]
+                    if axis == 0:
+                        if top <= y0 + EPS or by >= y1 - EPS or bz + 1 <= z0 + EPS or bz >= z1 - EPS:
+                            continue
+                        if d > 0 and bx >= x1 - EPS:
+                            d = min(d, bx - x1)
+                        elif d < 0 and bx + 1 <= x0 + EPS:
+                            d = max(d, bx + 1 - x0)
+                    elif axis == 1:
+                        if bx + 1 <= x0 + EPS or bx >= x1 - EPS or bz + 1 <= z0 + EPS or bz >= z1 - EPS:
+                            continue
+                        if d > 0 and by >= y1 - EPS:
+                            d = min(d, by - y1)
+                        elif d < 0 and top <= y0 + EPS:
+                            d = max(d, top - y0)
+                    else:
+                        if top <= y0 + EPS or by >= y1 - EPS or bx + 1 <= x0 + EPS or bx >= x1 - EPS:
+                            continue
+                        if d > 0 and bz >= z1 - EPS:
+                            d = min(d, bz - z1)
+                        elif d < 0 and bz + 1 <= z0 + EPS:
+                            d = max(d, bz + 1 - z0)
+        return d
 
     # ------------------------------------------------------------------ vitals
     def vitals(self):
