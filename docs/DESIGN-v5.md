@@ -4,7 +4,8 @@ A deep, fully editable voxel sandbox, and one inhabitant: a small pretrained lan
 on your GPU with llama.cpp, which perceives the world, decides, acts and talks, fast. You can talk
 to it, and you can walk into its world and dig, build and hand it things.
 
-No training, no Academy: the GPU belongs to the inhabitant's model (low latency) and the browser.
+No Academy: the GPU belongs to the inhabitant's model (low latency) and the browser, except while it
+practises (§3.4), when its model server is stopped and the GPU trains its adapter.
 
 ## 1. Processes
 - **Hub** (FastAPI, no torch): serves the page, carries messages, runs the model server (llama.cpp
@@ -114,6 +115,19 @@ skill reports progress and ends with `{ok, result text, details}`; a skill can b
 - **Talking:** your messages arrive as events and interrupt idle skills; it answers with `say`
   (shown as a chat reply and as a speech bubble in the world). It hears you only within 24 blocks
   when you are in the world, or always through the chat box (configurable: "radio").
+
+### 3.4 Practice (`practice.py`, `ada/coach.py`)
+- It knows it can learn: `reflect` (judge recent decisions against their outcomes, write the better
+  action for bad ones, keep lessons) and `practice` (train its own model) are skills of its mind, and
+  its observation shows how often it has practised and how many of its actions work.
+- Every decision is logged with the exact system prompt and observation, the reply and the outcome;
+  every judgement (its own, yours) too. Examples: decisions that worked and nobody judged bad (yours
+  liked ×2), the better action for ones that went wrong, nothing else; no skill above a third.
+- A LoRA adapter (rank 16, all attention and MLP projections) on the original Hugging Face weights,
+  loss on the reply tokens only (logits only there), continuing from the previous adapter with older
+  examples replayed; exported as a llama.cpp LoRA GGUF and loaded with `--lora`.
+- After 30 decisions with a new adapter, their success rate is compared with the previous one's;
+  a drop of more than 12 points rolls it back, and it is told.
 
 ## 4. Page protocol
 - `GET /api/blocks` → the registry (for colours and flags), `GET /api/items`, `GET /api/recipes`.

@@ -194,9 +194,10 @@ def train(exs: list[dict], base: Path, out: Path, resume: Path | None = None, r:
     model = AutoModelForCausalLM.from_pretrained(str(base), torch_dtype=dtype).to(device)
     model.requires_grad_(False)
     model.config.use_cache = False
-    if device == "cuda":
-        model.gradient_checkpointing_enable()
-        model.enable_input_require_grads()
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()
+    decoder, head = model.get_decoder(), model.get_output_embeddings()
+    cap = getattr(model.config, "final_logit_softcapping", None)
     init = torch.load(resume, map_location=device) if resume and resume.exists() else None
     params = attach_lora(model, r, alpha, init)
     pairs = [(tokenize(tok, e, max_len), e["weight"]) for e in exs]
@@ -221,8 +222,15 @@ def train(exs: list[dict], base: Path, out: Path, resume: Path | None = None, r:
             i = order.pop()
             ids, labels = data[i]
             x = torch.tensor([ids], device=device)
-            y = torch.tensor([labels], device=device)
-            loss = model(input_ids=x, labels=y).loss * weights[i] / accum
+            y = torch.tensor(labels[1:], device=device)
+            # logits only where the reply is predicted: the whole vocabulary at every prompt position
+            # would cost gigabytes (151k words × thousands of tokens) and teach nothing
+            at = (y != -100).nonzero().squeeze(1)
+            h = decoder(input_ids=x).last_hidden_state[0, at]
+            z = head(h).float()
+            if cap:
+                z = torch.tanh(z / cap) * cap
+            loss = torch.nn.functional.cross_entropy(z, y[at]) * weights[i] / accum
             loss.backward()
             total += loss.item()
         lr_now = lr * min(1.0, (step + 1) / 10) * (0.5 * (1 + math.cos(math.pi * step / steps)))
