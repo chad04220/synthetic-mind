@@ -1,22 +1,28 @@
-"""The built-in voices: llama.cpp servers with small models, running on the CPU.
-
-One server runs the Sprite of All Knowing's mind (see sprite.py). The default model also sees and
-hears (images and audio, through its multimodal projector), so the Sprite can look at Zen's paintings
-and sculptures and listen to its songs. The class can run several servers (one per role).
+"""The inhabitant's model: a llama.cpp server with a small instruct model, on the GPU when there is one.
 
 Nothing to install by hand. On first use the Hub downloads llama.cpp's prebuilt server for this
 computer (from llama.cpp's GitHub releases) and the chosen model (a GGUF file from Hugging Face)
-into the `oracle/` folder next to run.py, starts each `llama-server` on a free local port with its
-share of the CPU threads, and keeps them running. The GPU is never touched: the CPU build
-of llama.cpp is used, so the GPU stays entirely with the Academy.
+into the `oracle/` folder next to run.py, starts `llama-server` on a free local port and keeps it
+running. Which build:
 
-Ollama remains available as the other backend (Settings).
+- Windows with an NVIDIA card: the CUDA build (and its CUDA runtime files), every layer on the GPU;
+- other Windows and Linux: the Vulkan build (NVIDIA, AMD and Intel GPUs), every layer on the GPU;
+- macOS on Apple silicon: the regular build, which uses Metal;
+- and when a GPU build is missing or fails to start, the CPU build.
+
+Every decision is one request with a JSON schema, so the reply is always a valid action. The long
+fixed instructions come first in every request and stay in the server's prompt cache: only the
+observation is new, which keeps a decision at a fraction of a second.
+
+Practice (see ada/agent/practice.py) produces LoRA adapters (GGUF); the server loads the active one
+with `--lora`, and switching adapters restarts it (a few seconds).
 """
 from __future__ import annotations
 
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -28,42 +34,74 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-# key: (label, Hugging Face repo, file, size in bytes). All ungated, so no Hugging Face login.
-# key: (label, Hugging Face repo, model file, size, optional (projector file, size) for seeing and hearing)
+# key: label, GGUF repo and file and its size, the original weights (for Practice), and the
+# family (how practice names its layers in the adapter). All ungated: no Hugging Face login.
 CATALOG = {
-    "qwen2.5-omni-3b": ("Qwen 2.5 Omni 3B (sees and hears)", "ggml-org/Qwen2.5-Omni-3B-GGUF",
-                        "Qwen2.5-Omni-3B-Q4_K_M.gguf", 2104931648, ("mmproj-Qwen2.5-Omni-3B-Q8_0.gguf", 1538031328)),
-    "gemma-2-2b": ("Gemma 2 2B Instruct", "bartowski/gemma-2-2b-it-GGUF", "gemma-2-2b-it-Q4_K_M.gguf", 1708582752),
-    "qwen2.5-1.5b": ("Qwen 2.5 1.5B Instruct (light)", "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-                     "qwen2.5-1.5b-instruct-q4_k_m.gguf", 1117320736),
-    "qwen2.5-0.5b": ("Qwen 2.5 0.5B Instruct (tiny, fastest)", "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
-                     "qwen2.5-0.5b-instruct-q4_k_m.gguf", 491400032),
-    "llama-3.2-3b": ("Llama 3.2 3B Instruct (strongest, slowest)", "bartowski/Llama-3.2-3B-Instruct-GGUF",
-                     "Llama-3.2-3B-Instruct-Q4_K_M.gguf", 2019377696),
+    "qwen2.5-1.5b": dict(label="Qwen 2.5 1.5B Instruct (fast, recommended)", repo="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+                         file="qwen2.5-1.5b-instruct-q4_k_m.gguf", size=1117320736, hf="Qwen/Qwen2.5-1.5B-Instruct",
+                         family="qwen2"),
+    "qwen2.5-3b": dict(label="Qwen 2.5 3B Instruct (smarter)", repo="Qwen/Qwen2.5-3B-Instruct-GGUF",
+                       file="qwen2.5-3b-instruct-q4_k_m.gguf", size=2104932768, hf="Qwen/Qwen2.5-3B-Instruct",
+                       family="qwen2"),
+    "llama-3.2-3b": dict(label="Llama 3.2 3B Instruct", repo="bartowski/Llama-3.2-3B-Instruct-GGUF",
+                         file="Llama-3.2-3B-Instruct-Q4_K_M.gguf", size=2019377696, hf="unsloth/Llama-3.2-3B-Instruct",
+                         family="llama"),
+    "llama-3.2-1b": dict(label="Llama 3.2 1B Instruct (fastest)", repo="bartowski/Llama-3.2-1B-Instruct-GGUF",
+                         file="Llama-3.2-1B-Instruct-Q4_K_M.gguf", size=807694464, hf="unsloth/Llama-3.2-1B-Instruct",
+                         family="llama"),
+    "gemma-3-1b": dict(label="Gemma 3 1B Instruct", repo="ggml-org/gemma-3-1b-it-GGUF",
+                       file="gemma-3-1b-it-Q4_K_M.gguf", size=806058240, hf="unsloth/gemma-3-1b-it", family="gemma3"),
+    "qwen2.5-0.5b": dict(label="Qwen 2.5 0.5B Instruct (tiny, for weak computers)", repo="Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+                         file="qwen2.5-0.5b-instruct-q4_k_m.gguf", size=491400032, hf="Qwen/Qwen2.5-0.5B-Instruct",
+                         family="qwen2"),
+    "qwen2.5-7b": dict(label="Qwen 2.5 7B Instruct (needs 8 GB of GPU memory)", repo="bartowski/Qwen2.5-7B-Instruct-GGUF",
+                       file="Qwen2.5-7B-Instruct-Q4_K_M.gguf", size=4683074240, hf="Qwen/Qwen2.5-7B-Instruct",
+                       family="qwen2"),
 }
-DEFAULT_MODEL = "qwen2.5-omni-3b"
+DEFAULT_MODEL = "qwen2.5-1.5b"
 
-
-def senses(key: str) -> bool:
-    """Can this model see images and hear audio?"""
-    return len(CATALOG.get(key, ())) > 4
 # llama.cpp publishes a release many times a day, and each one appears before its files have
 # finished uploading: look through the recent ones for the newest that has the file we need.
 RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20"
 LATEST_PAGE = "https://github.com/ggml-org/llama.cpp/releases/latest"
 
 
-def platform_asset() -> str | None:
-    """The suffix of the llama.cpp release file with the CPU build for this computer."""
+def nvidia_gpu() -> dict | None:
+    """The NVIDIA card, if there is one: {name, memory (MB)}."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip().splitlines()
+        name, mem = out[0].rsplit(",", 1)
+        return {"name": name.strip(), "memory": int(float(mem))}
+    except Exception:  # noqa: BLE001 - no usable card
+        return None
+
+
+def builds(gpu: bool = True) -> list[dict]:
+    """The llama.cpp builds to try on this computer, best first: {device, patterns (regexes for the
+    release files: the program first, then any runtime it needs)}."""
     system, machine = platform.system(), platform.machine().lower()
     arm = machine in ("arm64", "aarch64")
+    out = []
     if system == "Windows":
-        return f"bin-win-cpu-{'arm64' if arm else 'x64'}.zip"
-    if system == "Linux":
-        return f"bin-ubuntu-{'arm64' if arm else 'x64'}.tar.gz"
-    if system == "Darwin":
-        return f"bin-macos-{'arm64' if arm else 'x64'}.tar.gz"
-    return None
+        if gpu and not arm and nvidia_gpu():
+            out.append({"device": "cuda", "patterns": [r"^llama-.*-bin-win-cuda-(12\.\d+)-x64\.zip$",
+                                                       r"^cudart-llama-bin-win-cuda-{v}-x64\.zip$"]})
+        if gpu and not arm:
+            out.append({"device": "vulkan", "patterns": [r"^llama-.*-bin-win-vulkan-x64\.zip$"]})
+        out.append({"device": "cpu", "patterns": [rf"^llama-.*-bin-win-cpu-{'arm64' if arm else 'x64'}\.zip$"]})
+    elif system == "Linux":
+        if gpu and not arm:
+            out.append({"device": "vulkan", "patterns": [r"^llama-.*-bin-ubuntu-vulkan-x64\.(tar\.gz|zip)$"]})
+        out.append({"device": "cpu", "patterns": [rf"^llama-.*-bin-ubuntu-{'arm64' if arm else 'x64'}\.(tar\.gz|zip)$"]})
+    elif system == "Darwin":
+        out.append({"device": "metal" if arm and gpu else "cpu",
+                    "patterns": [rf"^llama-.*-bin-macos-{'arm64' if arm else 'x64'}\.(tar\.gz|zip)$"]})
+    return out
 
 
 def free_port() -> int:
@@ -73,13 +111,11 @@ def free_port() -> int:
 
 
 class LocalLLM:
-    """One llama-server (the Sprite's mind). Each runs as its own process on its
-    own port; the program and the model files are shared (downloaded once), and several servers
-    loading the same model file share its memory, because llama.cpp maps it rather than copying it."""
+    """One llama-server running the inhabitant's model."""
 
-    _install = threading.Lock()      # one download at a time, shared by every server
+    _install = threading.Lock()      # one download at a time
 
-    def __init__(self, folder: Path, log=None, role: str = "oracle"):
+    def __init__(self, folder: Path, log=None, role: str = "mind"):
         self.folder = folder
         self.role = role
         self.log = log or (lambda text, level="info": None)
@@ -88,55 +124,56 @@ class LocalLLM:
         self.url = ""
         self.model_key = ""
         self.threads = 0
-        self.status = "off"          # off | downloading | starting | ready | error
+        self.device = ""             # cuda | vulkan | metal | cpu, once running
+        self.adapter: Path | None = None
+        self.status = "off"          # off | waiting | downloading | starting | ready | error
         self.detail = ""
         self.progress = 0.0
         self.error = ""
         self.failed_at = 0.0
         self.busy = False
         self.ctx, self.slots = 8192, 2
-        self.closed = False          # the program is shutting down: never start again
+        self.use_gpu = True
+        self.bad_builds: set[str] = set()     # GPU builds that wouldn't start here
+        self.closed = False
+        self.name = ""
 
     # ------------------------------------------------------------------ state
     @property
     def ready(self) -> bool:
         return self.status == "ready" and self.proc is not None and self.proc.poll() is None
 
+    @property
+    def who(self) -> str:
+        return self.name or "the inhabitant's model"
+
     def label(self, key: str | None = None) -> str:
-        return CATALOG.get(key or self.model_key, (key or self.model_key,))[0]
+        return CATALOG.get(key or self.model_key, {}).get("label", key or self.model_key)
 
     def catalog(self) -> list[dict]:
-        out = []
-        for key, entry in CATALOG.items():
-            label, _repo, file, size = entry[:4]
-            extra = entry[4] if len(entry) > 4 else None
-            have = (self.folder / "models" / file).exists() and (extra is None or (self.folder / "models" / extra[0]).exists())
-            out.append({"name": key, "label": label, "size": size + (extra[1] if extra else 0), "downloaded": have,
-                        "senses": extra is not None})
-        return out
+        return [{"name": k, "label": e["label"], "size": e["size"], "family": e["family"],
+                 "downloaded": (self.folder / "models" / e["file"]).exists()} for k, e in CATALOG.items()]
 
     def info(self) -> dict:
         return {"role": self.role, "status": self.status, "detail": self.detail, "progress": round(self.progress, 3),
-                "error": self.error, "model": self.model_key, "threads": self.threads}
+                "error": self.error, "model": self.model_key, "label": self.label() if self.model_key else "",
+                "device": self.device, "threads": self.threads, "gpu": nvidia_gpu_cached(),
+                "adapter": self.adapter.stem if self.adapter else None}
 
-    def wants(self, key: str, threads: int) -> bool:
-        """True when the server should be (re)started for this model and thread count."""
+    def wants(self, key: str, threads: int, adapter: Path | None = None, gpu: bool = True) -> bool:
+        """True when the server should be (re)started for this model, thread count and adapter."""
         if self.busy:
             return False
-        if self.ready and (key, threads) == (self.model_key, self.threads):
+        same = (key, threads, adapter, gpu) == (self.model_key, self.threads, self.adapter, self.use_gpu)
+        if self.ready and same:
             return False
-        if self.status == "error" and (key, threads) == (self.model_key, self.threads):
+        if self.status == "error" and same:
             return time.time() - self.failed_at > 300          # retry a failure every 5 minutes
         return True
 
     # ------------------------------------------------------------------ setup
-    name = ""                        # who this model speaks for ("the Sprite's mind"); the Hub sets it
-
-    @property
-    def who(self) -> str:
-        return self.name or ("the built-in Oracle" if self.role == "oracle" else f"{self.role}'s voice")
-
-    def ensure(self, key: str, threads: int, ctx: int = 8192, slots: int = 2) -> None:
+    def ensure(self, key: str, threads: int, ctx: int = 8192, slots: int = 2, adapter: Path | None = None,
+               gpu: bool = True) -> None:
         """Download what is missing and (re)start the server. Runs on a background thread."""
         with self.lock:
             if self.busy or self.closed:
@@ -146,11 +183,27 @@ class LocalLLM:
             key = key if key in CATALOG else DEFAULT_MODEL
             self.stop()
             self.model_key, self.threads, self.error, self.ctx, self.slots = key, threads, "", ctx, slots
+            self.adapter = adapter if adapter and Path(adapter).exists() else None
+            self.use_gpu = gpu
             self.status, self.detail = "waiting", "Waiting for downloads to finish"
             with LocalLLM._install:
-                exe = self._server()
                 model = self._model(key)
-            self._start(exe, model, threads)
+            for build in builds(gpu):
+                if build["device"] in self.bad_builds:
+                    continue
+                with LocalLLM._install:
+                    exe = self._server(build)
+                if exe is None:
+                    continue
+                try:
+                    self._start(exe, model, threads, build["device"])
+                    return
+                except RuntimeError as e:
+                    if build["device"] == "cpu" or self.closed:
+                        raise
+                    self.bad_builds.add(build["device"])
+                    self.log(f"the {build['device']} build of llama.cpp didn't start here ({e}); trying the next", "warning")
+            raise RuntimeError("no llama.cpp build for this computer would start; see the logs folder")
         except Exception as e:  # noqa: BLE001 - shown to the user, retried later
             self.status, self.error, self.failed_at = "error", f"{type(e).__name__}: {e}", time.time()
             self.detail = ""
@@ -158,52 +211,64 @@ class LocalLLM:
         finally:
             self.busy = False
 
-    def _find_exe(self) -> Path | None:
+    def _find_exe(self, device: str) -> Path | None:
         name = "llama-server.exe" if os.name == "nt" else "llama-server"
-        root = self.folder / "llama.cpp"
+        root = self.folder / f"llama.cpp-{device}"
         if not root.exists():
             return None
         found = sorted(root.rglob(name))
         return found[0] if found else None
 
-    def _server(self) -> Path:
-        exe = self._find_exe()
+    def _server(self, build: dict) -> Path | None:
+        """The llama-server program of this build, downloaded if needed (None if it isn't published)."""
+        device = build["device"]
+        exe = self._find_exe(device)
         if exe:
             return exe
-        suffix = platform_asset()
-        if not suffix:
-            raise RuntimeError(f"no prebuilt llama.cpp for {platform.system()} {platform.machine()}; use Ollama")
-        tag, url = self._find_release(suffix)
-        archive = self.folder / "downloads" / url.rsplit("/", 1)[1]
-        self._download(url, archive, f"llama.cpp {tag} (the engine for the Sprite's mind)")
-        dest = self.folder / "llama.cpp"
-        tmp = self.folder / "llama.cpp.tmp"
+        try:
+            tag, files = self._find_release(build["patterns"])
+        except RuntimeError as e:
+            if device == "cpu":
+                raise
+            self.log(f"no {device} build of llama.cpp to download ({e})", "warning")
+            return None
+        dest = self.folder / f"llama.cpp-{device}"
+        tmp = self.folder / f"llama.cpp-{device}.tmp"
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
-        if archive.name.endswith(".zip"):
-            with zipfile.ZipFile(archive) as z:
-                z.extractall(tmp)
-        else:
-            with tarfile.open(archive) as t:
-                try:
-                    t.extractall(tmp, filter="data")
-                except TypeError:                             # Python without extraction filters
-                    t.extractall(tmp)
+        for url in files:
+            archive = self.folder / "downloads" / url.rsplit("/", 1)[1]
+            self._download(url, archive, f"llama.cpp {tag} for the {device.upper() if device != 'cpu' else 'CPU'}")
+            if archive.name.endswith(".zip"):
+                with zipfile.ZipFile(archive) as z:
+                    z.extractall(tmp)
+            else:
+                with tarfile.open(archive) as t:
+                    try:
+                        t.extractall(tmp, filter="data")
+                    except TypeError:                         # Python without extraction filters
+                        t.extractall(tmp)
+            archive.unlink(missing_ok=True)
+        # a runtime archive (CUDA) belongs next to the program
+        progs = sorted(tmp.rglob("llama-server.exe" if os.name == "nt" else "llama-server"))
+        if not progs:
+            raise RuntimeError(f"llama-server wasn't in the {device} build")
+        for f in tmp.iterdir():
+            if f.is_file() and f.parent != progs[0].parent:
+                shutil.move(str(f), progs[0].parent / f.name)
         shutil.rmtree(dest, ignore_errors=True)
         tmp.replace(dest)
-        archive.unlink(missing_ok=True)
-        exe = self._find_exe()
-        if not exe:
-            raise RuntimeError(f"llama-server wasn't in {archive.name}")
+        exe = self._find_exe(device)
         if os.name != "nt":
             for f in exe.parent.iterdir():
                 if f.is_file():
                     f.chmod(f.stat().st_mode | 0o111)
-        self.log(f"installed llama.cpp {tag} in {dest}")
+        self.log(f"installed llama.cpp {tag} ({device}) in {dest}")
         return exe
 
-    def _find_release(self, suffix: str) -> tuple[str, str]:
-        """The newest llama.cpp release that has the CPU build for this computer: (tag, url)."""
+    def _find_release(self, patterns: list[str]) -> tuple[str, list[str]]:
+        """The newest llama.cpp release that has every file this build needs: (tag, urls).
+        A later pattern may use {v}: the first group the first pattern matched (the CUDA version)."""
         seen = []
         try:
             with self._get(RELEASES, timeout=20, headers={"Accept": "application/vnd.github+json"}) as r:
@@ -212,34 +277,39 @@ class LocalLLM:
                 if rel.get("draft"):
                     continue
                 seen.append(rel.get("tag_name", "?"))
-                for a in rel.get("assets", []):
-                    if a.get("name", "").endswith(suffix):
-                        return rel["tag_name"], a["browser_download_url"]
+                assets = {a.get("name", ""): a.get("browser_download_url") for a in rel.get("assets", [])}
+                urls, v = [], ""
+                for p in patterns:
+                    rx = re.compile(p.replace("{v}", re.escape(v)))
+                    hits = sorted((n for n in assets if rx.match(n)), reverse=True)    # the newest CUDA first
+                    if not hits:
+                        break
+                    if not v:
+                        m = rx.match(hits[0])
+                        v = m.group(1) if m and m.groups() else ""
+                    urls.append(assets[hits[0]])
+                if len(urls) == len(patterns):
+                    return rel["tag_name"], urls
         except (urllib.error.URLError, OSError, ValueError) as e:
-            self.log(f"couldn't list llama.cpp's releases on GitHub ({type(e).__name__}: {e}); trying its latest release page")
-        # Without the API (it allows 60 requests an hour), follow the "latest release" page to its tag.
-        try:
-            with self._get(LATEST_PAGE, timeout=20) as r:
-                tag = r.geturl().rstrip("/").rsplit("/", 1)[-1]
-            if tag.startswith("b"):
-                return tag, f"https://github.com/ggml-org/llama.cpp/releases/download/{tag}/llama-{tag}-{suffix}"
-        except (urllib.error.URLError, OSError) as e:
-            seen.append(f"latest page: {type(e).__name__}")
-        raise RuntimeError(f"no llama.cpp release with '{suffix}' found (looked at: {', '.join(seen[:8]) or 'nothing'}). "
-                           f"You can put llama-server and its files in {self.folder / 'llama.cpp'} yourself, or use Ollama")
+            self.log(f"couldn't list llama.cpp's releases on GitHub ({type(e).__name__}: {e})")
+        if len(patterns) == 1:
+            # Without the API (it allows 60 requests an hour), guess the file name from the latest tag.
+            try:
+                with self._get(LATEST_PAGE, timeout=20) as r:
+                    tag = r.geturl().rstrip("/").rsplit("/", 1)[-1]
+                name = patterns[0].strip("^$").replace(r"\.", ".").replace(".*", tag.join(["", ""]))
+                name = re.sub(r"\((tar\.gz)\|zip\)", r"\1", name)
+                if tag.startswith("b") and re.fullmatch(r"[\w.\-]+", name):
+                    return tag, [f"https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{name}"]
+            except (urllib.error.URLError, OSError) as e:
+                seen.append(f"latest page: {type(e).__name__}")
+        raise RuntimeError(f"no llama.cpp release with {patterns[0]} found (looked at: {', '.join(seen[:8]) or 'nothing'})")
 
     def _model(self, key: str) -> Path:
-        label, repo, file, _size = CATALOG[key][:4]
-        path = self.folder / "models" / file
+        e = CATALOG[key]
+        path = self.folder / "models" / e["file"]
         if not path.exists():
-            self._download(f"https://huggingface.co/{repo}/resolve/main/{file}", path, label)
-        self.mmproj = None
-        if len(CATALOG[key]) > 4:
-            proj = self.folder / "models" / CATALOG[key][4][0]
-            if not proj.exists():
-                self._download(f"https://huggingface.co/{repo}/resolve/main/{proj.name}", proj,
-                               f"{label}: its eyes and ears")
-            self.mmproj = proj
+            self._download(f"https://huggingface.co/{e['repo']}/resolve/main/{e['file']}", path, e["label"])
         return path
 
     @staticmethod
@@ -277,22 +347,23 @@ class LocalLLM:
         part.replace(path)
 
     # ------------------------------------------------------------------ the server
-    def _start(self, exe: Path, model: Path, threads: int) -> None:
-        self.status, self.detail, self.progress = "starting", f"Starting {self.who} ({self.label()})", 0.0
+    def _start(self, exe: Path, model: Path, threads: int, device: str) -> None:
+        self.status, self.detail, self.progress = "starting", f"Starting {self.label()} ({device.upper()})", 0.0
         if self.closed:
             raise RuntimeError("shutting down")
         port = free_port()
-        args = [str(exe), "-m", str(model), "--host", "127.0.0.1", "--port", str(port),
-                "-t", str(threads), "-c", str(self.ctx), "-np", str(self.slots), "-ngl", "0", "--no-webui"]
-        if getattr(self, "mmproj", None):
-            args += ["--mmproj", str(self.mmproj), "--no-mmproj-offload"]   # its eyes and ears, on the CPU too
-        if self.role != "oracle" and not getattr(self, "_no_extras", False):
-            # Villagers share one copy of the model: without repacking, every server maps the same
-            # file instead of keeping its own rearranged copy of the weights (about 1 GB each).
-            args.append("--no-repack")
+        args = [str(exe), "-m", str(model), "--host", "127.0.0.1", "--port", str(port), "-t", str(threads),
+                "-c", str(self.ctx), "-np", str(self.slots), "-ngl", "0" if device == "cpu" else "99", "--no-webui"]
+        if device != "cpu":
+            args += ["-fa", "on"] if not getattr(self, "_old_fa", False) else ["-fa"]
+        if self.adapter:
+            args += ["--lora", str(self.adapter)]
         (self.folder / "logs").mkdir(parents=True, exist_ok=True)
-        logf = open(self.folder / "logs" / f"llama-server-{self.role}.log", "a", encoding="utf-8", errors="replace")
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+        logpath = self.folder / "logs" / f"llama-server-{self.role}.log"
+        logf = open(logpath, "a", encoding="utf-8", errors="replace")
+        logf.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(args)}\n")
+        logf.flush()
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                      cwd=str(exe.parent), creationflags=flags)
         logf.close()
@@ -301,22 +372,23 @@ class LocalLLM:
         deadline = time.time() + 180
         while time.time() < deadline:
             if self.proc.poll() is not None:
-                if "--no-repack" in args and not getattr(self, "_no_extras", False):
-                    self._no_extras = True              # an older llama.cpp without that option
-                    return self._start(exe, model, threads)
-                raise RuntimeError(f"llama-server stopped (exit code {self.proc.returncode}); "
-                                   f"see {self.folder / 'logs' / f'llama-server-{self.role}.log'}")
+                tail = logpath.read_text(encoding="utf-8", errors="replace")[-3000:]
+                if "-fa" in args and not getattr(self, "_old_fa", False) and "flash" in tail.lower():
+                    self._old_fa = True                       # an older llama.cpp: -fa takes no value
+                    return self._start(exe, model, threads, device)
+                raise RuntimeError(f"llama-server stopped (exit code {self.proc.returncode}); see {logpath}")
             try:
                 with self._get(self.url + "/health", timeout=2) as r:
                     if r.status == 200:
-                        self.status, self.detail, self.progress = "ready", "", 1.0
-                        self.log(f"{self.who} is ready: {self.label()} on the CPU with {threads} threads")
+                        self.status, self.detail, self.progress, self.device = "ready", "", 1.0, device
+                        where = "on the CPU" if device == "cpu" else f"on the GPU ({device.upper()})"
+                        extra = f" with practice adapter {self.adapter.stem}" if self.adapter else ""
+                        self.log(f"{self.who} is ready: {self.label()} {where}{extra}")
                         return
             except (urllib.error.URLError, OSError) as e:
                 if isinstance(e, urllib.error.HTTPError):
                     e.close()                                 # still loading the model (503)
-                # or still starting
-            time.sleep(0.5)
+            time.sleep(0.3)
         raise RuntimeError("llama-server didn't become ready within 3 minutes")
 
     def close(self) -> None:
@@ -360,41 +432,36 @@ class LocalLLM:
         pid_file.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------ talking to it
-    @property
-    def senses(self) -> bool:
-        return bool(getattr(self, "mmproj", None)) and self.ready
-
-    def look_listen(self, system: str, prompt: str, images: list[bytes] = (), audio: list[bytes] = (),
-                    temperature: float = 0.4, max_tokens: int = 200) -> str:
-        """Show the model pictures (PNG) and let it hear sounds (WAV), then ask about them."""
-        import base64
-
-        if not self.senses:
-            raise RuntimeError("this model can't see or hear")
-        content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(b).decode()}}
-                   for b in images]
-        content += [{"type": "input_audio", "input_audio": {"data": base64.b64encode(b).decode(), "format": "wav"}}
-                    for b in audio]
-        content.append({"type": "text", "text": f"{system}\n\n{prompt}"})
-        body = {"messages": [{"role": "user", "content": content}], "temperature": temperature,
-                "max_tokens": max_tokens, "stream": False}
-        req = urllib.request.Request(self.url + "/v1/chat/completions", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=600) as r:
-            d = json.loads(r.read().decode())
-        return ((d.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-
-    def chat(self, system: str, prompt: str, temperature: float, max_tokens: int, as_json: bool) -> str:
-        if not self.ready:
-            raise RuntimeError(self.detail or self.error or f"{self.who} isn't running yet")
-        # Some small models' chat templates (Gemma's) have no system role: put it in the message.
-        body = {"messages": [{"role": "user", "content": f"{system}\n\n{prompt}"}],
-                "temperature": temperature, "max_tokens": max_tokens, "stream": False,
-                "cache_prompt": True}       # the long fixed instructions come first: reuse them between requests
+    def chat(self, system: str, prompt: str, temperature: float = 0.7, max_tokens: int = 300,
+             as_json: bool = False) -> str:
+        body = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+                "temperature": temperature, "max_tokens": max_tokens}
         if as_json:
             body["response_format"] = {"type": "json_object"}
-        req = urllib.request.Request(self.url + "/v1/chat/completions", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=300) as r:
-            d = json.loads(r.read().decode())
-        return ((d.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+        return complete(self.url, body)["text"]
+
+
+_gpu_cache: list = []
+
+
+def nvidia_gpu_cached() -> dict | None:
+    if not _gpu_cache:
+        _gpu_cache.append(nvidia_gpu())
+    return _gpu_cache[0]
+
+
+def complete(url: str, body: dict, timeout: float = 120) -> dict:
+    """One chat completion from a llama-server: {text, prompt_ms, predict_ms, cached, prompt_tokens,
+    tokens}. Used by the Hub and directly by the World's mind (no queue between the mind and its model)."""
+    if not url:
+        raise RuntimeError("the model isn't running yet")
+    body = {"stream": False, "cache_prompt": True, **body}
+    req = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode())
+    t = d.get("timings") or {}
+    u = d.get("usage") or {}
+    return {"text": ((d.get("choices") or [{}])[0].get("message") or {}).get("content", "") or "",
+            "prompt_ms": t.get("prompt_ms"), "predict_ms": t.get("predicted_ms"),
+            "cached": t.get("cache_n"), "prompt_tokens": u.get("prompt_tokens"), "tokens": u.get("completion_tokens")}
