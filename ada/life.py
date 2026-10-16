@@ -28,11 +28,16 @@ ROLE_TOKENS = ["<|endoftext|>", "<|thought|>", "<|user|>", "<|mind|>", "<|oracle
 def run(name: str, root: str, inbox, outbox):
     folder = Path(root) / name
     link = Link("world", inbox, outbox, folder)
+    life = None
     try:
-        Life(folder, link).loop()
+        life = Life(folder, link)
+        life.loop()
     except Exception as e:  # pragma: no cover
         link.crash(e)
         raise
+    finally:
+        if life is not None:
+            life.speaker.stop()
 
 
 class Speaker:
@@ -50,8 +55,17 @@ class Speaker:
         self.done: queue.Queue = queue.Queue()
         self.busy: dict[str, int] = {}
         self.seq = itertools.count()
+        self.thread = None
         if threaded:
-            threading.Thread(target=self._run, name="ada-brain", daemon=True).start()
+            self.thread = threading.Thread(target=self._run, name="ada-brain", daemon=True)
+            self.thread.start()
+
+    def stop(self, timeout: float = 30.0):
+        """Let the current job finish and end the thread. Python must not exit while the brain
+        thread is inside PyTorch: that aborts the whole process."""
+        if self.thread is not None and self.thread.is_alive():
+            self.jobs.put((-1, -1, None, None, None, 0.0))
+            self.thread.join(timeout)
 
     def pending(self, kind: str) -> bool:
         return self.busy.get(kind, 0) > 0
@@ -69,6 +83,8 @@ class Speaker:
         perf = self.life.link.perf
         while True:
             _, _, kind, work, callback, queued = self.jobs.get()
+            if kind is None:
+                return
             perf.add("brain: waiting in line", time.perf_counter() - queued)
             t = time.perf_counter()
             try:

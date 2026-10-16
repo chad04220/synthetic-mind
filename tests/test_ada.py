@@ -448,6 +448,7 @@ def test_a_slow_brain_never_stalls_the_world(mind):
     replies = [d for k, d in life.link.sent if k == "reply" and d["rid"] == "r1"]
     assert replies and "text" in replies[0]["result"]
     assert any(d.get("kind") == "intent" for k, d in life.link.sent)   # her needs decided while she searched for words
+    life.speaker.stop()
 
 
 def test_the_oracle_leaves_gpu_memory_to_the_academy(tmp_path):
