@@ -101,46 +101,50 @@
       <div class="pane" id="pane-thoughts"><div class="muted" style="margin-bottom:6px">The synth's inner monologue, written freely by its own brain. Brighter words were more certain.</div><div class="feed" id="thoughts"></div></div>
       <div class="pane" id="pane-dialogue"><div class="muted" style="margin-bottom:6px">Only what <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> say to each other: their conversations, <span class="wrenname">Wren</span>'s words to <span class="synthname">Zen</span>, and <span class="synthname">Zen</span>'s questions.</div><div class="dialogue" id="dialogue"></div></div>
       <div class="pane" id="pane-wthoughts"><div class="muted" style="margin-bottom:6px">What <span class="wrenname">Wren</span> thinks to itself, and what it decides to do next and why. <span class="synthname">Zen</span> never hears these.</div><div class="feed" id="wthoughts"></div></div>
-      <div class="pane" id="pane-diary"><div class="row" style="margin-bottom:6px"><label class="switch"><input type="checkbox" id="deedsZen" checked><span></span>✨ <span class="synthname">Zen</span></label><label class="switch"><input type="checkbox" id="deedsWren" checked><span></span>🪶 <span class="wrenname">Wren</span></label></div><div class="feed" id="diary"></div></div>
+      <div class="pane" id="pane-diary"><div class="row" style="margin-bottom:6px"><label class="switch"><input type="checkbox" id="deedsZen" checked><span></span><span class="sw-text">✨ <span class="synthname">Zen</span></span></label><label class="switch"><input type="checkbox" id="deedsWren" checked><span></span><span class="sw-text">🪶 <span class="wrenname">Wren</span></span></label></div><div class="feed" id="diary"></div></div>
     </div>
   </div>
 </section>
 
 <!-- ====================================================== TOGETHER -->
 <section class="view" id="view-minds">
-  <div class="card journey"><div class="row"><h2 style="margin:0">🌱 <span id="jName">Zen</span>'s journey</h2><span class="muted">from knowing nothing to speaking</span></div><div class="timeline" id="journey"></div></div>
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🌱</span><div class="ph-text"><h1>Together</h1><p>How <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> are doing, and what they mean to each other.</p></div></div></div>
+  <div class="card journey"><h2>🧭 <span id="jName">Zen</span>'s journey <span class="h2-note">from knowing nothing to speaking</span></h2><div class="timeline" id="journey"></div></div>
   <div class="minds-grid two" id="mindsGrid"></div>
-  <div class="grid2" style="margin-top:14px">
+  <div class="grid2">
     <div class="card"><h2>🗣️ Words <span class="wrenname">Wren</span> has heard <span class="synthname">Zen</span> say</h2><div class="words" id="zenWords"></div>
       <h3>How <span class="wrenname">Wren</span> looks after <span class="synthname">Zen</span> now</h3><div id="careNow" class="muted"></div></div>
     <div class="card"><h2>📔 <span class="wrenname">Wren</span>'s diary</h2><div class="feed" id="wrenDiary"></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>Life at the homestead</h2><div class="feed community" id="communityFeed"></div></div>
+  <div class="card"><h2>🏡 Life at the homestead</h2><div class="feed community" id="communityFeed"></div></div>
 </section>
 
 <!-- ====================================================== STORIES -->
 <section class="view" id="view-stories">
-  <div class="card"><div class="row"><h2 style="margin:0">📖 Bedtime stories</h2><span class="muted">Every night <span class="wrenname">Wren</span> tells <span class="synthname">Zen</span> a story about the day. <span class="synthname">Zen</span> studies each one while it sleeps.</span></div></div>
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">📖</span><div class="ph-text"><h1>Bedtime stories</h1><p>Every night <span class="wrenname">Wren</span> tells <span class="synthname">Zen</span> a story about the day. <span class="synthname">Zen</span> studies each one while it sleeps.</p></div></div></div>
   <div class="stories" id="stories"></div>
 </section>
 
 <!-- ====================================================== GALLERY -->
 <section class="view" id="view-gallery">
-  <div class="card keep-head"><div class="row"><h2 style="margin:0">🖼️ Keepsakes</h2><span class="muted">Everything <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> have made. It stays.</span></div>
+  <div class="card page-head keep-head"><div class="ph-row"><span class="ph-icon">🖼️</span><div class="ph-text"><h1>Keepsakes</h1><p>Everything <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> have made. It stays.</p></div></div>
     <form class="commission" id="commission" autocomplete="off">
       <span class="clabel">Ask <span class="wrenname">Wren</span> to make</span>
       <select name="kind" aria-label="What kind of work"><option value="painting">a painting 🎨</option><option value="music">a song 🎵</option><option value="sculpture">a sculpture 🗿</option><option value="poem">a poem 📜</option></select>
       <input name="about" maxlength="160" placeholder="about… (the pond at dusk, Moss asleep by the fire, the first snow)" aria-label="What about">
       <button class="primary" type="submit">Ask</button>
     </form>
-    <div class="gchips" id="galleryChips"></div></div>
+    <div class="gchips" id="galleryChips"></div>
+  </div>
   <div class="gallery" id="gallery"></div>
 </section>
 
 <!-- ====================================================== ACADEMY -->
 <section class="view" id="view-academy">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🎓</span><div class="ph-text"><h1>Academy</h1><p>Where <span class="synthname">Zen</span>'s brain learns, from scratch: web text, <span class="wrenname">Wren</span>'s lessons and its own life.</p></div></div></div>
   <div class="grid2">
     <div class="card">
+      <h2>🧬 Its brain</h2>
       <div class="status" id="acStatus">…</div>
       <div class="ladder" id="ladder"></div>
       <div class="muted" id="stageBlurb" style="margin:6px 0 10px"></div>
@@ -153,7 +157,7 @@
       </div>
     </div>
     <div class="card">
-      <h2>What it studies</h2>
+      <h2>📚 What it studies</h2>
       <div class="bars" id="mix"></div>
       <h3>FineWeb</h3><dl class="facts" id="fwFacts"></dl>
       <h3>Probe the brain</h3>
@@ -161,7 +165,8 @@
       <div id="probeOut" style="margin-top:8px"></div>
     </div>
   </div>
-  <div class="card" style="margin-top:14px">
+  <div class="card">
+    <h2>📈 Progress</h2>
     <div class="charts">
       <figure class="wide"><figcaption>Loss <i class="sw" style="background:var(--accent)"></i>training <i class="sw" style="background:var(--warn)"></i>held-out web text</figcaption><canvas data-chart="loss"></canvas></figure>
       <figure><figcaption>Concepts known <span class="muted">(chance is 25%)</span></figcaption><canvas data-chart="concepts"></canvas></figure>
@@ -175,22 +180,23 @@
 
 <!-- ====================================================== CONCEPTS -->
 <section class="view" id="view-concepts">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🧠</span><div class="ph-text"><h1>Concepts</h1><p>What <span class="synthname">Zen</span> truly understands, tested with questions worded unlike anything it studies.</p></div></div></div>
   <div class="grid2">
     <div class="card">
-      <h2>How well <span class="synthname">Zen</span> understands</h2>
+      <h2>🎯 How well <span class="synthname">Zen</span> understands</h2>
       <div class="muted">Each fact is tested as a four-way choice, worded unlike anything it studies, so a correct answer means it grasped the idea rather than memorised a sentence.</div>
       <h3>By kind of fact</h3><div class="bars" id="byRel"></div>
       <h3>By where the fact came from</h3><div class="bars" id="bySrc"></div>
     </div>
     <div class="card">
-      <h2>Teach a topic</h2>
+      <h2>✏️ Teach a topic</h2>
       <div class="muted"><span class="wrenname">Wren</span> writes a lesson (with examples from your days at the homestead), questions with answers, and new facts to test on. Your topics go to the front of the queue.</div>
       <form class="inline" id="teachForm"><input id="teachText" placeholder="e.g. the moon, kindness, how bread is made"><button class="primary">Teach</button></form>
       <div class="muted" id="teachQueue" style="margin-top:8px"></div>
     </div>
   </div>
-  <div class="card" style="margin-top:14px">
-    <div class="row"><h2 style="margin:0">Every fact</h2><span class="grow"></span>
+  <div class="card">
+    <div class="row"><h2 style="margin:0">📋 Every fact</h2><span class="grow"></span>
       <select id="factFilter"><option value="all">All</option><option value="wrong">Getting wrong</option><option value="right">Getting right</option><option value="oracle">Taught by Wren</option></select>
       <input id="factSearch" placeholder="Search…"></div>
     <div class="scroll" style="margin-top:10px"><table class="facts"><thead><tr><th></th><th>Fact</th><th>It chose</th><th>From</th></tr></thead><tbody id="factRows"></tbody></table></div>
@@ -199,10 +205,10 @@
 
 <!-- ====================================================== ORACLE -->
 <section class="view" id="view-oracle">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🪶</span><div class="ph-text"><h1><span class="wrenname">Wren</span></h1><p><span class="wrenname">Wren</span> is a pretrained language model on your CPU. It already knows language, so it doesn't train: it lives with <span class="synthname">Zen</span>, chooses what to do, talks, and writes the lessons.</p></div></div></div>
   <div class="grid2">
     <div class="card">
-      <h2>🪶 <span class="wrenname">Wren</span>'s mind</h2>
-      <div class="muted" style="margin-bottom:8px"><span class="wrenname">Wren</span> is a pretrained language model running on your CPU. It already knows language, so it doesn't train: it lives with <span class="synthname">Zen</span>, chooses what to do, talks, and writes the lessons. <span class="synthname">Zen</span> is the one learning from nothing, from FineWeb and from life here.</div>
+      <h2>⚙️ Its model</h2>
       <div class="status" id="orStatus">…</div>
       <div class="meter" id="orMeter" hidden style="margin:-4px 0 10px"><i id="orBar" style="width:0"></i></div>
       <div class="row"><select data-set="oracle.backend" class="grow" title="Built-in: a small model this program downloads and runs itself on the CPU. Ollama: any model in your local Ollama.">
@@ -217,41 +223,39 @@
       <div id="askOut"></div>
     </div>
     <div class="card">
-      <h2>Lessons for the Academy</h2>
+      <h2>📝 Lessons for the Academy</h2>
       <div class="feed" id="lessons"></div>
     </div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>Questions and answers</h2><div class="feed" id="qa"></div></div>
-  <div class="card" style="margin-top:14px"><h2>💭 <span class="wrenname">Wren</span>'s thoughts</h2><div class="feed" id="wrenThoughts"></div></div>
+  <div class="card"><h2>❓ Questions and answers</h2><div class="feed" id="qa"></div></div>
+  <div class="card"><h2>💭 <span class="wrenname">Wren</span>'s thoughts</h2><div class="feed" id="wrenThoughts"></div></div>
 </section>
 
 <!-- ====================================================== HEALTH -->
 <section class="view" id="view-health">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🩺</span><div class="ph-text"><h1>Health</h1><p>How the program is running. The report gathers everything below plus your settings, system details and recent logs into one file you can share. Each process keeps its full log in <code id="logPath">minds/Zen/logs/</code>.</p></div><div class="ph-actions"><a class="button primary" id="dlReport" href="/api/diagnostics" download>⬇️ Download report</a></div></div></div>
   <div class="card">
-    <div class="row"><h2 style="margin:0">Health and performance</h2><span class="grow"></span>
-      <a class="button primary" id="dlReport" href="/api/diagnostics" download>⬇️ Download report</a></div>
-    <div class="muted" style="margin-top:6px">The report gathers everything below plus your settings, system details and the recent logs into one
-      text file you can share. Each process also keeps its full log in <code id="logPath">minds/Zen/logs/</code>.</div>
-    <h3>What looks wrong</h3>
+    <h2>🔎 What looks wrong</h2>
     <div id="findings" class="feed" style="max-height:none"></div>
   </div>
-  <div class="grid3" style="margin-top:14px">
+  <div class="grid3">
     <div class="card"><h2>🎓 Academy</h2><div id="hAcademy"></div></div>
     <div class="card"><h2>🌍 World</h2><div id="hWorld"></div></div>
     <div class="card"><h2>🧭 Hub</h2><div id="hHub"></div></div>
   </div>
-  <div class="grid2" style="margin-top:14px">
+  <div class="grid2">
     <div class="card"><h2>🖥️ GPU</h2><dl class="facts" id="hGpu"></dl></div>
     <div class="card"><h2>🌐 This browser</h2><dl class="facts" id="hBrowser"></dl></div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>Warnings and errors</h2><pre class="logbox" id="hLog"></pre></div>
+  <div class="card"><h2>⚠️ Warnings and errors</h2><pre class="logbox" id="hLog"></pre></div>
 </section>
 
 <!-- ====================================================== SETTINGS -->
 <section class="view" id="view-settings">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">⚙️</span><div class="ph-text"><h1>Settings</h1><p>How <span class="synthname">Zen</span> lives and studies, and how <span class="wrenname">Wren</span> looks after it. Changes apply right away.</p></div></div></div>
   <div class="grid2">
     <div class="card">
-      <h2>When <span class="synthname">Zen</span> lives and when it studies</h2>
+      <h2>🗓️ When <span class="synthname">Zen</span> lives and when it studies</h2>
       <div class="radios" id="schedule">
         <label><input type="radio" name="schedule" value="day_night"><div><b>Day and night</b><small>It lives by day; at night it sleeps and the Academy studies with the whole GPU. Never both at once.</small></div></label>
         <label><input type="radio" name="schedule" value="together"><div><b>Together</b><small>Both always run. With its brain on the CPU, the Academy trains on the whole GPU all the time while it lives.</small></div></label>
@@ -263,7 +267,7 @@
         <label>Minutes of daylight <input type="range" min="2" max="60" step="1" data-set="world.day_minutes"><output></output></label>
         <label>Minutes of night (study) <input type="range" min="2" max="240" step="1" data-set="world.night_minutes"><output></output></label>
       </div>
-      <label class="switch"><input type="checkbox" id="dayGentle"><span></span>Keep studying gently while it's awake</label>
+      <label class="switch"><input type="checkbox" id="dayGentle"><span></span><span class="sw-text">Keep studying gently while it's awake</span></label>
       <h3>Academy</h3>
       <div class="sliders">
         <label>GPU intensity <select data-set="academy.intensity"><option value="full">Full</option><option value="balanced">Balanced</option><option value="gentle">Gentle</option></select><output></output></label>
@@ -273,11 +277,11 @@
         <label>Its journal share <input type="range" min="0" max="1" step="0.01" data-set="academy.mix_journal"><output></output></label>
         <label>Concept drills share <input type="range" min="0" max="1" step="0.01" data-set="academy.mix_concepts"><output></output></label>
       </div>
-      <label class="switch"><input type="checkbox" data-set="academy.fineweb"><span></span>Stream FineWeb</label>
-      <label class="switch"><input type="checkbox" data-set="academy.auto_grow"><span></span>Grow automatically when learning levels off</label>
+      <label class="switch"><input type="checkbox" data-set="academy.fineweb"><span></span><span class="sw-text">Stream FineWeb</span></label>
+      <label class="switch"><input type="checkbox" data-set="academy.auto_grow"><span></span><span class="sw-text">Grow automatically when learning levels off</span></label>
     </div>
     <div class="card">
-      <h2><span class="synthname">Zen</span></h2>
+      <h2>✨ <span class="synthname">Zen</span></h2>
       <div class="sliders">
         <label title="Where its brain runs while it lives. The CPU leaves the GPU entirely to the Academy's training.">Its brain runs on <select data-set="world.device"><option value="cpu">CPU (GPU kept for training)</option><option value="cuda">GPU</option><option value="auto">GPU if available</option></select><output></output></label>
         <label title="CPU threads for its brain. 0 = automatic: half the CPU's physical cores (the rest go to Wren).">Its brain's CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="world.cpu_threads"><output></output></label>
@@ -288,18 +292,18 @@
         <label>Reply temperature <input type="range" min="0.1" max="1.5" step="0.05" data-set="world.reply_temperature"><output></output></label>
         <label>Intention temperature <input type="range" min="0.1" max="1.5" step="0.05" data-set="world.intent_temperature"><output></output></label>
       </div>
-      <label class="switch"><input type="checkbox" data-set="world.thoughts_grounded"><span></span>Let it sense the world before each thought</label>
+      <label class="switch"><input type="checkbox" data-set="world.thoughts_grounded"><span></span><span class="sw-text">Let it sense the world before each thought</span></label>
       <h3>🪶 <span class="wrenname">Wren</span></h3>
-      <label class="switch"><input type="checkbox" data-set="oracle.enabled"><span></span><span class="wrenname">Wren</span>'s language model on (off: Wren lives by simple rules)</label>
+      <label class="switch"><input type="checkbox" data-set="oracle.enabled"><span></span><span class="sw-text"><span class="wrenname">Wren</span>'s language model on (off: Wren lives by simple rules)</span></label>
       <div class="sliders">
-        <label title="How much Wren does for Zen. Automatic follows Zen's language: a caretaker at first, then a guide who tells it what to do, then a friend.">How <span class="wrenname">Wren</span> cares for <span class="synthname">Zen</span> <select data-set="oracle.care"><option value="auto">Automatic (follows Zen's stage)</option><option value="caretaker">Caretaker: does things for Zen</option><option value="guide">Guide: tells Zen what to do</option><option value="friend">Friend: helps when asked</option></select><output></output></label>
+        <label title="How much Wren does for Zen. Automatic follows Zen's language: a caretaker at first, then a guide who tells it what to do, then a friend."><span>How <span class="wrenname">Wren</span> cares for <span class="synthname">Zen</span></span> <select data-set="oracle.care"><option value="auto">Automatic (follows Zen's stage)</option><option value="caretaker">Caretaker: does things for Zen</option><option value="guide">Guide: tells Zen what to do</option><option value="friend">Friend: helps when asked</option></select><output></output></label>
         <label title="How often Wren talks Zen through what it is doing">How talkative <input type="range" min="0" max="1" step="0.05" data-set="oracle.talkative"><output></output></label>
         <label title="Only for Ollama (the built-in model always runs on the CPU).">Ollama runs on <select data-set="oracle.placement"><option value="cpu">CPU (GPU kept for training)</option><option value="auto">CPU while it studies, GPU otherwise</option><option value="gpu">Always the GPU</option></select><output></output></label>
         <label title="CPU threads for Wren's model. 0 = automatic: the physical cores Zen's brain leaves free.">Wren's CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="oracle.cpu_threads"><output></output></label>
       </div>
-      <label class="switch"><input type="checkbox" data-set="oracle.stories"><span></span>A bedtime story every night</label>
-      <label class="switch"><input type="checkbox" data-set="oracle.background_teaching"><span></span>Write lessons for the Academy while it studies</label>
-      <label class="switch"><input type="checkbox" data-set="oracle.tutor_replies"><span></span>Suggest the reply <span class="synthname">Zen</span> should have given you</label>
+      <label class="switch"><input type="checkbox" data-set="oracle.stories"><span></span><span class="sw-text">A bedtime story every night</span></label>
+      <label class="switch"><input type="checkbox" data-set="oracle.background_teaching"><span></span><span class="sw-text">Write lessons for the Academy while it studies</span></label>
+      <label class="switch"><input type="checkbox" data-set="oracle.tutor_replies"><span></span><span class="sw-text">Suggest the reply <span class="synthname">Zen</span> should have given you</span></label>
       <div class="sliders" style="margin-top:6px"><label>Seconds between background lessons <input type="range" min="5" max="300" step="5" data-set="oracle.lesson_seconds"><output></output></label></div>
       <div class="sliders" style="margin-top:6px"><label>Ollama address <input data-set="oracle.url" style="grid-column: span 2"></label></div>
     </div>
