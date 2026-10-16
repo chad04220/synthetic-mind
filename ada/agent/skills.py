@@ -16,6 +16,7 @@ with a friendly sentence ("I have no planks.", "I can't reach that.").
 from __future__ import annotations
 
 import math
+import re
 import threading
 from collections import deque
 from dataclasses import dataclass, field
@@ -166,6 +167,9 @@ def _num(v, name, kind=float, default=None):
         raise Fail(f"{v!r} is not a valid {name}.")
 
 
+_NUMS = re.compile(r"-?\d+(?:\.\d+)?")
+
+
 def parse_pos(v, args=None):
     if v is None and args is not None and all(k in args for k in ("x", "y", "z")):
         v = [args["x"], args["y"], args["z"]]
@@ -173,8 +177,10 @@ def parse_pos(v, args=None):
         return None
     if isinstance(v, dict) and all(k in v for k in ("x", "y", "z")):
         v = [v["x"], v["y"], v["z"]]
-    if isinstance(v, str) and v.count(",") == 2:
-        v = v.split(",")
+    if isinstance(v, str):
+        nums = _NUMS.findall(v)              # "1,64,-3", "(1, 64, -3)", "oak_log at 1 64 -3"
+        if len(nums) >= 3:
+            v = nums[-3:]
     if isinstance(v, (list, tuple)) and len(v) == 3:
         try:
             return tuple(int(math.floor(float(c))) for c in v)
@@ -2004,6 +2010,8 @@ def _p_go_to(w, b, a):
         t = [a["x"], a["y"], a["z"]]
     if t is None:
         raise Fail("Go where?")
+    if isinstance(t, str) and len(_NUMS.findall(t)) >= 3:
+        t = list(parse_pos(t))
     return {"target": t, "distance": _num(a.get("distance"), "distance", float, 1.5), "dig": bool(a.get("dig"))}
 
 

@@ -1,3 +1,99 @@
+# Synthetic Mind v5.0.0: a living world, and a mind inside it that teaches itself
+
+A new edition, built around a world as detailed and changeable as we could make it, and an
+inhabitant that lives in it at the speed of a small language model on your GPU, talks with you,
+and improves itself.
+
+## The world
+- **Endless voxel land**, 16×16×256 chunk columns, generated from a seed.
+  - **Thirteen biomes:** plains, forests, taiga, jungle, desert, savanna, swamp, mountains, tundra,
+    ocean, beach and rivers.
+  - Caves and overhangs, ore veins by depth, lakes, ruins with chests, and a starting cabin.
+- **161 block states, 164 items and 165 recipes:** 100 crafting, 25 smelting and 40 fuels.
+- **Everything works:**
+  - Sand and gravel fall. Water and lava flow with levels and make obsidian or cobblestone where
+    they meet. Fire spreads and burns out, and rain puts it out.
+  - Sky and block light. Crops grow faster near water, saplings become trees, leaves decay.
+  - Levers, buttons and pressure plates power wire, lamps, doors, pistons and TNT.
+  - Furnaces smelt, and chests hold things.
+  - Day and night, weather, and the moon.
+  - Creatures: cows, pigs, sheep, chickens, rabbits, wolves and bears, and hollows by night (unless
+    peaceful).
+- **Fast:** a world tick takes about 2 ms on average and a chunk generates in about 30 ms.
+
+## The inhabitant
+- **Its mind is a small pretrained language model** run by llama.cpp:
+  - **GPU builds:** CUDA on Windows with NVIDIA, Vulkan elsewhere, Metal on Apple silicon, with
+    every layer on the GPU.
+  - **CPU** as a fallback.
+  - **Models:** Qwen 2.5 1.5B by default; Llama 3.2 1B/3B, Gemma 3 1B and Qwen 2.5 0.5B/3B/7B in
+    Settings.
+- **Fast decisions:**
+  - Each decision is one request, constrained by a JSON schema to exactly one action.
+  - The action starts as soon as it has streamed in, before the rest of the reply.
+  - The fixed instructions stay in the prompt cache.
+  - Every decision's latency is measured and shown.
+- **24 skills its body carries out like a competent player:**
+  - moving and looking: `go_to` (A* with jumping, swimming and climbing), `look_at`, `follow`;
+  - gathering and building: `mine`, `mine_nearest`, `place`, `build`;
+  - making: `craft`, `smelt`;
+  - containers and blocks: `use`, `put`, `take`;
+  - food and farming: `eat`, `plant`, `till`, `harvest`;
+  - creatures and people: `attack`, `give`;
+  - inventory: `equip`, `drop`;
+  - itself: `sleep`, `say`, `wait`, `stop`.
+  - Each skill reports progress and ends with a plain-words result that the inhabitant sees next
+    time. When the same action keeps failing, it is told to try something else.
+- **Memory:** notes it writes itself, lessons, named places, a goal, the conversation, recent events
+  and its last actions.
+- **Talk:** chat from the page (heard anywhere, or only nearby if you turn off radio), or speak in
+  the world. Its replies show in the chat and as speech bubbles.
+
+## It teaches itself
+- **It knows it can learn.** Its instructions tell it that its mind is a model it can improve, and
+  each turn it sees how often it has practised and how many of its actions work.
+- **`reflect`:** it judges its recent decisions against what came of them, writes the better action
+  for the bad ones, and keeps lessons. It reads your corrections when it does.
+- **`practice`:** it lies down while its model is trained on the decisions it judged good and on
+  its own corrections, plus your 👍/👎. It wakes up running the new adapter.
+  - The adapter is a LoRA, trained on the original weights and written for llama.cpp.
+  - Every round continues from the last and replays older examples.
+  - No single skill may fill more than a third of a round.
+- **A round that made it worse is undone.** Once it has made 30 decisions with a new adapter, their
+  success rate is compared with before. If it fell, it goes back to the previous adapter, and is
+  told why.
+- **You can help or take over:**
+  - 👍/👎 and *show it what it should have done* on any decision;
+  - **Start practice**, or practise automatically when it sleeps in a bed;
+  - switch adapters, or go back to the base model.
+- **Training tools** (PyTorch, transformers, safetensors, gguf) install from the page with one
+  button; with an NVIDIA GPU the CUDA build of PyTorch is installed.
+
+## The page
+- **The world in 3D with three.js:**
+  - chunk meshes built in a Web Worker, with face culling and ambient occlusion;
+  - procedural textures for every block;
+  - transparent water, glass and leaves;
+  - sky with sun and moon, stars, clouds, fog, rain, snow and lightning.
+- **Watch** (orbit the inhabitant) or **Visit**:
+  - walk in with WASD and the mouse;
+  - dig with crack progress, place and use blocks;
+  - hotbar and inventory; give the inhabitant what you carry.
+- **Tabs:**
+  - **Home:** the mind card, chat, inventory, events and minimap.
+  - **Mind:** every decision with its latency and result, ratings and corrections, a latency
+    chart, practice, notes, lessons and places.
+  - **Conversations** and **Thoughts:** full, searchable archives.
+  - **Map:** the land from above.
+  - **Settings:** model, GPU, decisions, practice, world rules and render distance.
+  - **Health:** processes, latency, GPU and a diagnostics report.
+
+## Changes from v4
+- **Removed:** the Academy, the from-scratch brain and its tokenizer, the Sprite, the tile world
+  and the studio. A v4 mind keeps its name and starts in a new voxel world; its old files stay in
+  its folder.
+- **Running v5 doesn't need PyTorch;** only practice does.
+
 # Synthetic Mind v4.0.0: a mind that makes itself
 
 A new design. Zen is alone in an endless world, and everything it does comes from its own brain.
