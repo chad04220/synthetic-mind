@@ -1,3 +1,35 @@
+# Ada v1.2.0
+
+## The GPU is for training; everything else runs on the CPU
+
+- **A built-in Oracle, no Ollama needed.** On first use the program downloads llama.cpp's
+  server (the CPU build, tens of MB) and a small model into the `oracle/` folder. It runs the
+  server on the CPU and keeps it running. The Oracle tab shows download progress, and you can
+  pick the model there:
+  - Gemma 2 2B Instruct, 1.7 GB (default);
+  - Qwen 2.5 1.5B Instruct, 1.1 GB (lightest);
+  - Llama 3.2 3B Instruct, 2.0 GB (strongest, slowest).
+
+  Ollama is still there: choose *Ollama* on the Oracle tab (or `--oracle ollama`) to use your own
+  models. While the built-in Oracle is in use, the program asks Ollama to unload the Oracle
+  model it was using, freeing its memory.
+- **Ada's brain runs on the CPU by default**, and the Ollama Oracle too, if you use it.
+- **CPU cores are shared out:** half the physical cores for her brain, the rest for the Oracle,
+  so they don't fight over the same cores. Both counts can be set in Settings.
+- **Ollama uses much less memory:** its context is now capped at 4,096 tokens, enough for the
+  Oracle. Before, Ollama's default could be 65,536 tokens, so a 2B model took about 10 GB of RAM.
+- **"Together" is the default schedule.** With nothing else on the GPU, the Academy trains on all
+  of it, all the time, while Ada lives. Her brain picks up each new version as it is published.
+  (*Day & night* is still available in Settings.)
+- **The batch grows to fill the GPU's free memory.** At start-up the Academy measures how much
+  memory a batch needs and picks the largest that fits. It leaves room for the desktop and never
+  finds the limit by running out: on Windows, running out silently spills into RAM. The size
+  chosen is in the log, and as *batch tokens* on the Health tab.
+- **Your existing mind switches over automatically:** her brain, the Oracle and the schedule
+  move to the new defaults, unless you had changed those settings yourself.
+
+---
+
 # Ada v1.1.4
 
 ## A cooler CPU while Ada studies

@@ -6,6 +6,7 @@ running; the rest (network shape, tokenizer) are fixed when a mind is created.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -39,7 +40,9 @@ class BrainConfig:
 
 @dataclass
 class AcademyConfig:
-    batch_size: int = 16
+    batch_size: int = 16             # the smallest batch; on a GPU it grows to fill free memory
+    auto_batch: bool = True
+    max_batch_size: int = 128
     grad_accum: int = 1
     muon_lr: float = 0.02
     adam_lr: float = 3e-3
@@ -65,7 +68,10 @@ class AcademyConfig:
 
 @dataclass
 class WorldConfig:
-    device: str = "auto"             # where Ada's brain runs while she lives: auto | cuda | cpu
+    # Where Ada's brain runs while she lives: cpu | cuda | auto. The CPU by default, so the GPU is
+    # kept entirely for the Academy's training.
+    device: str = "cpu"
+    cpu_threads: int = 0             # threads for her brain on the CPU; 0 = half the physical cores
     tick: float = 0.25               # seconds per world step
     day_minutes: float = 10.0        # real minutes of daylight: Ada is awake
     night_minutes: float = 20.0      # real minutes of night: Ada sleeps and the Academy studies
@@ -80,6 +86,10 @@ class WorldConfig:
 
 @dataclass
 class OracleConfig:
+    # "builtin": a small model the program downloads and runs itself with llama.cpp, on the CPU.
+    # "ollama": any model in your local Ollama (url, model and placement below).
+    backend: str = "builtin"
+    builtin_model: str = "gemma-2-2b"  # see localllm.CATALOG
     url: str = "http://localhost:11434"
     model: str = ""
     enabled: bool = True
@@ -88,22 +98,28 @@ class OracleConfig:
     npc_voices: bool = True            # villagers speak with the Oracle's words
     tutor_replies: bool = True         # suggest the reply Ada should have given you
     assess_minutes: float = 10.0
-    # Where Ollama runs the Oracle. "auto": on the CPU while the Academy studies (so they don't
-    # fight over GPU memory) and on the GPU otherwise. "gpu" or "cpu": always there.
-    placement: str = "auto"
+    # Where Ollama runs the Oracle. "cpu" (default): always on the CPU, so the GPU is kept for
+    # training. "auto": on the CPU while the Academy studies and on the GPU otherwise. "gpu": always.
+    placement: str = "cpu"
+    cpu_threads: int = 0             # Ollama's threads on the CPU; 0 = the physical cores her brain leaves free
+
+
+CONFIG_VERSION = 2   # 2: Ada's brain and the Oracle default to the CPU; the schedule to "together"
 
 
 @dataclass
 class ScheduleConfig:
     # day_night: Ada lives by day and studies while she sleeps at night (never both at once).
-    # together:  both always run; the Academy trains gently so the World stays smooth.
+    # together:  both always run (default). With her brain on the CPU the Academy keeps the whole
+    #            GPU; with her brain on the GPU it trains gently so the World stays smooth.
     # academy:   study only, the World is paused.   world: live only, no training.
-    mode: str = "day_night"
+    mode: str = "together"
     day_training: str = "pause"        # with day_night: pause | gentle training while she's awake
 
 
 @dataclass
 class AdaConfig:
+    version: int = CONFIG_VERSION
     name: str = "Ada"
     tokenizer: str = "gpt2"
     preset: str = "small"
@@ -137,7 +153,16 @@ class AdaConfig:
 
     @classmethod
     def load(cls, path: Path) -> "AdaConfig":
-        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        d = json.loads(path.read_text(encoding="utf-8"))
+        if d.get("version", 1) < 2:
+            # Minds saved before version 2 kept the old defaults ("auto"); move them to the new
+            # ones (the CPU), leaving any setting that was changed by hand alone.
+            for section, key, was, now in (("world", "device", "auto", "cpu"), ("oracle", "placement", "auto", "cpu"),
+                                           ("schedule", "mode", "day_night", "together")):
+                if d.get(section, {}).get(key) == was:
+                    d[section][key] = now
+        d["version"] = CONFIG_VERSION
+        return cls.from_dict(d)
 
 
 def _fill(obj, d: dict) -> None:
@@ -154,8 +179,10 @@ CHOICES = {
     "schedule.mode": ("day_night", "together", "academy", "world"),
     "schedule.day_training": ("pause", "gentle"),
     "academy.intensity": ("full", "balanced", "gentle"),
-    "world.device": ("auto", "cuda", "cpu"),
-    "oracle.placement": ("auto", "gpu", "cpu"),
+    "world.device": ("cpu", "cuda", "auto"),
+    "oracle.placement": ("cpu", "auto", "gpu"),
+    "oracle.backend": ("builtin", "ollama"),
+    "oracle.builtin_model": ("gemma-2-2b", "qwen2.5-1.5b", "llama-3.2-3b"),
 }
 
 LIVE = {
@@ -164,10 +191,10 @@ LIVE = {
     "academy.mix_fineweb": float, "academy.mix_lessons": float, "academy.mix_journal": float,
     "academy.mix_concepts": float, "academy.muon_lr": float, "academy.adam_lr": float,
     "academy.auto_grow": bool,
-    "world.device": str, "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
+    "world.device": str, "world.cpu_threads": int, "oracle.cpu_threads": int, "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
     "world.thought_tokens": int, "world.thought_temperature": float, "world.thoughts_grounded": bool,
     "world.intent_temperature": float, "world.reply_tokens": int, "world.reply_temperature": float,
-    "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,
+    "oracle.backend": str, "oracle.builtin_model": str, "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,
     "oracle.npc_voices": bool, "oracle.placement": str, "oracle.tutor_replies": bool, "oracle.lesson_seconds": float,
 }
 
@@ -180,11 +207,33 @@ def set_live(cfg: AdaConfig, key: str, value):
     if typ is bool and isinstance(value, str):
         value = value.lower() in ("1", "true", "yes", "on")
     value = typ(value)
+    if key.endswith("cpu_threads") and not 0 <= value <= 256:
+        raise ValueError(f"{key} must be between 0 (automatic) and 256")
     if key in CHOICES and value not in CHOICES[key]:
         raise ValueError(f"{key} must be one of: {', '.join(CHOICES[key])}")
     section, name = key.split(".")
     setattr(getattr(cfg, section), name, value)
     return value
+
+
+def physical_cores() -> int:
+    try:
+        import psutil
+
+        n = psutil.cpu_count(logical=False)
+    except Exception:
+        n = None
+    return n or max(1, (os.cpu_count() or 2) // 2)
+
+
+def cpu_threads(cfg: AdaConfig) -> dict:
+    """How the CPU's physical cores are shared: Ada's brain gets half (it thinks in short bursts,
+    and one-token-at-a-time generation gains little beyond that), the Oracle gets the rest, so the
+    two never fight over the same cores. The Academy, on the GPU, needs almost no CPU."""
+    cores = physical_cores()
+    world = cfg.world.cpu_threads or max(1, cores // 2)
+    oracle = cfg.oracle.cpu_threads or max(1, cores - world)
+    return {"cores": cores, "world": world, "oracle": oracle}
 
 
 def get_live(cfg: AdaConfig) -> dict:

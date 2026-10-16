@@ -450,9 +450,17 @@ $("#teachForm").onsubmit = async (ev) => {
 
 // ================================================================== oracle view
 function renderOracle() {
-  const o = S.oracle, st = $("#orStatus");
-  st.className = "status " + (o.model && o.enabled && !o.error ? "on" : "off");
-  setText(st, o.error ? o.error : !o.enabled ? "The Oracle is switched off (Settings)." : o.model ? `${o.model} · ${o.lessons} lessons written this session${o.teaching ? " · writing one now" : ""}` : "No model chosen.");
+  const o = S.oracle, st = $("#orStatus"), b = o.builtin || {}, builtin = (o.backend || S.settings["oracle.backend"]) === "builtin";
+  $("#orBuiltinRow").hidden = !builtin; $("#orOllamaRow").hidden = builtin;
+  const setup = builtin && (b.status === "downloading" || b.status === "starting");
+  $("#orMeter").hidden = !setup; $("#orBar").style.width = `${Math.round((b.progress || 0) * 100)}%`;
+  const ok = o.enabled && !!o.active;
+  st.className = "status " + (ok ? "on" : "off");
+  setText(st, !o.enabled ? "The Oracle is switched off (Settings)."
+    : setup ? `${b.detail || "Getting the built-in Oracle ready"}…`
+    : o.error ? o.error
+    : ok ? `${o.active} · ${o.lessons} lesson${o.lessons === 1 ? "" : "s"} written this session${o.teaching ? " · writing one now" : ""}`
+    : builtin ? "The built-in Oracle is getting ready…" : "No Ollama model chosen.");
   const sel = $("#orModel"), sig = (o.models || []).map((m) => m.name).join("|") + o.model;
   if (sel._sig !== sig && document.activeElement !== sel) {
     sel._sig = sig;

@@ -3,16 +3,18 @@
 Ada is a neural network that starts as random weights. A two-part system raises her:
 
 - **The Academy** teaches her language and concepts. It streams web text from **FineWeb**,
-  studies lessons written by an **Oracle** (any model you run locally in **Ollama**), drills
+  studies lessons written by an **Oracle** (a small model the program downloads and runs itself
+  with **llama.cpp**, or any model you run in **Ollama**), drills
   the facts of her world, and studies her own journal of everything she has lived through.
 - **The World** is where she lives with what she has learned: a valley with a cottage, a
   garden, an orchard, a meadow, a forest, a lake, a village (bakery, library, workshop and the
   Oracle's shrine) and an observatory. There are days, nights, seasons and weather, three
   villagers, animals, needs to look after, and things to grow, cook, bake, craft and read.
 
-The two halves never compete. By default Ada lives by day, and at night she sleeps while the
-Academy studies with the whole GPU. Each morning she wakes up with the brain she earned
-overnight.
+The two halves never compete: **the GPU belongs to training**. Ada's brain and the Oracle run on
+the CPU, sharing its cores between them, so by default (the *Together* schedule) the Academy
+trains on the whole GPU all the time while Ada lives, and she picks up each new brain it
+publishes.
 
 ## What makes it different
 
@@ -37,7 +39,7 @@ amount of training can freeze the dashboard, and if the Academy or the World eve
 Hub restarts it.
 
 ```
-           FineWeb ──┐                          ┌── Ollama (the Oracle)
+           FineWeb ──┐                          ┌── the Oracle (llama.cpp or Ollama)
                      ▼                          ▼
    ┌──────────────────────────┐        ┌─────────────────────┐        ┌──────────────────────────┐
    │ ACADEMY  (process 1)     │ brain  │ HUB  (process 3)    │ events │ WORLD  (process 2)       │
@@ -54,9 +56,11 @@ Hub restarts it.
 **Windows with an NVIDIA GPU**
 
 1. Install Python 3.10 or newer from python.org (tick *Add to PATH*).
-2. Install [Ollama](https://ollama.com) and pull a chat model, for example `ollama pull llama3.2`.
-3. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA and
+2. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA and
    the other requirements, prints which GPU it found, and opens <http://127.0.0.1:8765>.
+3. The first time it runs, the built-in Oracle downloads llama.cpp (tens of MB) and its
+   model (Gemma 2 2B, 1.7 GB) into the `oracle/` folder; the Oracle tab shows the progress.
+   [Ollama](https://ollama.com) is optional: choose it on the Oracle tab to use your own models.
 
 **Linux / macOS:** `./start.sh`. **By hand:**
 `pip install torch --index-url https://download.pytorch.org/whl/cu126` (or the CPU build), then
@@ -68,8 +72,8 @@ the same name to continue where she left off.
 ```
 python run.py --name Bo --preset tiny      another mind, a small brain
 python run.py --preset medium              a bigger brain (12 GB+ GPU)
-python run.py --schedule together          live and study at the same time
-python run.py --world-device cpu           run her daily life on the CPU, leaving the GPU to study
+python run.py --schedule day_night         study only while she sleeps at night
+python run.py --world-device cuda          run her brain on the GPU (training then shares it)
 python run.py --no-fineweb --no-oracle     offline
 ```
 
@@ -107,15 +111,17 @@ python run.py --no-fineweb --no-oracle     offline
 - **🧠 Concepts:** how well she understands each kind of fact, every fact with what she
   chose, and **Teach her a topic**: the Oracle writes a lesson, questions and new facts, and
   your topics go first.
-- **🔮 Oracle:** pick the Ollama model, ask it anything ("Let Ada study this" turns the answer
+- **🔮 Oracle:** choose the built-in Oracle (Gemma 2 2B, Qwen 2.5 1.5B or Llama 3.2 3B, run on
+  the CPU by llama.cpp) or any Ollama model, ask it anything ("Let Ada study this" turns the answer
   into a lesson), and read every lesson it has written.
 - **🩺 Health:** what looks wrong right now, in plain words; where each process spends its time
   (training step, waiting for data, thinking, the web server's responsiveness…); the GPU's load,
   memory and temperature; this browser's frame rate and frozen moments; and every warning and
   error. **Download report** saves it all, with your settings and recent logs, as one text file
   to share. Each process also keeps a full log in `minds/<name>/logs/`.
-- **⚙️ Settings:** the schedule (day & night, together, study only, live only), day and night
-  lengths, GPU intensity, what she studies, how she thinks and talks, and the Oracle.
+- **⚙️ Settings:** the schedule (together, day & night, study only, live only), day and night
+  lengths, GPU intensity, what she studies, how she thinks and talks, where her brain and the
+  Oracle run, and how many CPU threads each gets (automatic: half the physical cores each).
 
 ## How she learns quickly
 
@@ -130,6 +136,9 @@ python run.py --no-fineweb --no-oracle     offline
 - **Curriculum from the Oracle**, pitched at her stage: toddler sentences while she babbles,
   stories and explanations as she grows, targeted at the concepts her tests say she gets wrong.
 - **Her own life as data**: what she sensed, chose, did and heard, weighted by how it turned out.
+- **The batch grows to fill the GPU's free memory** (measured, never by running out: on Windows
+  that silently spills into RAM), and the loss over the vocabulary is computed with its gradient
+  in one pass.
 - **Never broken by a bad step:** unstable steps are skipped, broken weights are never saved
   or published, and the previous good save is always kept.
 
@@ -145,7 +154,8 @@ ada/world/sim.py     the valley: places, things, weather, seasons, villagers, ne
 ada/world/agent.py   words to deeds: parsing intentions, needs, plans, actions
 ada/ontology.py      everything in the world and what is true about it
 ada/concepts.py      the concept graph: drills and tests
-ada/oracle.py        the Oracle (Ollama): lessons, answers, villagers, books, assessments
+ada/oracle.py        the Oracle: lessons, answers, villagers, books, assessments
+ada/localllm.py      the built-in Oracle: downloads and runs llama.cpp's server on the CPU
 ada/model.py         the brain; ada/optim.py Muon; ada/fineweb.py streaming; ada/tokenizer.py
 web/                 the dashboard (no external dependencies)
 tests/               python -m pytest tests

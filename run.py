@@ -56,7 +56,9 @@ def main():
     ap.add_argument("--schedule", choices=["day_night", "together", "academy", "world"], default=None)
     ap.add_argument("--no-fineweb", action="store_true")
     ap.add_argument("--no-oracle", action="store_true")
-    ap.add_argument("--ollama-url", default=None)
+    ap.add_argument("--ollama-url", default=None, help="use Ollama at this address as the Oracle")
+    ap.add_argument("--oracle", choices=["builtin", "ollama"], default=None,
+                    help="the Oracle's backend: built-in (llama.cpp on the CPU, default) or Ollama")
     ap.add_argument("--world-device", choices=["auto", "cuda", "cpu"], default=None,
                     help="where Ada's brain runs while she lives (cpu leaves the GPU to the Academy)")
     ap.add_argument("--compile", action="store_true", help="torch.compile training (Linux/WSL)")
@@ -91,7 +93,9 @@ def main():
     if args.no_oracle:
         cfg.oracle.enabled = False
     if args.ollama_url:
-        cfg.oracle.url = args.ollama_url
+        cfg.oracle.url, cfg.oracle.backend = args.ollama_url, "ollama"
+    if args.oracle:
+        cfg.oracle.backend = args.oracle
     if args.world_device:
         cfg.world.device = args.world_device
     if args.compile:

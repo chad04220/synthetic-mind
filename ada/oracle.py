@@ -38,11 +38,17 @@ def clean(text: str) -> str:
 
 
 class Oracle:
-    def __init__(self, url: str, model: str):
+    """Two backends: "builtin" (a llama.cpp server the Hub runs on the CPU, see localllm.py) and
+    "ollama" (any model in a local Ollama). `url`, `model` and `models` are Ollama's."""
+
+    def __init__(self, url: str, model: str, local=None):
         self.url, self.model = url.rstrip("/"), model
         self.models: list[dict] = []
         self.error = ""
+        self.backend = "ollama"
+        self.local = local           # LocalLLM, for the built-in backend
         self.use_gpu = True          # False: ask Ollama to run the model on the CPU
+        self.cpu_threads = 0         # Ollama's threads when on the CPU (0: Ollama decides)
 
     # -- Ollama -------------------------------------------------------------------
     def _req(self, path: str, body: dict | None = None, timeout: float = 180.0) -> dict:
@@ -51,6 +57,19 @@ class Oracle:
                                      method="POST" if body is not None else "GET")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
+
+    @property
+    def builtin(self) -> bool:
+        return self.backend == "builtin" and self.local is not None
+
+    @property
+    def ready(self) -> bool:
+        return self.local.ready if self.builtin else bool(self.model)
+
+    @property
+    def active(self) -> str:
+        """The model answering right now, as shown to the user."""
+        return f"{self.local.label()} (built-in)" if self.builtin else self.model
 
     def refresh(self) -> list[dict]:
         """Ask Ollama which models are installed; pick a sensible one if none is chosen."""
@@ -75,13 +94,19 @@ class Oracle:
 
     def chat(self, system: str, prompt: str, temperature: float = 0.7, max_tokens: int = 400,
              as_json: bool = False) -> str:
+        if self.builtin:
+            return clean(self.local.chat(system, prompt, temperature, max_tokens, as_json))
         if not self.model:
             raise RuntimeError(self.error or "no Oracle model chosen")
         body = {"model": self.model, "stream": False,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                "options": {"temperature": temperature, "num_predict": max_tokens}}
+                # The Oracle's prompts are short: a small context keeps Ollama's memory small (its
+                # default can be 65,536 tokens, which costs gigabytes).
+                "options": {"temperature": temperature, "num_predict": max_tokens, "num_ctx": 4096}}
         if not self.use_gpu:
             body["options"]["num_gpu"] = 0       # keep the Oracle out of GPU memory
+            if self.cpu_threads:
+                body["options"]["num_thread"] = self.cpu_threads
         if as_json:
             body["format"] = "json"
         r = self._req("/api/chat", body)
@@ -95,6 +120,14 @@ class Oracle:
                     for m in self._req("/api/ps", timeout=3).get("models", [])]
         except (urllib.error.URLError, OSError, ValueError):
             return []
+
+    def unload(self, name: str) -> bool:
+        """Ask Ollama to let go of a model entirely (it reloads on the next request)."""
+        try:
+            self._req("/api/generate", {"model": name, "keep_alive": 0}, timeout=30)
+            return True
+        except (urllib.error.URLError, OSError, ValueError):
+            return False
 
     def unload_from_gpu(self) -> list[str]:
         """Ask Ollama to free the GPU memory its models hold (they reload on the next request)."""

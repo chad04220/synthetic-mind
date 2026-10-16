@@ -16,7 +16,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from .config import AdaConfig
+from .config import AdaConfig, cpu_threads
 from .ontology import KINDS, NPCS
 from .proc import Link, append_jsonl, pick_device, write_json
 from .world import agent as ag
@@ -100,12 +100,7 @@ class Life:
         self.stop_ids = {self.tok[r] for r in ROLE_TOKENS}
         self.with_brain = with_brain
         self.device = pick_device(self.cfg.world.device) if with_brain else None
-        if self.device is not None and self.device.type == "cpu":
-            import os
-
-            import torch
-
-            torch.set_num_threads(min(2, os.cpu_count() or 2))   # leave the other cores to the Academy
+        self.use_cpu_threads()
         self.brain = None
         self.brain_version = 0
         self.brain_meta: dict = {}
@@ -146,6 +141,17 @@ class Life:
         if meta.get("version", 0) <= self.brain_version or self.speaker.pending("load"):
             return
         self.speaker.ask("load", lambda: self._load_brain(meta), self._use_brain)
+
+    def use_cpu_threads(self):
+        """On the CPU her brain uses its share of the physical cores (see config.cpu_threads)."""
+        if self.device is None or self.device.type != "cpu":
+            return
+        import torch
+
+        n = cpu_threads(self.cfg)["world"]
+        if torch.get_num_threads() != n:
+            torch.set_num_threads(n)
+            self.link.log(f"her brain thinks on the CPU with {n} threads")
 
     def _load_brain(self, meta: dict):
         """On the brain thread: read and prepare the published weights."""
@@ -611,14 +617,9 @@ class Life:
                 self.cfg = AdaConfig.from_dict(msg["config"])
                 if self.cfg.world.device != old and self.with_brain:
                     self.device = pick_device(self.cfg.world.device)   # move her brain: reload it there
-                    if self.device.type == "cpu":
-                        import os
-
-                        import torch
-
-                        torch.set_num_threads(min(2, os.cpu_count() or 2))
                     self.brain_version = 0
                     self.maybe_load_brain()
+                self.use_cpu_threads()
                 result = True
             elif cmd == "full":
                 self.broadcast(full=True)

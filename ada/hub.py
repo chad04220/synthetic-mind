@@ -20,8 +20,9 @@ from pathlib import Path
 
 from . import academy, life
 from .concepts import ConceptGraph
-from .config import AdaConfig, get_live, set_live
+from .config import AdaConfig, cpu_threads, get_live, set_live
 from .diag import Perf, findings, gpu_readings, setup_logging, system_info
+from .localllm import LocalLLM
 from .oracle import TOPICS, Oracle
 from .proc import append_jsonl
 
@@ -71,7 +72,10 @@ class Hub:
         self._load_history()
 
         # the Oracle
-        self.oracle = Oracle(cfg.oracle.url, cfg.oracle.model)
+        self.local = LocalLLM(Path(__file__).resolve().parent.parent / "oracle", self._local_log)
+        self.oracle = Oracle(cfg.oracle.url, cfg.oracle.model, self.local)
+        self.oracle.backend = cfg.oracle.backend
+        self.oracle.cpu_threads = cpu_threads(cfg)["oracle"]
         self.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="oracle")
         self.teaching = False
         self.last_teach = 0.0
@@ -117,6 +121,7 @@ class Hub:
             if p.is_alive():
                 p.terminate()
         self.pool.shutdown(wait=False, cancel_futures=True)
+        self.local.stop()
 
     def _supervise(self):
         while not self.stopping:
@@ -131,8 +136,10 @@ class Hub:
                     if not self.stopping:
                         self.spawn(n)
             self.apply_schedule()
+            self._local_tick()
             self._diagnose_tick()
-            if self.cfg.oracle.enabled and not self.oracle.models and time.time() - self.last_refresh > 30:
+            if (self.cfg.oracle.enabled and self.cfg.oracle.backend == "ollama" and not self.oracle.models
+                    and time.time() - self.last_refresh > 30):
                 self.last_refresh = time.time()      # Ollama may have been started after us
                 self.pool.submit(self._refresh_oracle)
             try:
@@ -287,7 +294,8 @@ class Hub:
             want = ("resume", "full") if self.phase == "night" else \
                 (("resume", "gentle") if s.day_training == "gentle" else ("pause", "Ada is awake"))
         elif s.mode == "together":
-            want = ("resume", "balanced")
+            # With her brain on the CPU, living doesn't touch the GPU: training can have all of it.
+            want = ("resume", "full" if self.cfg.world.device == "cpu" else "balanced")
         elif s.mode == "academy":
             want = ("resume", "full")
         else:
@@ -427,8 +435,10 @@ class Hub:
         self.cfg.save(self.folder / "config.json")
         for n in CHILDREN:
             self.send(n, "config", config=self.cfg.to_dict())
+        self.oracle.cpu_threads = cpu_threads(self.cfg)["oracle"]
         if key.startswith("oracle."):
             self.oracle.url, self.oracle.model = self.cfg.oracle.url.rstrip("/"), self.cfg.oracle.model
+            self.oracle.backend = self.cfg.oracle.backend
             if key == "oracle.url":
                 self.oracle.refresh()
         if key.startswith("schedule."):
@@ -444,6 +454,37 @@ class Hub:
     def stage(self) -> int:
         return int(self.academy_status.get("stage", 0) or 0)
 
+    def _local_tick(self):
+        """Keep the built-in Oracle's server running when it's the Oracle in use, stopped otherwise."""
+        o = self.cfg.oracle
+        if o.enabled and o.backend == "builtin":
+            if not getattr(self, "_ollama_released", False):
+                self._ollama_released = True
+                self.pool.submit(self._release_ollama)
+            threads = cpu_threads(self.cfg)["oracle"]
+            if self.local.wants(o.builtin_model, threads):
+                threading.Thread(target=self.local.ensure, args=(o.builtin_model, threads),
+                                 name="oracle-setup", daemon=True).start()
+        else:
+            self._ollama_released = False
+        if not (o.enabled and o.backend == "builtin") and self.local.proc is not None and not self.local.busy:
+            self.local.stop()
+            self._local_log("stopped the built-in Oracle (not in use)")
+
+    def _release_ollama(self):
+        """With the built-in Oracle in use, free the memory an Ollama model we used still holds."""
+        for m in self.oracle.loaded():
+            if m["name"] == self.cfg.oracle.model and self.oracle.unload(m["name"]):
+                self._local_log(f"asked Ollama to unload {m['name']} ({m['size_mb']} MB): the built-in Oracle is in use")
+
+    def _local_log(self, text: str, level: str = "info"):
+        if level == "warning":
+            self.log.warning(text)
+            self.event("error", text=f"Built-in Oracle: {text}", src="hub")
+        else:
+            self.log.info(text)
+            self.event("log", text=text, src="hub")
+
     def _free_oracle_gpu(self):
         freed = self.oracle.unload_from_gpu()
         if freed:
@@ -458,7 +499,7 @@ class Hub:
             self.event("log", text=f"The Oracle is here: {self.oracle.model}", src="hub")
 
     def oracle_ready(self) -> bool:
-        return self.cfg.oracle.enabled and bool(self.oracle.model)
+        return self.cfg.oracle.enabled and self.oracle.ready
 
     def _curriculum(self, kind: str, parts, weight: float = 1.0, priority: bool = False, topic: str = ""):
         append_jsonl(self.folder / "curriculum.jsonl", {"t": time.time(), "kind": kind, "topic": topic,
@@ -605,6 +646,10 @@ class Hub:
             }
 
     def oracle_info(self) -> dict:
-        return {"models": self.oracle.models, "model": self.oracle.model, "error": self.oracle.error,
+        builtin = self.cfg.oracle.backend == "builtin"
+        return {"backend": self.cfg.oracle.backend, "active": self.oracle.active if self.oracle.ready else "",
+                "builtin": self.local.info() | {"catalog": self.local.catalog(), "choice": self.cfg.oracle.builtin_model},
+                "models": self.oracle.models, "model": self.oracle.model,
+                "error": (self.local.error if builtin else self.oracle.error),
                 "teaching": self.teaching, "lessons": self.lessons_written, "queued": list(self.topics),
                 "enabled": self.cfg.oracle.enabled}

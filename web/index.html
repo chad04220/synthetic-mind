@@ -171,7 +171,14 @@
     <div class="card">
       <h2>The Oracle</h2>
       <div class="status" id="orStatus">…</div>
-      <div class="row"><select id="orModel" class="grow"></select><button id="btnModels">Refresh</button></div>
+      <div class="meter" id="orMeter" hidden style="margin:-4px 0 10px"><i id="orBar" style="width:0"></i></div>
+      <div class="row"><select data-set="oracle.backend" class="grow" title="Built-in: a small model this program downloads and runs itself on the CPU. Ollama: any model in your local Ollama.">
+        <option value="builtin">Built-in (llama.cpp, runs on the CPU)</option><option value="ollama">Ollama</option></select></div>
+      <div class="row" id="orBuiltinRow" style="margin-top:6px"><select data-set="oracle.builtin_model" class="grow">
+        <option value="gemma-2-2b">Gemma 2 2B Instruct · 1.7 GB</option>
+        <option value="qwen2.5-1.5b">Qwen 2.5 1.5B Instruct · 1.1 GB (lightest)</option>
+        <option value="llama-3.2-3b">Llama 3.2 3B Instruct · 2.0 GB (strongest, slowest)</option></select></div>
+      <div class="row" id="orOllamaRow" style="margin-top:6px"><select id="orModel" class="grow"></select><button id="btnModels">Refresh</button></div>
       <h3>Ask it anything</h3>
       <form id="askForm"><textarea id="askText" rows="2" placeholder="Why is the sky blue?"></textarea><div class="row" style="margin-top:6px"><button class="primary">Ask</button></div></form>
       <div id="askOut"></div>
@@ -213,7 +220,7 @@
       <h2>When Ada lives and when she studies</h2>
       <div class="radios" id="schedule">
         <label><input type="radio" name="schedule" value="day_night"><div><b>Day and night</b><small>She lives by day; at night she sleeps and the Academy studies with the whole GPU. Never both at once.</small></div></label>
-        <label><input type="radio" name="schedule" value="together"><div><b>Together</b><small>Both always run; the Academy trains gently so the World stays smooth.</small></div></label>
+        <label><input type="radio" name="schedule" value="together"><div><b>Together</b><small>Both always run. With her brain on the CPU, the Academy trains on the whole GPU all the time while she lives.</small></div></label>
         <label><input type="radio" name="schedule" value="academy"><div><b>Study only</b><small>The World pauses; all compute goes to learning.</small></div></label>
         <label><input type="radio" name="schedule" value="world"><div><b>Live only</b><small>No training; she lives with the brain she has.</small></div></label>
       </div>
@@ -238,7 +245,8 @@
     <div class="card">
       <h2>Ada</h2>
       <div class="sliders">
-        <label title="Where her brain runs while she lives. CPU leaves the GPU entirely to the Academy.">Her brain runs on <select data-set="world.device"><option value="auto">GPU if available</option><option value="cuda">GPU</option><option value="cpu">CPU</option></select><output></output></label>
+        <label title="Where her brain runs while she lives. The CPU leaves the GPU entirely to the Academy's training.">Her brain runs on <select data-set="world.device"><option value="cpu">CPU (GPU kept for training)</option><option value="cuda">GPU</option><option value="auto">GPU if available</option></select><output></output></label>
+        <label title="CPU threads for her brain. 0 = automatic: half the CPU's physical cores (the rest go to the Oracle).">Her brain's CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="world.cpu_threads"><output></output></label>
         <label>Seconds between thoughts <input type="range" min="1" max="60" step="1" data-set="world.thought_seconds"><output></output></label>
         <label>Thought length (tokens) <input type="range" min="8" max="120" step="4" data-set="world.thought_tokens"><output></output></label>
         <label>Thought temperature <input type="range" min="0.1" max="1.5" step="0.05" data-set="world.thought_temperature"><output></output></label>
@@ -249,7 +257,8 @@
       <label class="switch"><input type="checkbox" data-set="world.thoughts_grounded"><span></span>Let her sense the world before each thought</label>
       <h3>Oracle</h3>
       <label class="switch"><input type="checkbox" data-set="oracle.enabled"><span></span>Oracle on</label>
-      <div class="sliders"><label title="On an 8 GB GPU the Oracle and the Academy can't both fit in GPU memory">Oracle runs on <select data-set="oracle.placement"><option value="auto">CPU while she studies, GPU otherwise</option><option value="gpu">Always the GPU</option><option value="cpu">Always the CPU</option></select><output></output></label></div>
+      <div class="sliders"><label title="Only for Ollama (the built-in Oracle always runs on the CPU). On an 8 GB GPU the Oracle and the Academy can't both fit in GPU memory.">Ollama runs on <select data-set="oracle.placement"><option value="cpu">CPU (GPU kept for training)</option><option value="auto">CPU while she studies, GPU otherwise</option><option value="gpu">Always the GPU</option></select><output></output></label>
+        <label title="CPU threads for the Oracle (built-in or Ollama). 0 = automatic: the physical cores her brain leaves free.">Oracle's CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="oracle.cpu_threads"><output></output></label></div>
       <label class="switch"><input type="checkbox" data-set="oracle.background_teaching"><span></span>Write lessons while she studies</label>
       <label class="switch"><input type="checkbox" data-set="oracle.npc_voices"><span></span>Villagers speak with the Oracle's words</label>
       <label class="switch"><input type="checkbox" data-set="oracle.tutor_replies"><span></span>Suggest the reply she should have given</label>

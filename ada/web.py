@@ -131,6 +131,7 @@ def create_app(hub: Hub) -> FastAPI:
             await sock.send_text(dumps(init))
             eid, wseq, aseq = init["event_id"], init["world_seq"], -1
             settings = hub.settings()
+            local = hub.local.info()
             while True:
                 await asyncio.sleep(0.25)
                 msg = {"type": "tick"}
@@ -148,6 +149,10 @@ def create_app(hub: Hub) -> FastAPI:
                         msg["oracle"] = hub.oracle_info()
                     if any(e["kind"] == "concepts" for e in evs):
                         msg["concepts"] = hub.concept_report
+                li = hub.local.info()
+                if li != local:                                  # the built-in Oracle's setup progress
+                    local = li
+                    msg["oracle"] = hub.oracle_info()
                 s = hub.settings()
                 if s != settings:
                     settings = msg["settings"] = s

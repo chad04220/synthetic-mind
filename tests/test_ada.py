@@ -271,6 +271,7 @@ def test_hub_schedule_and_world_deltas(tmp_path):
 
     cfg = AdaConfig(name="H", tokenizer="bytes")
     cfg.oracle.enabled = False
+    cfg.schedule.mode = "day_night"
     hub = Hub(cfg, tmp_path)
     sent = []
     hub.send = lambda child, cmd, rid=None, **a: sent.append((child, cmd, a))
@@ -279,7 +280,11 @@ def test_hub_schedule_and_world_deltas(tmp_path):
     assert sent[-1][:2] == ("academy", "pause")
     hub.on_message({"type": "phase", "phase": "night", "day": 1})
     assert sent[-1][:2] == ("academy", "resume")
-    hub.set("schedule.mode", "together")
+    hub.set("schedule.mode", "together")                  # her brain is on the CPU: the GPU is all training's
+    assert sent[-1][1] == "resume" and sent[-1][2]["intensity"] is None
+    hub.set("world.device", "cuda")
+    hub.set("schedule.mode", "day_night")
+    hub.set("schedule.mode", "together")                  # sharing the GPU: train gently
     assert sent[-1][1] == "resume" and sent[-1][2]["intensity"] == "balanced"
     with pytest.raises(ValueError):
         set_live(hub.cfg, "schedule.mode", "sometimes")
@@ -324,6 +329,7 @@ def test_oracle_lesson_pack_against_a_fake_ollama(tmp_path):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     cfg = AdaConfig(name="O", tokenizer="bytes")
     cfg.oracle.url = f"http://127.0.0.1:{srv.server_port}"
+    cfg.oracle.backend = "ollama"
     hub = Hub(cfg, tmp_path)
     assert [m["name"] for m in hub.oracle.refresh()] == ["tiny:1b"] and hub.oracle.model == "tiny:1b"
     pack = hub.teach("owls", priority=True)
@@ -474,6 +480,7 @@ def test_the_oracle_leaves_gpu_memory_to_the_academy(tmp_path):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     cfg = AdaConfig(name="G", tokenizer="bytes")
     cfg.oracle.url = f"http://127.0.0.1:{srv.server_port}"
+    cfg.oracle.backend = "ollama"
     hub = Hub(cfg, tmp_path)
     hub.oracle.refresh()
     hub.send = lambda *a, **k: None
@@ -484,6 +491,7 @@ def test_the_oracle_leaves_gpu_memory_to_the_academy(tmp_path):
     assert ("/api/generate", {"model": "tiny:1b", "keep_alive": 0}) in seen
     hub.oracle.chat("system", "hello")
     assert seen[-1][1]["options"]["num_gpu"] == 0
+    assert seen[-1][1]["options"]["num_thread"] >= 1          # its share of the CPU's cores
     srv.shutdown()
 
 
@@ -539,3 +547,64 @@ def test_muon_batched_step_matches_one_matrix_at_a_time():
             buf.lerp_(g, 0.05)
             r.add_(_newton_schulz(g.lerp(buf, 0.95)), alpha=-0.02 * max(1, r.size(-2) / r.size(-1)) ** 0.5)
     assert max((p.detach() - r).abs().max().item() for p, r in zip(ps, ref)) < 1e-6
+
+
+def test_old_minds_move_to_the_cpu_defaults(tmp_path):
+    """Minds saved before config version 2 had 'auto' for her brain and the Oracle: they now run on
+    the CPU, keeping the GPU for training. Settings changed by hand are left alone."""
+    from ada.config import cpu_threads
+
+    p = tmp_path / "config.json"
+    old = AdaConfig().to_dict()
+    old.pop("version")
+    old["world"]["device"], old["oracle"]["placement"], old["schedule"]["mode"] = "auto", "gpu", "day_night"
+    p.write_text(json.dumps(old), encoding="utf-8")
+    cfg = AdaConfig.load(p)
+    assert cfg.version == 2 and cfg.world.device == "cpu" and cfg.oracle.placement == "gpu"
+    assert cfg.oracle.backend == "builtin" and cfg.schedule.mode == "together"
+    t = cpu_threads(cfg)
+    assert t["world"] >= 1 and t["oracle"] >= 1 and t["world"] + t["oracle"] <= max(2, t["cores"])
+    cfg.world.cpu_threads, cfg.oracle.cpu_threads = 3, 5
+    assert (cpu_threads(cfg)["world"], cpu_threads(cfg)["oracle"]) == (3, 5)
+
+
+def test_builtin_oracle_talks_to_a_llama_server(tmp_path):
+    from ada.localllm import LocalLLM, platform_asset
+    from ada.oracle import Oracle
+
+    seen = []
+
+    class Fake(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            seen.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            b = json.dumps({"choices": [{"message": {"content": '{"lesson": "Owls hunt at night.", "qa": [], "facts": []}'}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    local = LocalLLM(tmp_path)
+    o = Oracle("http://localhost:1", "", local)
+    o.backend = "builtin"
+    assert not o.ready
+    with pytest.raises(RuntimeError):
+        o.chat("system", "hi")
+    local.status, local.url, local.model_key = "ready", f"http://127.0.0.1:{srv.server_port}", "gemma-2-2b"
+    local.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert o.ready and o.active == "Gemma 2 2B Instruct (built-in)"
+        pack = o.lesson_pack("owls", 2)
+        assert pack["lesson"] == "Owls hunt at night."
+        path, body = seen[-1]
+        assert path == "/v1/chat/completions" and body["response_format"] == {"type": "json_object"}
+        assert [m["role"] for m in body["messages"]] == ["user"]          # no system role for Gemma
+        assert body["messages"][0]["content"].startswith("You are the Oracle")
+    finally:
+        local.proc.kill()
+        srv.shutdown()
+    assert platform_asset() is not None

@@ -86,6 +86,8 @@ class Academy:
             import os
 
             torch.set_num_threads(max(1, (os.cpu_count() or 4) - 2))   # two cores stay with the World and the Hub
+        else:
+            torch.set_num_threads(2)   # on the GPU it needs little CPU; the cores stay with Ada and the Oracle
         if self.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -94,6 +96,7 @@ class Academy:
         self._Brain, self._build_optimizers = Brain, build_optimizers
         self.opts = build_optimizers(self.brain, self.cfg.academy, self.device.type)
         self.rng = random.Random()
+        self.batch_size = self.cfg.academy.batch_size   # may grow to fill the GPU (fit_batch)
 
         self.fineweb = FineWebStream(self.tok, self.cfg.academy.fineweb_repo, self.cfg.academy.fineweb_config, 2048)
         self.lessons = Pool(6000)
@@ -192,7 +195,7 @@ class Academy:
         from .optim import set_lrs
 
         torch, a = self.torch, self.cfg.academy
-        B, T = a.batch_size, self.cfg.brain.seq_len
+        B, T = self.batch_size, self.cfg.brain.seq_len
         if not self.val_batches and self.fineweb.ready() and a.fineweb:
             for _ in range(2):
                 rows = [r for r in (self.fineweb.take(T + 1) for _ in range(B)) if r]
@@ -289,6 +292,52 @@ class Academy:
         perf.gauge("profile_loss_ms", round(ev[1].elapsed_time(ev[2]), 1))
         perf.gauge("profile_backward_ms", round(ev[2].elapsed_time(ev[3]), 1))
         return loss
+
+    def fit_batch(self):
+        """Use the GPU's memory: pick the largest batch that fits in what is free.
+
+        Bigger batches keep the GPU busier and spend less time in the optimizer per token. The
+        memory a batch needs is measured (two trial passes) rather than found by running out:
+        on Windows, running out doesn't fail, it quietly spills into ordinary RAM and crawls."""
+        torch, a = self.torch, self.cfg.academy
+        if self.device.type != "cuda" or not a.auto_batch:
+            self.batch_size = a.batch_size
+            return
+        T, V = self.cfg.brain.seq_len, self.cfg.brain.vocab_size
+        per = 0.0
+        try:
+            peaks = {}
+            for b in (4, 8):
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+                x = torch.randint(0, V, (b, T), device=self.device)
+                with self.autocast():
+                    loss = self.brain(x, x)
+                loss.backward()
+                self.gpu_wait()
+                peaks[b] = torch.cuda.max_memory_allocated()
+                for p in self.brain.parameters():
+                    p.grad = None
+            per = max(1, (peaks[8] - peaks[4]) / 4)                       # bytes per sequence
+            base = peaks[4] - 4 * per
+            # The optimizers' state, if it doesn't exist yet (otherwise it's already in the peaks).
+            states = 0 if any(o.state for o in self.opts) else \
+                3 * sum(p.numel() * p.element_size() for p in self.brain.parameters())
+            free, total = torch.cuda.mem_get_info()
+            # Leave room for the desktop, the browser and the allocator's slack.
+            budget = (free + torch.cuda.memory_reserved()) * 0.85 - max(600 << 20, 0.08 * total)
+            fit = int((budget - base - states) // per)
+            b = max(a.batch_size, min(a.max_batch_size, fit // 8 * 8))
+            torch.cuda.empty_cache()
+        except Exception as e:  # noqa: BLE001 - keep training with the configured batch
+            self.link.warn(f"couldn't size the batch to the GPU ({type(e).__name__}: {e})")
+            b = a.batch_size
+        if b != self.batch_size or not getattr(self, "_fit_logged", False):
+            self._fit_logged = True
+            self.link.log(f"batch: {b} x {T} tokens ({b * T:,} per step) to use the GPU's free memory "
+                          f"(about {per / 2**20:.0f} MB per sequence)" if b != a.batch_size else
+                          f"batch: {b} x {T} tokens (no room for more)")
+        self.batch_size = b
 
     def gpu_speed_test(self):
         """How fast this GPU multiplies matrices right now: the ceiling for training speed."""
@@ -489,6 +538,7 @@ class Academy:
     def grow(self, why: str):
         n = self.brain.grow()
         self.opts = self._build_optimizers(self.brain, self.cfg.academy, self.device.type)
+        self.fit_batch()
         self.growths += 1
         self.evals_since_best, self.best_val = 0, float("inf")
         self.link.send("grew", layers=n, params=self.brain.n_params(), why=why)
@@ -573,6 +623,7 @@ class Academy:
         self.fineweb.enabled = self.cfg.academy.fineweb
         self.fineweb.start()
         self.gpu_speed_test()
+        self.fit_batch()
         self.ingest()
         if not (self.folder / "brain" / "latest.pt").exists():
             self.publish("her first brain")   # the World needs something to live with, even if it's noise
@@ -612,7 +663,7 @@ class Academy:
                 perf.gauge("device", self.device.type)
                 perf.gauge("tokens_per_s", round(self.tps))
                 perf.gauge("fineweb_ready_docs", len(self.fineweb.docs))
-                perf.gauge("batch_tokens", self.cfg.academy.batch_size * self.cfg.brain.seq_len * self.cfg.academy.grad_accum)
+                perf.gauge("batch_tokens", self.batch_size * self.cfg.brain.seq_len * self.cfg.academy.grad_accum)
                 if self.device.type == "cuda":
                     cuda = self.torch.cuda
                     perf.gauge("gpu_memory_peak_mb", round(cuda.max_memory_allocated() / 2**20))
