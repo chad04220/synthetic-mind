@@ -838,7 +838,8 @@ def test_wren_asks_its_model_and_follows_the_choice(mind):
     c.decide()
     ask = next(d for k, d in life.link.sent if k == "oracle" and d["purpose"] == "wren_decide")
     opts = ask["payload"]["options"]
-    pick = next((i for i, o in enumerate(opts) if not o.startswith("Talk")), 0)
+    real = c.waiting[2]                                   # the options behind the labels, in the same order
+    pick = next(i for i, o in enumerate(real) if o.goal is not None and ag.plan(life.world, o.goal, life.world.wren)[0])
     life.handle({"cmd": "oracle_reply", "req": ask["rid"], "text": "", "decision": {"choice": pick, "say": "Look, Zen!",
                                                                                      "thought": "A fine morning."}})
     assert c.plan is not None and c.intent["text"] == opts[pick].replace(" (needed now)", "")
