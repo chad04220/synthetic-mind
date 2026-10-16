@@ -174,3 +174,57 @@ seed, home}`. Atlas: `GET /api/atlas` → `{explored: [[cx, cy, biome_index]...]
 Tabs: Home (3D world + overlay), Zen (journey, body, skills, motor stats), Thoughts, Conversations
 (with you, with the Sprite), Atlas (explored map), Keepsakes, Academy, Concepts, Sprite (model,
 its answers, ask it yourself), Settings, Health.
+
+## 8. The studio: art made from scratch, one mark at a time
+
+Zen makes art the way it moves: its brain chooses every mark, one word at a time, from a small
+vocabulary (constrained decoding, exactly like the motor words). No templates, no composers, no
+premade strokes. The World only provides the instrument; `ada/world/studio.py` holds the rules,
+which the page re-implements exactly so it can replay any piece as a time-lapse.
+
+`use` facing the **easel** (with paper), the **piano**, a **clay** lump held (sculpting) or the **desk**
+(with paper, writing) returns `{"ok": true, "text": "...", "needs_words": "paint"|"compose"|"sculpt"|"write"}`
+and Zen enters a creative session; motor beats pause until the session ends (`done`, the step limit,
+or Zen falling asleep/fainting).
+
+### Painting (vocabulary `PAINT`)
+Canvas 64×48 cells, all paper (`.`) at first. Cursor starts at (32, 24), pen up, colour black, size 1.
+Words: `up down left right` (move 1 cell; clamp to the canvas; if the pen is down, paint every cell
+moved onto), `jump` (move 6 cells in the last direction moved, painting along if the pen is down;
+the last direction starts as `right`), `press` (pen down and paint the cursor cell), `lift` (pen up), `dot` (paint the cursor cell, pen unchanged),
+`big` (brush 3×3 centred on the cursor) / `small` (brush 1 cell), colours `black white red orange
+yellow green blue purple pink brown grey gold` (palette index 0–11, see `studio.PALETTE`), `done`.
+Painting a cell with the 3×3 brush paints the 3×3 square clipped to the canvas. Max 900 words.
+Data: `{"v": 3, "w": 64, "h": 48, "palette": [12 hex], "pixels": "<3072 chars: '.' or 0-9,a,b>",
+"ops": "<one char per word, see studio.PAINT_CODES>", "skill", "score": {...}}`.
+
+### Music (vocabulary `MUSIC`)
+Words: `C D E F G A B` (play that note in the current octave for the current length), `high` / `low`
+(octave up/down, octaves 3–6, start 4), `long` (length 2 beats) / `short` (½ beat) — the length
+stays until changed; `rest` (silence for the current length), `fast` / `slow` (tempo ±12, 60–180,
+start 100), `done`. Max 200 words. Data: `{"v": 3, "tempo": n, "notes": [[midi or -1, beats], ...],
+"tempo_changes": [[note_index, tempo], ...], "ops": "...", "score": {...}}`. Played on the piano.
+
+### Sculpture (vocabulary `SCULPT`)
+A 12×12×12 grid, empty. Cursor at (6, 0, 6) (x, y up, z). Words: `up down left right in out`
+(move 1, clamped), `add` (put clay at the cursor), `cut` (remove clay at the cursor), `smooth`
+(fill empty cells that have ≥4 clay neighbours among the 6 around the cursor's 3×3×3 block), `done`. Max 600 words. Clay
+that isn't supported (nothing below it, down to the floor, through clay) still stays: it is a sculpture.
+Data: `{"v": 3, "n": 12, "voxels": "<1728 chars '0'/'1', index x + 12*(z + 12*y)>", "material", "ops", "score"}`.
+
+### Writing
+At the desk Zen's brain writes freely (`<|mind|>` text, up to 120 tokens): a poem or a note.
+
+### What Zen learns from it
+Each word in a session is an action in the experience stream (vocabulary recorded with it). At the end
+the studio scores the piece with intrinsic measures only (no notion of what a picture "should" be):
+- painting: coverage in a pleasant range, colour variety and harmony, contrast, balance, structure
+  (edges, connected shapes, some symmetry or repetition), difference from Zen's earlier paintings;
+- music: melodic steps mostly small with some leaps, motifs that repeat and vary, a home note, a
+  range, rhythmic variety, length;
+- sculpture: mass in a sensible range, connected, standing on the floor, volume variety, symmetry.
+The score (0–1), relative to Zen's running average for that medium, is the reward for the session.
+You can **love** a piece on the Keepsakes tab: that sends a strong extra reward back to every mark of
+that session (`POST /api/love {id}`), so your taste can teach Zen too.
+While Zen works, the snapshot carries `studio: {medium, w, h, pixels | notes | voxels, cursor, color,
+size, pen, steps}` (pixels/notes/voxels only every 1 s, cursor every tick) so the page can show the piece growing live.
