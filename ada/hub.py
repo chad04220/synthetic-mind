@@ -647,6 +647,16 @@ class Hub:
                     text = self.wren.star_fact(st)
                 elif purpose == "wren_name":
                     text = self.wren.name_work(p.get("work") or {}, (p.get("work") or {}).get("author", ""))
+                elif purpose == "wren_create":
+                    from .world import art
+                    c = p.get("ctx") or {}
+                    raw = self.wren.art_plan(p.get("kind", "painting"), c, st)
+                    extra["plan"] = art.clean_plan(p.get("kind", "painting"), raw, c.get("place", ""),
+                                                   c.get("time", "noon"), c.get("season", "spring"),
+                                                   c.get("weather", "clear"))
+                elif purpose == "wren_critique":
+                    text = self.wren.critique(p.get("work", ""), p.get("kind", ""), p.get("title", ""),
+                                              p.get("text", ""), float(p.get("skill", 0) or 0), st)
                 elif purpose == "wren_visitor":
                     text = self.wren.to_visitor(p["said"], p.get("situation", ""), p.get("about", ""))
                 elif purpose == "tutor" and self.cfg.oracle.tutor_replies:

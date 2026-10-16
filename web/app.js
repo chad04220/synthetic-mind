@@ -129,11 +129,11 @@ function buildMinds(w) {
     talking: a.talking, place: placeWords(a.place), activity: a.activity, wet: a.wet, carrying: a.carrying,
     doing: m.plan || m.intent?.text || "", why: m.intent?.reason, source: m.intent?.source, companion: c.name, steps: m.steps_left,
     said: m.said, thought: lastThought.trim().slice(0, 140), own_words: m.self_rate, brain: m.brain, bond: w.bond,
-    stage: S.academy.stage_name };
+    stage: S.academy.stage_name, art: (w.skills || {})[a.name] };
   const wren = c.name ? { name: c.name, kind: "companion", color: "#7fb3a6", glyph: "🧑‍🌾", needs: c.needs, feelings: c.feelings,
     sleeping: c.sleeping, talking: c.talking, place: placeWords(c.place), activity: c.activity, wet: c.wet, carrying: c.carrying,
     doing: wr.plan || wr.intent?.text || "", thought: (wr.thoughts || []).at(-1)?.text, own_words: wr.model_share, care: wr.care,
-    bond: w.bond, diary: (wr.diary || []).map((d) => `${d.time}: ${d.text}`) } : null;
+    bond: w.bond, diary: (wr.diary || []).map((d) => `${d.time}: ${d.text}`), art: (w.skills || {})[c.name] } : null;
   return wren ? [zen, wren] : [zen];
 }
 function placeWords(p) { return !p ? "" : /bedroom|room|kitchen|washroom/.test(p) ? `in the ${p}` : `${["porch", "lookout"].includes(p) ? "on the" : "in the"} ${p}`.replace("in the pond", "by the pond").replace("in the stream", "by the stream"); }

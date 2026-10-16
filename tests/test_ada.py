@@ -933,3 +933,106 @@ def test_settings_show_the_tokenizers_vocabulary():
     for name, size in TOKENIZER_VOCAB.items():
         assert make_tokenizer(name).vocab_size == size
         assert AdaConfig(tokenizer=name).to_dict()["brain"]["vocab_size"] == size
+
+
+# ---------------------------------------------------------------------------------------------- art v2
+def test_composers_grow_with_skill():
+    from ada.world import art
+
+    rng = random.Random(3)
+    plan = art.words_to_plan("I paint the moon over the pond.", "garden", "noon", "summer", "clear", "calm")
+    assert "moon" in plan["elements"] and plan["place"] == "pond" and plan["time"] == "night"
+    assert plan["subject"] == "the moon over the pond"
+    rough, fine = art.compose_painting(rng, plan, 0.1), art.compose_painting(rng, plan, 0.95)
+    assert rough["style"] == "naive" and rough["layers"] and fine["objects"]
+    assert any(o["type"] == "moon" for o in fine["objects"])
+    hum, song = art.compose_music(rng, {"mood": "calm"}, 0.1), art.compose_music(rng, {"mood": "calm"}, 0.9)
+    assert hum["form"] == ["A"] and len(song["form"]) >= 3
+    assert all(-2 <= d <= 9 for sec in song["sections"].values() for d, _ in sec["melody"])
+    lump, owl = art.compose_sculpture(rng, {"subject": "owl"}, 0.1), art.compose_sculpture(rng, {"subject": "owl"}, 0.9)
+    assert lump["finish"] == "rough" and owl["finish"] == "polished" and len(owl["parts"]) >= len(lump["parts"])
+    for kind, d in (("painting", fine), ("music", song), ("sculpture", owl)):
+        json.dumps(d)
+        assert art.describe(kind, d)
+    assert art.effective_skill(0.0, "synth", 0) < art.effective_skill(0.5, "synth", 0) < art.effective_skill(0.5, "synth", 6)
+    assert art.effective_skill(0.0, "companion") >= 0.6 and art.grow(0.5, "work") > art.grow(0.5, "admire") > 0.5
+
+
+def test_wrens_plans_are_cleaned():
+    from ada.world import art
+
+    p = art.clean_plan("painting", {"title": "Moon Pond", "subject": "the moon over the pond", "style": "oil",
+                                    "time": "night", "elements": ["moon", "fireflies", 7], "colors": ["blue", "#zzz"]})
+    assert p["style"] == "oil" and p["time"] == "night" and "fireflies" in p["elements"] and p["colors"] == ["blue"]
+    m = art.clean_plan("music", {"mode": "dorian", "tempo": "999", "form": "AABA", "instrument": "kazoo"})
+    assert m == {"mode": "dorian", "tempo": 160, "form": ["A", "A", "B", "A"]}
+    s = art.clean_plan("sculpture", {"subject": "A sleepy owl", "pose": "sleeping", "glaze": "teal"})
+    assert s["subject"] == "owl" and s["glaze"].startswith("#")
+    assert art.clean_plan("poem", "nonsense") == {} and art.clean_plan("music", {"tempo": "fast"}) == {}
+
+
+def test_paintings_hang_and_making_art_is_practice(mind):
+    life = _wren_life(mind)
+    w = life.world
+    before = w.skill(w.ada.name, "painting")
+    steps = _live(w, w.ada, ag.Goal("paint", "easel"))
+    assert steps[-1][0]
+    c = w.creations[-1]
+    assert c["data"]["v"] == 2 and c["description"] and w.skill(w.ada.name, "painting") > before
+    e = w.entities[c["entity"]] if "entity" in c else next(x for x in w.entities.values() if x.get("work") == c["id"])
+    assert e.get("wall") in ("north", "south", "east", "west")
+    snap = w.snapshot(True)
+    assert snap["skills"][w.ada.name]["painting"] > 0
+
+
+def test_wren_plans_its_art_with_its_model(mind):
+    life = _wren_life(mind, voice=True)
+    w, c = life.world, life.companion
+    assert "commission" in c.commission_work("song", "the hens at dusk") or c.commission
+    c.ask_art_plan(ag.Goal("paint", "easel"))
+    ask = next(d for k, d in life.link.sent if k == "oracle" and d["purpose"] == "wren_create")
+    assert ask["payload"]["kind"] == "painting" and w.wren.art_wait
+    life.handle({"cmd": "oracle_reply", "req": ask["rid"], "text": "",
+                 "plan": {"title": "Fireflies by the Pond", "subject": "fireflies by the pond", "time": "night",
+                          "elements": ["fireflies", "moon"], "style": "pastel"}})
+    assert not w.wren.art_wait and w.wren.art_plan["title"] == "Fireflies by the Pond"
+    assert _live(w, w.wren, ag.Goal("paint", "easel"))[-1][0]
+    made = w.creations[-1]
+    assert made["author"] == w.wren.name and made["title"] == "Fireflies by the Pond"
+    assert made["data"]["style"] == "pastel" and made["data"]["skill"] >= 0.6
+
+
+def test_wren_answers_zens_art(mind):
+    life = _wren_life(mind, voice=True)
+    w, c = life.world, life.companion
+    assert _live(w, w.ada, ag.Goal("paint", "easel"))[-1][0]
+    work = w.creations[-1]
+    w.wren.x, w.wren.y = w.ada.x + 1, w.ada.y              # beside Zen, to say it out loud
+    c.on_zen_work(work)
+    ask = next(d for k, d in life.link.sent if k == "oracle" and d["purpose"] == "wren_critique")
+    assert ask["payload"]["cid"] == work["id"]
+    before = w.skill(w.ada.name, "painting")
+    life.handle({"cmd": "oracle_reply", "req": ask["rid"], "text": "I love your moon, Zen. Try a bigger sky next time."})
+    assert work["comments"][-1]["text"].startswith("I love your moon")
+    assert w.skill(w.ada.name, "painting") > before
+    journal = [json.loads(x) for x in (mind / "journal.jsonl").read_text().splitlines()]
+    assert any(j["kind"] == "critique" for j in journal)
+
+
+def test_wren_voice_art_prompts():
+    from ada.wren import WrenVoice
+
+    class FakeModel:
+        def __init__(self, reply):
+            self.reply, self.seen = reply, []
+
+        def chat(self, system, prompt, **kw):
+            self.seen.append(prompt)
+            return self.reply
+
+    m = FakeModel('Here: {"title": "Snail Song", "mood": "calm", "mode": "lydian", "tempo": 90}')
+    v = WrenVoice(m)
+    plan = v.art_plan("music", {"place": "garden", "time": "dusk", "request": "the snail"}, 3)
+    assert plan["title"] == "Snail Song" and "the snail" in m.seen[-1] and "music" in m.seen[-1]
+    m.reply = "Lovely colours, Zen. Next time, try a tree on one side."
+    assert v.critique("a painting of the pond", "painting", "Pond", "", 0.4, 2).startswith("Lovely colours")

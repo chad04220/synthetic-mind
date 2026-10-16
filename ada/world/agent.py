@@ -1449,6 +1449,12 @@ def act(w: World, p: Plan, me: Being | None = None):
             info["stars"] = True
             k["fun"] = min(100, k["fun"] + 20)
             return True, "I look through the telescope at the stars. They twinkle. The moon is bright.", info
+        if here and here.get("work"):
+            c = next((c for c in w.creations if c["id"] == here["work"]), None)
+            if c:
+                whose = "my" if c["author"] == me.name else f"{c['author']}'s"
+                return True, f"I look at {whose} {c['kind'] if c['kind'] != 'music' else 'song'}. It is " \
+                             f"{c.get('description') or art.describe(c['kind'], c['data'])}.", {"admired": c["id"]}
         if here:
             return True, f"I look at {w.describe_thing(here)}.", {"looked": here["kind"]}
         return True, w.perceive(me=me), {}
@@ -1484,58 +1490,8 @@ def act(w: World, p: Plan, me: Being | None = None):
         k["fun"] = min(100, k["fun"] + 30)
         k["clean"] = min(100, k["clean"] + 20)
         return True, "I swim in the pond. The water is cool. A duck swims by.", {}
-    if v == "paint":
-        if not p.working:
-            me.activity = "painting"
-        p.working += 1
-        if p.working < 14:
-            return None
-        me.activity = ""
-        data = art.painting(w.rng, w.place_of(me.x, me.y), w.season, w.time_of_day(), w.weather, " ".join(w.feelings(me)))
-        e = w.make("painting")
-        c = w.create("painting", me.name, data, art.default_title("painting", data, w.rng), e)
-        hold(e) or w.put(e, me.x, me.y)
-        k["fun"] = min(100, k["fun"] + 25)
-        return True, f"I paint a picture of the {data['place']}.", {"created": c}
-    if v == "compose":
-        if not p.working:
-            me.activity = "playing the piano"
-        p.working += 1
-        w.sounds.append(("piano music", me.x, me.y, 12))
-        if p.working < 18:
-            return None
-        me.activity = ""
-        data = art.melody(w.rng, " ".join(w.feelings(me)), w.season)
-        e = w.make("recording")
-        c = w.create("music", me.name, data, art.default_title("music", data, w.rng), e)
-        hold(e) or w.put(e, me.x, me.y)
-        k["fun"] = min(100, k["fun"] + 25)
-        return True, "I play a little song on the piano and record it.", {"created": c}
-    if v == "sculpt":
-        mat = carried(me, o)
-        if mat is None:
-            return False, f"I need {_a(o)}.", {}
-        if not p.working:
-            me.activity = "sculpting"
-        p.working += 1
-        if p.working < 16:
-            return None
-        me.activity = ""
-        release(mat)
-        data = art.sculpture(w.rng, {"log": "wood"}.get(o, o))
-        spot = w.free_spot(me.x, me.y, 2) or (me.x, me.y)
-        e = w.add("sculpture", *spot)
-        c = w.create("sculpture", me.name, data, art.default_title("sculpture", data, w.rng), e)
-        return True, f"I shape {_the(o)} into a sculpture.", {"created": c}
-    if v == "write":
-        paper = carried(me, "paper")
-        if paper is None:
-            return False, "I need paper.", {}
-        release(paper)
-        e = w.make("poem")
-        c = w.create("poem", me.name, {}, "", e)
-        hold(e)
-        return True, "I write on the paper with the pencil.", {"created": c, "write": True}
+    if v in ("paint", "compose", "sculpt", "write"):
+        return _make_art(w, me, p, hold, release)
     if v == "build":
         if o == "snowman":
             spot = w.free_spot(me.x, me.y, 2) or (me.x, me.y)
@@ -1564,6 +1520,97 @@ def act(w: World, p: Plan, me: Being | None = None):
             return True, f"I go to {w.describe(b)}.", {"near": b.name}
         return True, f"I go to the {o}." if o else "I go.", {}
     return False, f"I don't know how to {v}.", {}
+
+
+ART_MEDIUM = {"paint": "painting", "compose": "music", "sculpt": "sculpture", "write": "poem"}
+ART_TIME = {"paint": (14, 44), "compose": (18, 40), "sculpt": (16, 44), "write": (8, 24)}     # (the synth, Wren)
+
+
+def _make_art(w: World, me: Being, p: Plan, hold, release) -> tuple | None:
+    """Paint, compose, sculpt or write: what it is about comes from the maker; skill decides the craft."""
+    v, o = p.goal.verb, p.goal.obj
+    medium = ART_MEDIUM[v]
+    wren = me.role == "companion"
+    if v == "sculpt" and carried(me, o) is None:
+        return False, f"I need {_a(o)}.", {}
+    if v == "write" and carried(me, "paper") is None:
+        return False, "I need paper.", {}
+    if not p.working:
+        me.activity = {"paint": "painting", "compose": "playing the piano", "sculpt": "sculpting",
+                       "write": "writing a poem"}[v]
+    p.working += 1
+    if v == "compose":
+        w.sounds.append(("piano music", me.x, me.y, 12))
+    need = ART_TIME[v][1 if wren else 0]
+    # Wren's plan comes from its language model; it keeps working on the piece while it thinks
+    if wren and getattr(me, "art_wait", False) and getattr(me, "art_plan", None) is None and p.working < need + 160:
+        return None
+    if p.working < need:
+        return None
+    me.activity = ""
+    plan = dict(getattr(me, "art_plan", None) or {})
+    me.art_plan, me.art_wait = None, False
+    place, time = w.place_of(me.x, me.y), w.time_of_day()
+    mood = plan.get("mood") or (w.feelings(me) or ["calm"])[0].replace("very ", "")
+    if not wren and p.goal.source in ("self", "you") and p.goal.text:
+        plan = {**art.words_to_plan(p.goal.text, place, time, w.season, w.weather, mood), **plan}
+    practice = w.skill(me.name, medium)
+    skill = art.effective_skill(practice, me.role, w.zen_stage)
+    together = any(b is not me and b.activity == me.activity and abs(b.x - me.x) + abs(b.y - me.y) <= 4
+                   for b in w.beings())
+    info: dict = {}
+    if v == "paint":
+        plan.setdefault("place", place)
+        plan.setdefault("time", time)
+        plan.setdefault("season", w.season)
+        plan.setdefault("weather", w.weather)
+        plan.setdefault("mood", mood)
+        data = art.compose_painting(w.rng, plan, skill)
+        e = w.make("painting")
+        title = plan.get("title") or art.default_title("painting", data, w.rng)
+        said = f"I paint {data['subject'] if data['subject'].startswith(('a ', 'the ', 'my ')) else 'a picture of ' + data['subject']}."
+    elif v == "compose":
+        plan.setdefault("mood", mood)
+        data = art.compose_music(w.rng, plan, skill)
+        e = w.make("recording")
+        title = plan.get("title") or art.default_title("music", data, w.rng)
+        said = "I play a song on the piano and record it." if data["form"] != ["A"] else "I play a little tune on the piano."
+    elif v == "sculpt":
+        release(carried(me, o))
+        data = art.compose_sculpture(w.rng, plan, skill, {"log": "wood"}.get(o, o))
+        e = None
+        title = plan.get("title") or art.default_title("sculpture", data, w.rng)
+        said = f"I shape {_the(o)} into {art.describe_sculpture(data).replace(' made of ' + data['material'], '')}."
+    else:
+        release(carried(me, "paper"))
+        text = plan.get("text", "")
+        data = art.poem_spec(text, plan.get("form", ""), plan.get("about", ""))
+        e = w.make("poem")
+        title = plan.get("title", "")
+        said = "I write a poem with the pencil." if not text else "I write a poem."
+        info["write"] = not text                          # the synth's own words fill it in
+    data["skill"] = skill
+    if e is None:
+        spot = None
+        for r in range(1, 7):
+            spot = w.free_spot(*w.anchors["yard"], radius=r + 2)
+            if spot:
+                break
+        e = w.add("sculpture", *(spot or (me.x, me.y)), plinth=True)
+    c = w.create(medium, me.name, data, title, e)
+    c["description"] = art.describe(medium, data) if medium != "poem" else f"a {data['form']} about {data['about'] or 'today'}"
+    if plan.get("text"):
+        c["text"] = plan["text"]
+    if medium == "painting" and not w.hang(e):
+        hold(e) or w.put(e, me.x, me.y)
+    elif medium in ("music", "poem"):
+        hold(e) or w.put(e, me.x, me.y)
+    w.practice(me.name, medium, "work")
+    if together:
+        w.practice(me.name, medium, "together")
+    me.needs["fun"] = min(100, me.needs["fun"] + 25)
+    info["created"] = c
+    return True, said, info
 
 
 def _harvest(w: World, me: Being, plant: dict, hold) -> tuple:

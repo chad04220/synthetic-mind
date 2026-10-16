@@ -457,6 +457,11 @@ class Life:
                 self.oracle("wren_book", entity=book["id"], kind=book["kind"])
         if "stars" in info and self.voice_ready:
             self.oracle("wren_star")
+        if "admired" in info:
+            c = next((x for x in w.creations if x["id"] == info["admired"]), None)
+            if c:
+                w.practice(w.ada.name, c["kind"] if c["kind"] in ("painting", "music", "sculpture", "poem") else "painting",
+                           "admire")
         if info.get("mirror"):
             self.journal("self", [("<|thought|>", f"I look in the mirror. That is me. I am {w.ada.name}. "
                                                   f"I am a synth. {w.wren.name} is my companion.")], 2.0)
@@ -493,8 +498,12 @@ class Life:
         w = self.world
         if info.get("write"):
             def wrote(text, toks, _):
-                w.update_creation(c["id"], text=text.strip(), title=(text.strip().split(".")[0][:40] or "A poem"))
+                from .world.art import poem_spec
+
+                w.update_creation(c["id"], text=text.strip(), title=(text.strip().split(".")[0][:40] or "A poem"),
+                                  data=poem_spec(text.strip(), "", w.place_of(w.ada.x, w.ada.y)) | {"skill": c["data"].get("skill", 0)})
                 self.link.send("event", kind="created", creation=c)
+                self.companion.on_zen_work(c)
 
             self.say_async("create", [("<|world|>", w.perceive(self.day_seconds)), ("<|thought|>", "I write a poem:"),
                                       ("<|mind|>", "")], wrote, max_new=40, temperature=0.95)
@@ -505,6 +514,7 @@ class Life:
             if title:
                 w.update_creation(c["id"], title=title)
                 self.link.send("event", kind="created", creation=c)
+            self.companion.on_zen_work(c)
 
         self.say_async("create", [("<|thought|>", f"I made {ag.noun(KINDS.get(c['kind'], {}) and c['kind'] or c['kind'])}. "
                                                   "I call it:"), ("<|mind|>", "")], named, max_new=8, temperature=0.9)
@@ -580,6 +590,12 @@ class Life:
             return
         if purpose == "wren_turn":
             c.talk_line(req["talk"], text)
+            return
+        if purpose == "wren_create":
+            c.on_art_plan(rid, extra.get("plan") or {})
+            return
+        if purpose == "wren_critique":
+            c.on_critique(req, text)
             return
         if not text:
             return
@@ -773,7 +789,7 @@ class Life:
                 if result is None:
                     return              # the reply follows when its brain has found the words
             elif cmd == "oracle_reply":
-                self.oracle_reply(msg["req"], msg.get("text", ""), {"decision": msg.get("decision")})
+                self.oracle_reply(msg["req"], msg.get("text", ""), {"decision": msg.get("decision"), "plan": msg.get("plan")})
                 result = True
             elif cmd == "voice":
                 self.voice_ready = bool(msg.get("ready"))
@@ -784,6 +800,8 @@ class Life:
                 result = self.place(msg["kind"], int(msg["x"]), int(msg["y"]), msg.get("text") or "")
             elif cmd == "suggest":
                 result = self.suggest(msg["text"])
+            elif cmd == "commission":
+                result = self.companion.commission_work(str(msg.get("kind") or "painting"), str(msg.get("about") or ""))
             elif cmd == "sleep_now":
                 if self.world.phase == "day":
                     self.world.phase_t = max(self.world.phase_t, self.day_seconds)
@@ -865,6 +883,7 @@ class Life:
         cfg, w = self.cfg, self.world
         if cfg.schedule.mode == "academy":
             return                                  # the world holds its breath while it only studies
+        w.zen_stage = int(self.brain_meta.get("stage", 0) or 0)
         dt = cfg.world.tick
         w.advance(dt)
         self.clock(dt)

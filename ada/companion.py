@@ -67,6 +67,8 @@ class Companion:
     def __init__(self, life):
         self.life = life
         self.suggestion = None
+        self.commission: dict | None = None            # something our friend asked Wren to make
+        self.art_rid = None
         self.recent_labels: deque = deque(maxlen=6)
         self.failed: dict[str, float] = {}            # option label -> when it last failed
         self.current_label = ""
@@ -290,7 +292,85 @@ class Companion:
         if say:
             self.speak(say, kind="say")
         self.bring_zen(goal)
+        if goal.verb in ("paint", "compose", "sculpt", "write"):
+            self.ask_art_plan(goal)
         return True
+
+    # ------------------------------------------------------------------ making art
+    ART_KIND = {"paint": "painting", "compose": "music", "sculpt": "sculpture", "write": "poem"}
+
+    def ask_art_plan(self, goal: ag.Goal):
+        """What Wren means to make: its language model plans the piece while Wren gets started."""
+        b = self.b
+        b.art_plan, b.art_wait = None, False
+        kind = self.ART_KIND[goal.verb]
+        order = self.commission if self.commission and self.commission["kind"] == kind else None
+        if order:
+            self.commission = None
+        if not (self.life.voice_ready and self.life.cfg.oracle.enabled):
+            if order:
+                b.art_plan = {"subject": order["about"], "about": order["about"], "elements": [], "mood": "joyful"}
+            return
+        w = self.w
+        ctx = {"place": w.place_of(b.x, b.y), "time": w.time_of_day(), "season": w.season, "weather": w.weather,
+               "mood": ", ".join(w.feelings(b)) or "fine", "memory": [x["text"] for x in list(self.diary)[-5:]],
+               "zen_near": self.near_zen(6), "request": order["about"] if order else "",
+               "material": goal.obj if goal.verb == "sculpt" else ""}
+        self.art_rid = self.life.oracle("wren_create", kind=kind, ctx=ctx)
+        b.art_wait = True
+
+    def on_art_plan(self, rid: str, plan: dict):
+        if rid != getattr(self, "art_rid", None):
+            return
+        self.art_rid = None
+        b = self.b
+        b.art_plan = plan or {}
+        b.art_wait = False
+        if plan.get("subject") and self.near_zen(6) and self.care() >= 1:
+            self.speak(f"I'm going to make {plan['subject'] if plan['subject'].startswith(('a ', 'an ', 'the ')) else 'something about ' + plan['subject']}.",
+                       kind="say")
+
+    def commission_work(self, kind: str, about: str) -> str:
+        """Our friend asks Wren to make something."""
+        kind = {"song": "music", "music": "music", "painting": "painting", "picture": "painting", "sculpture": "sculpture",
+                "poem": "poem"}.get(kind.lower(), "painting")
+        about = about.strip()[:160] or "something lovely"
+        self.commission = {"kind": kind, "about": about, "t": self.now()}
+        self.note(f"Our friend asked me to make a {'song' if kind == 'music' else kind} about {about}.")
+        noun = "song" if kind == "music" else kind
+        return f"{self.name} will make a {noun} about {about} soon."
+
+    def on_zen_work(self, c: dict):
+        """Wren looks at what the synth made and says something kind and useful about it."""
+        z = self.zen
+        if c.get("author") != z.name:
+            return
+        if self.life.voice_ready and self.life.cfg.oracle.enabled:
+            self.life.oracle("wren_critique", work=c.get("description") or c["kind"], kind=c["kind"],
+                             title=c.get("title", ""), text=c.get("text", "")[:400], skill=c["data"].get("skill", 0),
+                             cid=c["id"])
+        else:
+            self.on_critique({"cid": c["id"], "kind": c["kind"]}, self.rng.choice([
+                f"Oh, {z.name}! I love it. Look at those colours.", f"You made that, {z.name}? It's wonderful.",
+                f"That is lovely, {z.name}. Shall we make another one together?"]))
+
+    def on_critique(self, req: dict, text: str):
+        if not text:
+            return
+        w, z = self.w, self.zen
+        c = next((x for x in w.creations if x["id"] == req.get("cid")), None)
+        if c is None:
+            return
+        c.setdefault("comments", []).append({"by": self.name, "text": text, "t": time.time()})
+        w.new_creations.append(c)
+        self.life.link.send("event", kind="created", creation=c)
+        medium = c["kind"] if c["kind"] in ("painting", "music", "sculpture", "poem") else "painting"
+        w.practice(z.name, medium, "feedback")
+        if self.near_zen(8):
+            self.speak(text, kind="critique")
+            self.life.journal("critique", [("<|thought|>", f"I made {c.get('description') or 'something'}."),
+                                           ("<|npc|>", f"{self.name}: {text}")], 2.0)
+        self.note(f"{z.name} made {c.get('description') or 'something'}. I told {z.name}: {text}")
 
     def bring_zen(self, goal: ag.Goal):
         """At the caretaker stage Wren takes the synth along to what it does, so it can watch and listen."""
@@ -368,8 +448,12 @@ class Companion:
         if "created" in info:
             c = info["created"]
             self.life.link.send("event", kind="created", creation=c)
-            if self.life.voice_ready:
+            if not c.get("title") and self.life.voice_ready:
                 self.life.oracle("wren_name", work=c)
+            if self.near_zen(6):
+                self.speak(f"Look, {z.name}! I made {c.get('description') or 'something'}.", kind="say")
+                self.life.journal("watched", [("<|world|>", self.w.perceive(me=z)),
+                                              ("<|thought|>", f"{self.name} made {c.get('description') or 'something'}.")], 1.4)
         if "stars" in info and self.near_zen(6):
             self.life.oracle("wren_star")
         if info.get("slept"):
@@ -609,8 +693,19 @@ class Companion:
             add("Rest on the sofa", G("rest", "sofa"), 3.5 if n["rest"] < 25 else 2.0, "rest")
         if n["clean"] < 30:
             add("Take a bath", G("wash", "bathtub"), 3, "self")
+        if self.commission and not night:
+            verb, what = {"painting": ("paint", "easel"), "music": ("compose", "piano"), "sculpture": ("sculpt", "clay"),
+                          "poem": ("write", "desk")}[self.commission["kind"]]
+            noun = "song" if self.commission["kind"] == "music" else self.commission["kind"]
+            add(f"Make the {noun} our friend asked for, about {self.commission['about']}", G(verb, what), 6.2, "play",
+                "Our friend asked me for something. Let's make it!")
+        if not night and not z.sleeping and self.near_zen(8) and zn["fun"] < 85:
+            add(f"Paint together with {zname}", G("paint", "easel"), 3.0, "teach", f"Let's paint together, {zname}!",
+                G("paint", "easel", text="I paint a picture.", reason=f"{self.name} and I paint together."))
         if not night:
             add("Paint a picture at the easel", G("paint", "easel"), 1.4, "play")
+            add("Make a clay sculpture in the workshop", G("sculpt", "clay"), 1.1, "play")
+            add("Write a poem at the desk", G("write", "desk"), 1.1, "play")
             add("Play a song on the piano", G("compose", "piano"), 1.6 + (1.2 if self.near_zen(8) else 0), "play")
             add("Pick fruit in the orchard", G("take", self.rng.choice(["apple", "pear", "plum"])), 1.3)
             add("Go fishing at the pond", G("fish", "pond"), 1.0, "play")

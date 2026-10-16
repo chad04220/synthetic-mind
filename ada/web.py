@@ -18,7 +18,7 @@ from .hub import Hub
 WEB = Path(__file__).resolve().parent.parent / "web"
 
 WORLD = {"chat": ["text"], "suggest": ["text"], "visitor": ["action", "kind", "text", "fx", "fy", "facing", "target", "to"],
-         "place": ["kind", "x", "y", "text"], "sleep_now": [], "wake_now": [], "think": []}
+         "place": ["kind", "x", "y", "text"], "commission": ["kind", "about"], "sleep_now": [], "wake_now": [], "think": []}
 ACADEMY = {"publish": [], "grow": [], "save": [], "evaluate": [], "probe": ["text"]}
 
 

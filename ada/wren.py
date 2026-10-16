@@ -132,6 +132,46 @@ class WrenVoice:
         return _line(self.o.chat(self.system, f"Give a short, lovely title (two to five words) to {what} that {by}. "
                                               "Reply with the title only.", temperature=0.9, max_tokens=20), 60).strip('"')
 
+    # ------------------------------------------------------------------ art
+    ART_ASK = {
+        "painting": ('a painting. Choose what it shows and how. Return JSON: {"title": "...", "subject": "one '
+                     'sentence of what is in the picture", "style": one of [naive, watercolor, impressionist, oil, '
+                     'pastel, ink, pointillist], "time": one of [dawn, morning, noon, afternoon, evening, night], '
+                     '"mood": "one word", "elements": ["up to 6 things to paint, e.g. moon, pond, hens, apple tree, '
+                     'fireflies, cottage, hills"], "colors": ["up to 4 colour words"]}'),
+        "music": ('a short piece of music on the piano or another instrument. Return JSON: {"title": "...", '
+                  '"idea": "one sentence of what the music is about", "mood": "one word", "mode": one of [major, minor, '
+                  'dorian, mixolydian, pentatonic, lydian], "tempo": beats per minute 60 to 150, "instrument": one of '
+                  '[piano, music box, flute, strings, bell, guitar, voice], "form": a string like "AABA"}'),
+        "sculpture": ('a small sculpture. Return JSON: {"title": "...", "subject": one of [cat, bird, hen, owl, fish, '
+                      'figure, tree, mushroom, heart, moon, spiral, wave, tower, flower, rabbit, snail], "pose": one of '
+                      '[sitting, sleeping, flying], "mood": "one word", "glaze": "a colour word"}'),
+        "poem": ('a poem. Return JSON: {"title": "...", "form": one of [haiku, quatrain, free verse, lullaby, '
+                 'couplets], "about": "a few words", "text": "the poem, lines separated by \\n, at most 10 lines"}'),
+    }
+
+    def art_plan(self, kind: str, ctx: dict, stage: int) -> dict:
+        """What Wren decides to make: a plan the World's composers turn into the real piece."""
+        mem = "; ".join(ctx.get("memory", [])[-4:])
+        req = f"Our friend asked you for a piece about {ctx['request']}. " if ctx.get("request") else ""
+        mat = f"You are working in {ctx['material']}. " if ctx.get("material") else ""
+        near = f"{self.synth} is beside you, watching. " if ctx.get("zen_near") else ""
+        return self._json(f"It is {ctx.get('time', 'day')} in {ctx.get('season', 'spring')}, the weather is "
+                          f"{ctx.get('weather', 'clear')}, you are at the {ctx.get('place', 'house')} and you feel "
+                          f"{ctx.get('mood', 'fine')}. Lately: {mem or 'a quiet day'}. {near}{req}{mat}"
+                          f"You are about to make {self.ART_ASK.get(kind, self.ART_ASK['painting'])}\n"
+                          "Make it beautiful and personal, about your life here.",
+                          temperature=0.95, max_tokens=320)
+
+    def critique(self, work: str, kind: str, title: str, text: str, skill: float, stage: int) -> str:
+        """Encouraging words about the synth's work, with one thing to try next time."""
+        poem = f' The words are: "{text}".' if text else ""
+        tip = ("Say what you love about it." if skill < 0.25 else
+               "Say what you love about it and give one small, concrete idea to try next time.")
+        return _line(self.o.chat(self.system, f"{self.synth} just made {work}" + (f', called "{title}"' if title else "")
+                                 + f".{poem} Speak to {self.synth} about it in two short sentences, using "
+                                 f"{self._level(stage)}. {tip}", temperature=0.85, max_tokens=90), 300)
+
     def poem(self, stage: int, about: str) -> str:
         return clean(self.o.chat(self.system, f"Write a tiny poem (4 lines) about {about}, using {self._level(stage, 1)}.",
                                  temperature=0.95, max_tokens=120))[:500]

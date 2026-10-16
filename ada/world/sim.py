@@ -76,6 +76,8 @@ class Being:
     engaged: int | None = None                     # in a conversation (its id): stays put, faces the other
     needs: dict = field(default_factory=lambda: {n: 75.0 for n in NEEDS})
     wet: float = 0.0
+    art_plan: dict | None = None                   # what it means to make next (Wren's comes from its model)
+    art_wait: bool = False
     activity: str = ""                             # what it is doing right now ("playing the piano")
     role: str = ""                                 # "synth", "companion" or "visitor"
     rates: float = 1.0                             # how fast its needs fall
@@ -156,6 +158,8 @@ class World:
         self.new_creations: list[dict] = []
         self.heard: list[tuple[float, str, str]] = []    # (time, who, words) said near the synth
         self.bond = 20.0                                  # how close the synth feels to its companion
+        self.skills: dict[str, dict[str, float]] = {}      # name -> medium -> practice (0..1)
+        self.zen_stage = 0                                 # the synth's language stage (the World sets it)
         self.outdoor_t = self.outdoor_temperature()
 
     # ================================================================== generation
@@ -1195,6 +1199,48 @@ class World:
             self.touch(entity)
         return c
 
+    # ================================================================== art skill
+    def skill(self, name: str, medium: str) -> float:
+        return self.skills.get(name, {}).get(medium, 0.0)
+
+    def practice(self, name: str, medium: str, how: str) -> float:
+        from .art import grow
+
+        m = self.skills.setdefault(name, {})
+        m[medium] = grow(m.get(medium, 0.0), how)
+        return m[medium]
+
+    def art_skills(self, b: Being) -> dict:
+        from .art import MEDIA, effective_skill
+
+        return {m: effective_skill(self.skill(b.name, m), b.role, self.zen_stage) for m in MEDIA}
+
+    def hang(self, e: dict) -> bool:
+        """Hang a painting on a wall in the house: a floor tile beside a wall, facing into the room."""
+        hung = {(x["x"], x["y"], x.get("wall")) for x in self.entities.values() if x.get("wall")}
+        spots = []
+        for b in self.buildings:
+            if b["name"] != "house":
+                continue
+            for y in range(b["y0"] + 1, b["y1"]):
+                for x in range(b["x0"] + 1, b["x1"]):
+                    if self.terrain[y][x] != FLOOR:
+                        continue
+                    for side, (dx, dy) in DIRS.items():
+                        if self.terrain[y + dy][x + dx] == WALL and (x, y, side) not in hung and \
+                                not any(o["kind"] in ("bed", "bookshelf", "piano", "stove", "sink", "pantry", "fireplace",
+                                                      "oven", "bathtub", "desk", "toy chest") for o in self.at(x, y)):
+                            spots.append((x, y, side))
+        if not spots:
+            return False
+        order = {"living room": 0, "kitchen": 1, "little bedroom": 2, "big bedroom": 3, "washroom": 4}
+        spots.sort(key=lambda t: (order.get(self.region[t[1]][t[0]], 9), self.rng.random()))
+        x, y, side = spots[0]
+        self.remove(e)
+        e["wall"] = side
+        self.put(e, x, y)
+        return True
+
     def update_creation(self, cid: int, **fields):
         c = next((c for c in self.creations if c["id"] == cid), None)
         if c:
@@ -1473,6 +1519,7 @@ class World:
             "people": [being(wr) | {"role": "companion", "color": "#7fb3a6", "hat": "#3d5a80", "glyph": "🧑‍🌾",
                                     "friendship": round(self.bond, 1)}],
             "bond": round(self.bond, 1),
+            "skills": {b.name: self.art_skills(b) for b in (a, wr)},
             "log": self.log[-14:],
         }
         if self.new_creations and not full:
@@ -1502,7 +1549,7 @@ class World:
                 "phase_t": self.phase_t, "weather": self.weather, "indoor": self.indoor,
                 "moisture": [[x, y, round(m, 3)] for (x, y), m in self.moisture.items()],
                 "visited": sorted(self.visited), "firsts": sorted(self.firsts), "read": sorted(self.read_books),
-                "creations": self.creations, "bond": self.bond, "ada": being(self.ada), "wren": being(self.wren)}
+                "creations": self.creations, "bond": self.bond, "skills": self.skills, "ada": being(self.ada), "wren": being(self.wren)}
 
     def load_state(self, s: dict):
         if s.get("version", 1) < 3 or s.get("W") != W or s.get("H") != H:
@@ -1524,6 +1571,7 @@ class World:
         self.read_books = set(s.get("read", []))
         self.creations = s.get("creations", [])
         self.bond = s.get("bond", self.bond)
+        self.skills = s.get("skills", {})
         for b, d in ((self.ada, s.get("ada")), (self.wren, s.get("wren"))):
             if d:
                 b.x, b.y, b.carrying, b.sleeping = d["x"], d["y"], d["carrying"], d["sleeping"]
