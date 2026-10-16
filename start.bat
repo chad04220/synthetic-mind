@@ -39,10 +39,11 @@ goto cpu_torch
 "%VPY%" -c "import torch" >nul 2>nul || "%VPY%" -m pip install torch
 
 :deps
-if exist .venv\deps-ok goto run
+rem Install the requirements again whenever requirements.txt changes (new versions add packages).
+fc /b requirements.txt .venv\requirements.installed >nul 2>nul && goto run
 echo Installing the other requirements...
 "%VPY%" -m pip install -r requirements.txt || goto fail_deps
-echo ok> .venv\deps-ok
+copy /y requirements.txt .venv\requirements.installed >nul
 
 :run
 "%VPY%" -c "import torch; print('PyTorch', torch.__version__, '| GPU:', torch.cuda.get_device_name() if torch.cuda.is_available() else 'none, training on the CPU (slow)')"
