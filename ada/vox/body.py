@@ -158,6 +158,7 @@ class Body:
         elif self.in_water and not self.swims:
             sp *= 0.5
         tvx, tvz = mx * sp, mz * sp
+        fall_after = False
         if self.on_ground:
             below = get(fx, _f(y - 0.05), fz)
             k = 0.1 if below in ICE else 0.6
@@ -196,12 +197,13 @@ class Body:
             if self.jump and self.on_ground:
                 self.vy = 0.42
                 self.exhaustion += 0.2 if self.sprint else 0.05
-            self.vy = (self.vy - GRAVITY) * 0.98
-            if self.vy < -3.9:
-                self.vy = -3.9
+            fall_after = True
         vy0 = self.vy
         ox, oy, oz = self.x, self.y, self.z
         self._move(self.vx, self.vy, self.vz)
+        if fall_after:
+            # MC order: move first, then gravity and drag
+            self.vy = max((self.vy - GRAVITY) * 0.98, -3.9)
         moved_h = math.hypot(self.x - ox, self.z - oz)
         if self.is_player:
             self.exhaustion += moved_h * (0.1 if self.sprint else 0.01)
@@ -247,19 +249,24 @@ class Body:
                            self.z + hw, dz)
         blocked = (abs(ndx - dx) > EPS) or (abs(ndz - dz) > EPS)
         if blocked and (self.on_ground or was_ground) and not self.flies:
-            # step-up: try lifting by up to 0.6, then moving, then settling down
-            up = self._clip_y(self.x - hw, self.x + hw, self.y, self.y + self.h, self.z - hw, self.z + hw, 0.6)
-            if up > 0.05:
+            # step-up: try the exact rises needed (block tops within 0.6), then 0.6; keep the best
+            best = None
+            for rise in self._step_rises(dx, dz):
+                up = self._clip_y(self.x - hw, self.x + hw, self.y, self.y + self.h, self.z - hw, self.z + hw, rise)
+                if up < rise - EPS:
+                    continue
                 y2 = self.y + up
                 sdx = self._clip_x(self.x - hw, self.x + hw, y2, y2 + self.h, self.z - hw, self.z + hw, dx)
                 sdz = self._clip_z(self.x + sdx - hw, self.x + sdx + hw, y2, y2 + self.h, self.z - hw,
                                    self.z + hw, dz)
                 down = self._clip_y(self.x + sdx - hw, self.x + sdx + hw, y2, y2 + self.h, self.z + sdz - hw,
                                     self.z + sdz + hw, -up)
-                if sdx * sdx + sdz * sdz > ndx * ndx + ndz * ndz + 1e-6 and up + down <= 0.6 + EPS:
-                    ndx, ndz = sdx, sdz
-                    self.y = y2 + down
-                    blocked = (abs(ndx - dx) > EPS) or (abs(ndz - dz) > EPS)
+                gain = sdx * sdx + sdz * sdz
+                if gain > ndx * ndx + ndz * ndz + 1e-6 and (best is None or gain > best[0] + 1e-9):
+                    best = (gain, sdx, sdz, y2 + down)
+            if best is not None:
+                _, ndx, ndz, self.y = best
+                blocked = (abs(ndx - dx) > EPS) or (abs(ndz - dz) > EPS)
         self.collided_h = blocked
         if abs(ndx - dx) > EPS:
             self.vx = 0.0
@@ -267,6 +274,22 @@ class Body:
             self.vz = 0.0
         self.x += ndx
         self.z += ndz
+
+    def _step_rises(self, dx, dz):
+        """Candidate step heights: tops of blocks ahead within 0.6 of the feet, then 0.6."""
+        hw = self.w / 2
+        out = set()
+        get = self.world.get
+        y = self.y
+        for bx in range(_f(self.x + dx - hw), _f(self.x + dx + hw - EPS) + 1):
+            for bz in range(_f(self.z + dz - hw), _f(self.z + dz + hw - EPS) + 1):
+                for by in range(_f(y), _f(y + 0.6) + 1):
+                    bid = get(bx, by, bz)
+                    if SOLID[bid]:
+                        top = by + HEIGHT[bid]
+                        if y + EPS < top <= y + 0.6 + EPS:
+                            out.add(round(top - y + 1e-6, 6))
+        return sorted(out) + [0.6]
 
     def _has_floor(self, x, z):
         hw = self.w / 2 - 0.05

@@ -78,6 +78,8 @@ def system_prompt(name: str, skills: dict, extra: str = "") -> str:
 You act through skills. Your body carries a skill out on its own; you will think again when it ends, when someone speaks to you, or when something important happens.
 {chr(10).join(lines)}
 
+Know-how: use exact names (oak_log, oak_planks, stick, crafting_table, wooden_pickaxe, cobblestone, coal, iron_ore, raw_iron, iron_ingot, torch, bread). Crafting takes ingredients from your inventory (logs → planks → sticks; 4 planks make a crafting_table; tools need a crafting table nearby, and craft places one from your inventory when it can). Anything you carry that is a block can be put down with place. A pickaxe is needed for stone and ores, a better pickaxe for iron and diamond. Eat before your food runs low, and have light and shelter for the night. When an action fails, read why and do something else rather than the same thing again.
+
 You can also learn. Your mind runs on a language model, and you can improve that model yourself: `reflect` to judge your recent decisions and keep lessons, and `practice` to train your model on the decisions you judged good and on the better choices you wrote for the bad ones. Practising when you have plenty of new, judged experience makes your future decisions better; reflect honestly, because what you call good is what you will become.
 
 Each turn you see what you perceive now. Reply with one decision as JSON on one line: a short thought (what you notice and why you choose this, one or two sentences), the action (one skill and its args, using names exactly as you see them), "say" only when you are talking to someone (else null), "note" only for a fact or plan worth keeping for a long time (else null), and "goal" only when you take on a new goal (else null). For example:
@@ -339,10 +341,14 @@ class Mind:
             parts.append("Recent events:\n" + "\n".join(self.events))
         if self.convo:
             parts.append("Conversation:\n" + "\n".join(f"{'You' if w == 'you' else w}: {t}" for w, t in self.convo))
-        if self.last_result:
-            r = self.last_result
-            parts.append(f"Your last action: {r['skill']} {json.dumps(r.get('args') or {})} → "
-                         f"{'it worked' if r.get('ok') else 'it failed'}: {r.get('text', '')}")
+        done = [r for r in self.recent if "outcome" in r][-5:]
+        if done:
+            parts.append("Your recent actions (oldest first):\n" + "\n".join(
+                f"- {r['action'].get('skill')} {json.dumps(r['action'].get('args') or {})} → "
+                f"{'worked' if r['outcome']['ok'] else 'FAILED'}: {r['outcome']['text']}" for r in done))
+            fails = [r for r in done[-3:] if not r["outcome"]["ok"]]
+            if len(fails) >= 2 and len({json.dumps(r["action"], sort_keys=True) for r in fails}) < len(fails):
+                parts.append("You keep repeating an action that fails: try something different.")
         parts.append(f"Why you are thinking now: {reason}.")
         return "\n\n".join(p for p in parts if p)
 

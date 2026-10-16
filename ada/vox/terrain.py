@@ -120,6 +120,7 @@ class Terrain:
         s = self.s = {k: _seed32(seed, k) for k in ("cont", "mnt", "det", "riv", "lake", "temp", "hum", "cave1",
                                                     "cave2", "cave3", "ore", "var", "over", "birch", "deep")}
         self._s = s
+        self._cand_cache: dict = {}
         self.spawn_chunk, self.cabin = self._find_spawn()
         x0, y0, z0 = self.cabin
         self.spawn = (x0 + 3.5, float(y0 + 1), z0 + 9.5)
@@ -373,6 +374,17 @@ class Terrain:
                   "savanna": 0.07, "swamp": 0.3, "snowy_tundra": 0.05, "mountains": 0.08}
 
     def _tree_cands(self, ncx, ncz):
+        key = (ncx, ncz)
+        hit = self._cand_cache.get(key)
+        if hit is not None:
+            return hit
+        out = self._tree_cands_compute(ncx, ncz)
+        if len(self._cand_cache) > 4096:
+            self._cand_cache.clear()
+        self._cand_cache[key] = out
+        return out
+
+    def _tree_cands_compute(self, ncx, ncz):
         rng = np.random.default_rng([self.seed & 0xFFFFFFFF, ncx & 0xFFFFFFFF, ncz & 0xFFFFFFFF, 3])
         n = 14
         lx = rng.integers(0, 16, n)
@@ -584,7 +596,7 @@ class Terrain:
             if not len(nz):
                 continue
             yy = int(nz[-1]) + 1
-            if yy <= SEA:
+            if yy <= SEA or col[yy - 1] not in (I["grass"], I["sand"], I["snow"], I["dirt"], I["moss"], I["mud"]):
                 continue
             spawns.append({"kind": kind, "x": cx * 16 + lx + 0.5, "y": float(yy), "z": cz * 16 + lz + 0.5})
 

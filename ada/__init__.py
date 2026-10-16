@@ -1,3 +1,3 @@
-"""Ada: a two-part mind. The Academy teaches her; the World is where she lives."""
+"""Synthetic Mind: a voxel world, and a small language model that lives in it and learns from its own life."""
 
-__version__ = "4.0.0"
+__version__ = "5.0.0"
