@@ -27,7 +27,16 @@ both get better with practice.
   with the piece.
 - **Ask Wren to make something** on the Keepsakes tab, for example "a song about the hens at dusk".
 - **Art in the house.** Paintings hang on the walls in frames. Sculptures stand on plinths in the
-  yard. Either of them can stop to look at a piece.
+  yard. Either of them can stop to look at a piece. Click one in the 3D view to open it.
+- **The Keepsakes tab** is a gallery:
+  - framed paintings, songs with a piano roll, 3D sculptures and typeset poems;
+  - filters by kind and by maker, sorted newest or best first;
+  - a viewer with the full piece, its description, the maker's skill and Wren's words, and
+    previous/next with the arrow keys;
+  - download a painting or sculpture as PNG, a song as WAV, a poem as text.
+- **Wren finishes what it starts.** If Zen comes to it or starts a conversation mid-piece, Wren
+  goes back to the piece afterwards. A commission stays open until it is made, and if Wren's
+  model is too slow to plan it, Wren still makes it about what you asked for.
 
 ---
 
