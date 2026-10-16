@@ -238,7 +238,7 @@ _NAMES = {
     "well": ("the {} Well", ["Old", "Wishing", "Deep", "Stone", "Mossy", "Dry-Stone"]),
 }
 POI_RADIUS = {"ruins": 5, "cabin": 5, "cave": 5, "stones": 5, "spring": 3, "lookout": 5, "beehive": 3,
-              "nest": 3, "well": 3, "home": 6}
+              "nest": 3, "well": 3, "home": 6, "pond": 5}
 STONE_TEXTS = ["Carved on it: a sun with seven rays.", "Carved on it: a moon and three stars.",
                "Carved on it: a spiral, like a snail shell.", "Carved on it: a river running to the sea.",
                "Carved on it: a deer leaping over a hill.", "Carved on it: two hands holding a seed."]
@@ -278,7 +278,8 @@ def _home_layout():
                 feat[(x, y)] = 0
     for p in ((-8, -4), (6, -7), (-10, 2), (-5, 10)):
         feat[p] = F["apple_tree"]
-    for p in ((-6, 6), (-7, 7), (4, 8), (-2, 9), (8, -5), (13, 5), (-9, -1)):
+    for p in ((-6, 6), (-7, 7), (4, 8), (-2, 9), (8, -5), (13, 5), (-9, -1), (-6, 4), (6, 5), (5, -5),
+              (-6, -5), (-3, 6), (3, 6)):
         feat[p] = F["berry_bush"]
     for p in ((-11, -6), (-12, -3), (9, 9), (12, -7), (-3, -9), (2, -10)):
         feat[p] = F["oak"]
@@ -286,13 +287,18 @@ def _home_layout():
         feat[p] = F["birch"]
     for p in ((-6, -8), (7, 11)):
         feat[p] = F["rock"]
+    for x in range(-17, -10):              # the Humming Hive under an old oak, among flowers
+        for y in range(6, 13):
+            feat[(x, y)] = F["flowers"] if (x + 2 * y) % 3 == 0 else 0
+    feat[(-14, 8)] = F["oak"]
+    spawns.append(("beehive", -14, 9, {"honey": 2}))
     S = spawns.append
     S(("bookshelf", -3, -2, {"items": [("book", {"book": b}) for b in HOME_BOOKS]}))
     S(("woodpile", -1, -2, {"count": 6}))
     S(("fireplace", 0, -2, {"lit": False, "fuel": 240.0}))
     S(("piano", 2, -2, {}))
     S(("easel", 3, -2, {"paper": 5}))
-    S(("desk", 3, -1, {"paper": 5}))
+    S(("desk", 3, 0, {"paper": 5}))
     S(("chest", -3, -1, {"open": False, "items": [("cup", {"water": 0}), ("paper", {})]}))
     S(("bed", -3, 1, {}))
     S(("table", 2, 1, {}))
@@ -301,6 +307,7 @@ def _home_layout():
     S(("apple", 2, 1, {}))
     S(("bucket", 3, 2, {"water": 0}))
     S(("axe", -2, 2, {}))
+    S(("rain barrel", 2, 4, {"water": 20}))
     for p in ((7, 3), (14, -2), (11, 4)):
         S(("clay", p[0], p[1] + (1 if p[1] > 0 else -1), {}))
     S(("stick", -6, -3, {}))
@@ -310,6 +317,9 @@ def _home_layout():
 
 
 _HOME_FEAT, _HOME_WATER, _HOME_SPAWNS = _home_layout()
+HOME_POIS = [{"kind": "home", "name": HOME_NAME, "x": 0, "y": 0},
+             {"kind": "pond", "name": "the Home Pond", "x": 10, "y": 0},
+             {"kind": "beehive", "name": "the Humming Hive", "x": -14, "y": 9}]
 HOME_EXTENT = 60      # tiles from the origin where the home meadow blends into the wild
 
 
@@ -472,7 +482,6 @@ class Terrain:
         river = (np.abs(r - 0.5) < width) & ~wet & (e < 0.84)
         water[river] = WATER_RIVER
         # swamp pools
-        sub = _unit(_hash2(xs.astype(np.int64), ys.astype(np.int64), self.salt["wet"]))
         pools = (biome == B["swamp"]) & (water == 0) & (_fbm(xs, ys, 1 / 9, 2, self.salt["wet"]) > 0.6)
         water[pools] = WATER_SHALLOW
         # height (decimetres)
@@ -507,7 +516,7 @@ class Terrain:
         return ch
 
     def _stamp_home(self, ch: Chunk, x0: int, y0: int):
-        if not (x0 <= 20 and x0 + CHUNK > -16 and y0 <= 16 and y0 + CHUNK > -16):
+        if not (x0 <= 20 and x0 + CHUNK > -20 and y0 <= 16 and y0 + CHUNK > -16):
             return
         for (x, y), f in _HOME_FEAT.items():
             if x0 <= x < x0 + CHUNK and y0 <= y < y0 + CHUNK:
@@ -519,17 +528,18 @@ class Terrain:
         for k, x, y, st in _HOME_SPAWNS:
             if x0 <= x < x0 + CHUNK and y0 <= y < y0 + CHUNK:
                 ch.spawns.append((k, x, y, st))
-        if x0 <= 0 < x0 + CHUNK and y0 <= 0 < y0 + CHUNK:
-            ch.pois.append({"kind": "home", "name": HOME_NAME, "x": 0, "y": 0})
+        for p in HOME_POIS:
+            if x0 <= p["x"] < x0 + CHUNK and y0 <= p["y"] < y0 + CHUNK:
+                ch.pois.append(dict(p))
 
     # ------------------------------------------------------------------ points of interest
     def _place_poi(self, ch: Chunk, x0: int, y0: int):
         cx, cy = ch.cx, ch.cy
         ring = max(abs(cx), abs(cy))
-        if ring <= 1:
+        if ring == 0:
             return
         rng = random.Random(shash(self.seed, cx, cy, "poi"))
-        if rng.random() >= (0.32 if ring <= 3 else 0.16):
+        if rng.random() >= (0.45 if ring == 1 else 0.32 if ring <= 3 else 0.16):
             return
         for _ in range(4):
             lx, ly = rng.randint(7, 24), rng.randint(7, 24)

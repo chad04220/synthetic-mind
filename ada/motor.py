@@ -71,8 +71,9 @@ class MotorMind:
             self.h = brain.hidden(torch.tensor([new], device=dev), self.caches)
             self.cached += len(new)
 
-    def choose(self, brain, motor: list[int], act_token: int, temperature: float, rng) -> dict:
-        """On the brain's thread: read the stream so far, then pick the next motor word."""
+    def choose(self, brain, motor: list[int], act_token: int, temperature: float, rng, words: list[str] = MOTOR) -> dict:
+        """On the brain's thread: read the stream so far, then pick the next word from `motor` (the token
+        ids of `words`: its body's motor words, or a brush's, a piano's or the clay's)."""
         import torch
 
         self.push([act_token])
@@ -84,7 +85,7 @@ class MotorMind:
             i = int(torch.multinomial(p, 1, generator=None)) if rng is None else _sample(p.tolist(), rng)
             ent = float(-(p_full * p_full.clamp_min(1e-12).log()).sum())
         self.push([motor[i]])
-        return {"index": i, "word": MOTOR[i], "probs": [round(x, 4) for x in p_full.tolist()], "entropy": ent}
+        return {"index": i, "word": words[i], "probs": [round(x, 4) for x in p_full.tolist()], "entropy": ent}
 
     def reset(self):
         with self.lock:

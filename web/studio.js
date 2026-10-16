@@ -11,7 +11,7 @@ const Studio = (() => {
     "yellow", "green", "blue", "purple", "pink", "brown", "grey", "gold", "done"];
   const MUSIC = ["C", "D", "E", "F", "G", "A", "B", "high", "low", "long", "short", "rest", "fast", "slow", "done"];
   const SCULPT = ["up", "down", "left", "right", "in", "out", "add", "cut", "smooth", "done"];
-  const PALETTE = ["#1f1c1a", "#f8f5ec", "#d23a2f", "#ec8a2e", "#f1cf3b", "#4c9a3e", "#3668c4", "#7b4bb1", "#ef93b8", "#8a5a33", "#8f8f8f", "#d6a92b"];
+  const PALETTE = ["#1d1d1f", "#f7f4ec", "#d64545", "#ef8a3a", "#f2c94c", "#4f9a4f", "#3f6fb5", "#8e5bb5", "#ee8fb2", "#8a5a2b", "#8d8d8d", "#d9a93b"];   // studio.PALETTE
   const MATERIAL = { clay: "#b98159", terracotta: "#c46a43", stone: "#9b958b", porcelain: "#ebe5da", bronze: "#a9783a", wax: "#e5cf9a", wood: "#a07548" };
   const MAX = { paint: 900, music: 200, sculpt: 600 };
   const words = (vocab, ops) => [...String(ops || "")].map((ch) => vocab[SYM.indexOf(ch)]).filter(Boolean);
@@ -80,7 +80,7 @@ const Studio = (() => {
     s.step = (word) => {
       if (s.done || s.k >= MAX.sculpt) return;
       s.k++;
-      const mv = { up: [0, 1, 0], down: [0, -1, 0], left: [-1, 0, 0], right: [1, 0, 0], in: [0, 0, 1], out: [0, 0, -1] }[word];
+      const mv = { up: [0, 1, 0], down: [0, -1, 0], left: [-1, 0, 0], right: [1, 0, 0], in: [0, 0, -1], out: [0, 0, 1] }[word];
       if (mv) { s.x = clamp(s.x + mv[0], 0, n - 1); s.y = clamp(s.y + mv[1], 0, n - 1); s.z = clamp(s.z + mv[2], 0, n - 1); return; }
       if (word === "add") s.vox[I(s.x, s.y, s.z)] = 1;
       else if (word === "cut") s.vox[I(s.x, s.y, s.z)] = 0;
@@ -169,7 +169,7 @@ const Studio = (() => {
   // ================================================================== music
   // v3 notes with tempo changes → a plain song for Art's piano (each note's beats scaled to the first tempo)
   function song(d) {
-    const t0 = +d.tempo0 || +(d.tempo_changes?.length ? 100 : d.tempo) || 100, ch = (d.tempo_changes || []).slice().sort((a, b) => a[0] - b[0]);
+    const t0 = +d.tempo || 100, ch = (d.tempo_changes || []).slice().sort((a, b) => a[0] - b[0]);
     let tempo = t0, ci = 0;
     const notes = (d.notes || []).map(([m, b], i) => {
       while (ci < ch.length && ch[ci][0] <= i) tempo = ch[ci++][1];

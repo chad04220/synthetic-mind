@@ -1,1611 +1,2237 @@
-"""The World the synth lives in: a homestead in a hollow, shared with its companion.
+"""The World: physics and consequences for Zen, in an endless land.
 
-The house has a living room with a fireplace, a kitchen with a stove and oven, a pantry and a
-sink, two bedrooms and a washroom. Around it are the porch, the workshop (tools, the quern, the
-woodpile), the glass greenhouse, the vegetable garden with its water barrel, the chicken coop, a
-small orchard with a swing, a pond with ducks and frogs, a stream through the woods, a meadow with
-the beehive, and a lookout on the hill for the stars.
+Nothing here decides anything for Zen. Zen's brain picks a motor word; ``act`` carries it out and
+says, in plain egocentric English, what happened, with a reward computed from what changed:
 
-It is small, but it is deep. Rooms have a temperature that the fire raises and the night lowers.
-Things warm and cool, cook, boil, bake and burn; food goes stale and rots (slower in the cool
-pantry); rain wets what is outside and the fire dries it; wet logs won't burn; fires use up their
-fuel and leave ash; lamps and candles light the dark and burn down; soil dries out, plants grow
-through their stages if watered and warm and die in a frost; hens lay eggs in the morning, bees
-make honey while flowers bloom, the cat looks for the warmest spot. Everything a mind can sense is
-written as plain first-person sentences, so the synth learns words for what it lives through.
+    reward = 12·Δwellbeing + novelty + pain + events          (clamped to [-1, 1] per action)
+
+where wellbeing ∈ [0, 1] is a weighted mean of concave need utilities (health counts double), so
+relieving a real need is worth more than topping up a full one; novelty is +0.01 per new tile,
++0.25 per new kind of thing seen, +0.1 per new chunk, +0.5 per new named place; pain is −0.02 for
+bumping into something, −0.01 for an action that does not work, −0.2 per point of health lost;
+events are +0.3 the first time a motor word works, +0.1 the first time it works on a new kind of
+thing, +0.4 when the Sprite's answer arrives. Time passing (``advance``) accumulates the same
+terms (getting colder, hungrier, hurt) for ``reward_since_last()``.
+
+Coordinates: x grows east, y grows south. Facing: 0 = north, 1 = east, 2 = south, 3 = west.
 """
 from __future__ import annotations
 
-import heapq
 import math
 import random
-import time
-from dataclasses import dataclass, field
 
-from ..ontology import KINDS, OVEN_RECIPES, POT_RECIPES, SOUP_THINGS, STAGE_NAMES
+from ..ontology import BIOME_KIND, FEATURE_KIND, KINDS
+from . import terrain as T
+from .terrain import BIOMES, BLOCKING, CHUNK, FEATURES, SHELTER, TREES, WATER_DEEP, WATER_RIVER, F, Terrain, shash
 
-W, H = 72, 56
-# Tile codes are shared with the 3D view (web/world3d.js).
-(GRASS, WATER, SAND, TREE, ROCK, FLOWERS, PATH, FLOOR, WALL, DOOR, SOIL, BRIDGE, PLAZA, CLIFF, SNOW,
- FENCE, DOCK, TALLGRASS, PINE, CAVE) = range(20)
-TERRAIN = ["grass", "water", "sand", "a tree", "a rock", "flowers", "a path", "a floor", "a wall", "a door",
-           "soil", "a bridge", "paving stones", "a cliff", "snow", "a fence", "a deck", "tall grass", "a pine tree",
-           "the cave floor"]
-BLOCKING = {WATER, TREE, ROCK, WALL, CLIFF, FENCE, PINE}
+MOTOR = ["forward", "back", "left", "right", "wait", "take", "drop", "eat", "drink", "use", "sleep", "look",
+         "speak", "ask"]
+DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
+DIR_NAMES = ["north", "east", "south", "west"]
 SEASONS = ["spring", "summer", "autumn", "winter"]
-DIRS = {"north": (0, -1), "south": (0, 1), "west": (-1, 0), "east": (1, 0)}
-NEEDS = ["energy", "water", "rest", "warmth", "company", "fun", "clean"]
-WEATHER = {"spring": ["clear", "clear", "cloudy", "rain", "windy", "fog"],
-           "summer": ["clear", "clear", "clear", "cloudy", "storm", "rain"],
-           "autumn": ["clear", "cloudy", "rain", "windy", "fog", "rain", "storm"],
-           "winter": ["clear", "cloudy", "snow", "snow", "fog"]}
-WET_WEATHER = ("rain", "storm", "snow")
-ROOMS = ("living room", "kitchen", "little bedroom", "big bedroom", "washroom")
+WEATHERS = ["clear", "cloudy", "rain", "storm", "snow", "fog", "wind"]
+NEEDS = ["energy", "water", "rest", "warmth", "health"]
+MAX_HANDS = 4
+PLACEABLE = ["berries", "apple", "banana", "coconut", "honey", "mushroom", "egg", "raw fish", "cooked fish", "stick",
+             "log", "stone", "flint", "clay", "flower", "feather", "shell", "crystal", "book", "paper", "cup",
+             "bucket", "axe", "lantern", "campfire"]
+MEDIA = ("painting", "music", "sculpture", "poem")
 
-# Buildings: name, label, rectangle (x0, y0, x1, y1), door, wall, roof and floor colours.
-BUILDINGS = [
-    ("house", "The house", (12, 15, 29, 26), (20, 26), "#efe0c4", "#8c3b2e", "#a47148"),
-    ("workshop", "Workshop", (34, 16, 41, 22), (37, 22), "#a3b18a", "#3a5a40", "#7f6a5a"),
-    ("greenhouse", "Greenhouse", (33, 31, 38, 36), (35, 31), "#e8f6ef", "#bfe3d4", "#6b4f3a"),
-    ("coop", "Chicken coop", (3, 28, 7, 32), (5, 32), "#e9c46a", "#9c4a2a", "#c2a36b"),
-]
-# Rooms inside the house: name, rectangle (floor tiles), floor colour.
-HOUSE_ROOMS = [
-    ("little bedroom", (13, 16, 18, 20), "#c9a27e"), ("washroom", (20, 16, 22, 20), "#d9d4cf"),
-    ("big bedroom", (24, 16, 28, 20), "#b08968"), ("living room", (13, 22, 21, 25), "#a47148"),
-    ("kitchen", (23, 22, 28, 25), "#cdb79e"),
-]
-INSULATED = {"house": 4.0, "workshop": 3.0, "greenhouse": 0.0, "coop": 5.0}
+WB_GAIN = 12.0            # reward per unit of wellbeing (0.6 × 20)
+SIGHT_DAY = 7
+ENT_RANGE = 48
+GEN_BASE = 1 << 45        # generated things have ids at or above this; things made later count up from 1
+ANIMAL_BASE = 1 << 44
+REGROW = 1800.0           # seconds of world time before a picked plant bears again
 
-
-@dataclass
-class Being:
-    """The synth, its companion and you share this shape."""
-    name: str
-    x: int
-    y: int
-    facing: str = "south"
-    carrying: list = field(default_factory=list)   # entity dicts
-    said: str = ""
-    said_until: float = 0.0
-    sleeping: bool = False
-    fx: float | None = None                        # continuous position (only you)
-    fy: float | None = None
-    route: list = field(default_factory=list)
-    goal: tuple | None = None
-    engaged: int | None = None                     # in a conversation (its id): stays put, faces the other
-    needs: dict = field(default_factory=lambda: {n: 75.0 for n in NEEDS})
-    wet: float = 0.0
-    art_plan: dict | None = None                   # what it means to make next (Wren's comes from its model)
-    art_fallback: dict | None = None               # what it makes if its model is too slow
-    art_wait: bool = False
-    activity: str = ""                             # what it is doing right now ("playing the piano")
-    role: str = ""                                 # "synth", "companion" or "visitor"
-    rates: float = 1.0                             # how fast its needs fall
-
-    def say(self, text: str, seconds: float = 8.0):
-        self.said, self.said_until = text[:240], time.time() + seconds
+_WEATHER_W = {   # season -> weights for the next weather (clear, cloudy, rain, storm, snow, fog, wind)
+    "spring": [4, 3, 3, 0.5, 0, 1, 1.5], "summer": [6, 2, 1.5, 1, 0, 0.5, 1],
+    "autumn": [3, 3, 3, 1, 0.3, 2, 2], "winter": [3, 3, 1, 0.5, 3, 1.5, 2]}
+_WEATHER_T = {"clear": 0, "cloudy": -1, "rain": -3, "storm": -5, "snow": -3, "fog": -2, "wind": -3}
+_SEASON_T = {"spring": 0, "summer": 6, "autumn": -3, "winter": -12}
+_GROUND = {"ocean": "sand", "lake": "mud", "beach": "sand", "meadow": "grass", "grassland": "grass",
+           "forest": "fallen leaves", "pine_forest": "pine needles", "jungle": "damp earth", "swamp": "mud",
+           "desert": "sand", "savanna": "dry grass", "tundra": "moss", "snow": "snow", "mountain": "stone",
+           "rock": "bare rock"}
+_FURNITURE = {"rain barrel", "bed", "fireplace", "campfire", "woodpile", "table", "bookshelf", "easel", "piano", "desk", "chest",
+              "beehive", "nest"}
+_ANIMALS = {   # biome -> [(kind, chance per chunk, max count)]
+    "meadow": [("rabbit", 0.7, 3), ("bird", 0.7, 3), ("deer", 0.3, 2), ("fox", 0.15, 1)],
+    "grassland": [("rabbit", 0.6, 3), ("bird", 0.5, 2), ("deer", 0.4, 3), ("fox", 0.2, 1)],
+    "forest": [("deer", 0.6, 3), ("bird", 0.8, 3), ("rabbit", 0.4, 2), ("fox", 0.3, 1), ("owl", 0.5, 1)],
+    "pine_forest": [("deer", 0.5, 2), ("bird", 0.5, 2), ("fox", 0.3, 1), ("owl", 0.5, 1), ("bear", 0.08, 1)],
+    "jungle": [("bird", 0.9, 4), ("frog", 0.6, 3), ("lizard", 0.4, 2)],
+    "swamp": [("frog", 0.9, 4), ("bird", 0.5, 2), ("owl", 0.3, 1)],
+    "desert": [("lizard", 0.7, 3)],
+    "savanna": [("deer", 0.5, 3), ("bird", 0.5, 2), ("lizard", 0.4, 2)],
+    "beach": [("bird", 0.8, 3)],
+    "tundra": [("fox", 0.3, 1), ("rabbit", 0.4, 2), ("bird", 0.3, 1)],
+    "snow": [("fox", 0.15, 1)],
+    "mountain": [("goat", 0.6, 3), ("bird", 0.3, 1), ("bear", 0.05, 1)],
+    "rock": [("goat", 0.5, 2), ("lizard", 0.2, 1)],
+}
+_FLEE = {"deer": 4, "rabbit": 3, "fox": 4, "bird": 2, "goat": 3, "lizard": 2, "bear": 4, "frog": 2, "owl": 2,
+         "fish": 1}
+_NIGHT = {"owl", "frog", "fireflies"}
+_FRUIT_WITH = {"berry bush": "berries", "apple tree": "apples", "palm": "coconuts", "jungle tree": "bananas",
+               "cactus": "fruit", "flowers": ""}
+_MASS = {"furniture", "wood", "food", "land", "water", "earth", "snow", "fire"}
+_NUM = {2: "two", 3: "three", 4: "four"}
 
 
-def _noise(seed: int):
-    """Smooth 2-D value noise in [0, 1]."""
-    rng = random.Random(seed)
-    n = 64
-    grid = [[rng.random() for _ in range(n)] for _ in range(n)]
-
-    def f(x: float, y: float) -> float:
-        gx, gy = x / 6, y / 6
-        x0, y0 = int(gx), int(gy)
-        tx, ty = gx - x0, gy - y0
-        tx, ty = tx * tx * (3 - 2 * tx), ty * ty * (3 - 2 * ty)
-        x0, y0, x1, y1 = x0 % n, y0 % n, (x0 + 1) % n, (y0 + 1) % n
-        a = grid[y0][x0] * (1 - tx) + grid[y0][x1] * tx
-        b = grid[y1][x0] * (1 - tx) + grid[y1][x1] * tx
-        return a * (1 - ty) + b * ty
-    return f
+def plural(n: str) -> str:
+    """'an apple' -> 'apples', 'a sheet of paper' -> 'sheets of paper'."""
+    for a in ("an ", "a ", "the "):
+        if n.startswith(a):
+            n = n[len(a):]
+            break
+    head, sep, tail = n.partition(" of ")
+    words = head.split(" ")
+    w = words[-1]
+    if w not in ("fish",):
+        w = w[:-1] + "ies" if w.endswith("y") and w[-2:-1] not in "aeiou" else \
+            w + "es" if w.endswith(("s", "sh", "ch", "x")) else w + "s"
+    words[-1] = w
+    return " ".join(words) + sep + tail
 
 
-def stream_x(y: int) -> int:
-    return int(44 + 2.2 * math.sin(y / 4.5) + 1.2 * math.sin(y / 2.3) + max(0, y - 28) * 0.55)   # into the pond
+def count_list(nouns: list[str]) -> str:
+    """'an apple', 'an apple', 'a stick' -> 'two apples and a stick' (order of first appearance)."""
+    order, counts = [], {}
+    for n in nouns:
+        if n not in counts:
+            order.append(n)
+        counts[n] = counts.get(n, 0) + 1
+    return and_list([n if counts[n] == 1 or n.startswith("some ") else f"{_NUM.get(counts[n], counts[n])} {plural(n)}"
+                     for n in order])
 
 
-POND = (52.0, 45.0, 8.0, 5.0)        # centre x, centre y, radius x, radius y
+class Body:
+    """Zen, the Sprite and you: attributes you can also read like a dict (``w.zen.x`` or ``w.zen["x"]``)."""
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+    def __getitem__(self, k):
+        return getattr(self, k)
+
+    def __setitem__(self, k, v):
+        setattr(self, k, v)
+
+    def __contains__(self, k):
+        return k in self.__dict__
+
+    def get(self, k, default=None):
+        return getattr(self, k, default)
+
+    def to_dict(self) -> dict:
+        return dict(self.__dict__)
 
 
-def kind_of(e: dict) -> dict:
-    return KINDS.get(e["kind"], {})
+# ---------------------------------------------------------------------- words
+def noun_of(kind: str) -> str:
+    return KINDS.get(kind, {}).get("noun", kind)
+
+
+def the(n: str) -> str:
+    for a in ("an ", "a ", "some "):
+        if n.startswith(a):
+            return "the " + n[len(a):]
+    return n
+
+
+def cap(s: str) -> str:
+    return s[:1].upper() + s[1:]
+
+
+def and_list(items: list[str]) -> str:
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def temp_word(c: float) -> str:
+    return "freezing" if c < 0 else "cold" if c < 8 else "cool" if c < 15 else "mild" if c < 22 else \
+        "warm" if c < 29 else "hot"
+
+
+def rel_phrase(fwd: int, rt: int) -> str:
+    parts = []
+    if fwd > 0:
+        parts.append(f"{fwd} ahead")
+    elif fwd < 0:
+        parts.append(f"{-fwd} behind")
+    if rt:
+        side = "right" if rt > 0 else "left"
+        parts.append(f"{abs(rt)} {side}" if parts else f"{abs(rt)} to the {side}")
+    return " and ".join(parts)
+
+
+def _utility(n: float) -> float:
+    d = 1.0 - max(0.0, min(100.0, n)) / 100.0
+    return 1.0 - d * d
 
 
 class World:
-    def __init__(self, seed: int | None = 11, name: str = "Zen", companion: str = "Wren"):
-        self.rng = random.Random()
-        self.seed = seed
-        self.name, self.companion_name = name, companion
-        self.terrain = [[GRASS] * W for _ in range(H)]
-        self.height = [[0] * W for _ in range(H)]
-        self.region = [["yard"] * W for _ in range(H)]
-        self.terrain_v = random.randrange(1 << 30)
-        self.entities: dict[int, dict] = {}
-        self.next_id = 1
-        self.anchors: dict[str, tuple[int, int]] = {}   # where to stand to "be at" a place
-        self.buildings: list[dict] = []
-        self.dirty: set[int] = set()
-        self.removed: set[int] = set()
-        self.log: list[str] = []
-        self.events: list[dict] = []                    # things that happened, for the minds and the page
-        # time and climate
+    def __init__(self, seed: int | None = 11, **_ignored):
+        self.seed = int(seed if seed is not None else 11)
+        self.terrain = Terrain(self.seed)
+        self.rng = random.Random(shash(self.seed, "world"))
+        # time
+        self.t = 0.0
         self.tick_n = 0
         self.day = 1
         self.phase = "day"
-        self.phase_t = 0.0          # seconds into the current phase
+        self.phase_t = 60.0
         self.day_seconds = 600.0
-        self.weather = "clear"
-        self.weather_left = 240.0
-        self.rainbow_until = 0.0
-        self.indoor = {b: 16.0 for b in INSULATED}       # each building's air temperature
-        self.moisture: dict[tuple[int, int], float] = {}
-        self.sounds: list[tuple[str, int, int, int]] = []   # (what, x, y, how far it carries)
-        self._generate(random.Random(seed))
-        bx, by = self.anchors["little bedroom"]
-        self.ada = Being(name, bx, by, role="synth")
-        cx, cy = self.anchors["kitchen"]
-        self.wren = Being(companion, cx, cy, role="companion", rates=0.6)
-        self.wren.needs = {n: 85.0 for n in NEEDS}
-        self.visitor: Being | None = None
-        self.visited: set[str] = set()
+        self.night_seconds = 1200.0
+        self.base_weather = "clear"
+        self.weather_left = 300.0
+        self.last_rain_t = -1e9
+        self._regen_t = 0.0
+        # things
+        self.ents: dict[int, dict] = {}
+        self.cidx: dict[tuple, set] = {}
+        self.tidx: dict[tuple, list] = {}
+        self.alive: set[int] = set()
+        self.spawned: set[tuple] = set()
+        self.gone: set[int] = set()
+        self.mod: set[int] = set()
+        self.next_id = 1
+        self.fires: set[int] = set()
+        self.picked: dict[tuple, float] = {}
+        self.chops: dict[tuple, int] = {}
+        # beings
+        self.zen = Body(x=0, y=0, fx=0.0, fy=0.0, facing=2, hands=[], sleeping=False, in_bed=False, said="",
+                        said_t=-1e9, activity="", activity_t=0.0, waiting=False, wet=0.0, voluntary=False,
+                        needs={"energy": 80.0, "water": 80.0, "rest": 90.0, "warmth": 75.0, "health": 100.0})
+        self.sprite = Body(x=-1, y=-1, fx=-1.0, fy=-1.0, state="idle", said="", said_t=-1e9)
+        self.visitor: Body | None = None
+        self.animals: dict[int, dict] = {}
+        self.animal_at: dict[tuple, int] = {}
+        self.animal_chunks: set[tuple] = set()
+        self.next_animal = ANIMAL_BASE
+        self.zen_stage = 0
+        # memory of the journey
+        self.visited: dict[tuple, int] = {}
+        self.explored: set[tuple] = set()
+        self.seen: set[str] = set()
         self.firsts: set[str] = set()
+        self.places: dict[str, dict] = {}
         self.read_books: set[int] = set()
+        self.trail: list[list[int]] = [[0, 0]]
+        self.faints = 0
+        # art
         self.creations: list[dict] = []
         self.new_creations: list[dict] = []
-        self.heard: list[tuple[float, str, str]] = []    # (time, who, words) said near the synth
-        self.bond = 20.0                                  # how close the synth feels to its companion
-        self.skills: dict[str, dict[str, float]] = {}      # name -> medium -> practice (0..1)
-        self.zen_stage = 0                                 # the synth's language stage (the World sets it)
-        self.outdoor_t = self.outdoor_temperature()
+        self.next_cid = 1
+        self.practice: dict[str, float] = {m: 0.0 for m in MEDIA}
+        self.studio: dict | None = None
+        self._studio_changed = False
+        # bookkeeping
+        self.log: list[str] = []
+        self.events: list[dict] = []
+        self._passive = 0.0
+        self._bonus = 0.0
+        self.last_action = ""
+        self.steps = 0
+        self.reward_rate = 0.0
+        self._sent: set[int] = set()
+        self._dirty: set[int] = set()
+        self._removed: set[int] = set()
+        self._area_key = None
+        self._look_bonus = 0.0
+        self._ensure_area()
+        self._mark_visit()
+        self._notice()          # what Zen sees at the start is not a reward later
+        self._passive = 0.0
 
-    # ================================================================== generation
-    def _set(self, x, y, t, region=None, h=None):
-        if 0 <= x < W and 0 <= y < H:
-            self.terrain[y][x] = t
-            if region:
-                self.region[y][x] = region
-            if h is not None:
-                self.height[y][x] = h
-
-    def _rect(self, x0, y0, x1, y1, t, region=None, h=None):
-        for y in range(y0, y1 + 1):
-            for x in range(x0, x1 + 1):
-                self._set(x, y, t, region, h)
-
-    def _building(self, name, label, rect, door, wall, roof, floor):
-        x0, y0, x1, y1 = rect
-        h = self.height[door[1]][door[0]]
-        self._rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, GRASS, None, h)   # a level lot with a margin
-        self._rect(x0, y0, x1, y1, WALL, name, h)
-        self._rect(x0 + 1, y0 + 1, x1 - 1, y1 - 1, FLOOR, name, h)
-        dx, dy = door
-        self._set(dx, dy, DOOR, name, h)
-        if dy == y1:
-            inside, outside = (dx, dy - 1), (dx, dy + 1)
-        elif dy == y0:
-            inside, outside = (dx, dy + 1), (dx, dy - 1)
-        elif dx == x0:
-            inside, outside = (dx + 1, dy), (dx - 1, dy)
-        else:
-            inside, outside = (dx - 1, dy), (dx + 1, dy)
-        self.anchors[name] = inside
-        b = {"name": name, "label": label, "x0": x0, "y0": y0, "x1": x1, "y1": y1, "door": [dx, dy],
-             "outside": list(outside), "wall": wall, "roof": roof, "floor": floor, "doors": [[dx, dy]]}
-        if name == "greenhouse":
-            b["glass"] = True
-        self.buildings.append(b)
-        return outside
-
-    def _path(self, a, b, kind=PATH):
-        """A winding path from a to b; over water it becomes a bridge."""
-        (x, y), (tx, ty) = a, b
-        r = self._prng
-        while (x, y) != (tx, ty):
-            t = self.terrain[y][x]
-            if t == WATER:
-                self.terrain[y][x] = BRIDGE
-            elif t in (GRASS, FLOWERS, SAND, TALLGRASS, TREE, PINE, ROCK):
-                self.terrain[y][x] = kind
-            if x != tx and (y == ty or r.random() < 0.55):
-                x += 1 if tx > x else -1
-            else:
-                y += 1 if ty > y else -1
-
-    def _generate(self, r: random.Random):
-        self._prng = r
-        hills, detail = _noise(r.randrange(1 << 30)), _noise(r.randrange(1 << 30))
-        px, py, prx, pry = POND
-        # ---- land: gentle heights and broad regions
-        for y in range(H):
-            for x in range(W):
-                h = hills(x, y) * 1.4 + detail(x * 2, y * 2) * 0.4
-                if y < 14:
-                    h += (14 - y) * 0.12                    # the woods climb the hillside
-                h += max(0.0, 4.2 - math.hypot(x - 65, y - 6) * 0.42)    # the lookout's hill
-                if 10 <= x <= 42 and 14 <= y <= 40:
-                    h = min(h, 0.9)                         # the homestead sits on level ground
-                self.height[y][x] = max(0, min(6, int(h)))
-                if y < 13:
-                    self.region[y][x] = "woods"
-                elif x >= 46 and y <= 34:
-                    self.region[y][x] = "meadow"
-                elif x <= 12 and y >= 39:
-                    self.region[y][x] = "orchard"
-                elif math.hypot((x - px) / (prx + 3), (y - py) / (pry + 3)) < 1.0:
-                    self.region[y][x] = "pond"
-                else:
-                    self.region[y][x] = "yard"
-        for y in range(0, 13):
-            for x in range(W):
-                if math.hypot(x - 65, y - 6) < 6.5:
-                    self.region[y][x] = "lookout"
-        # ---- the stream and the pond
-        for y in range(0, H):
-            cx = stream_x(y)
-            if math.hypot((cx - px) / prx, (y - py) / pry) < 1.0:
-                break
-            self._set(cx, y, WATER, "stream", 0)
-            if y > 20:
-                self._set(cx + 1, y, WATER, "stream", 0)
-            for x in (cx - 1, cx + 2):
-                if self.terrain[y][x] != WATER and r.random() < 0.4:
-                    self._set(x, y, SAND, "stream", 0)
-        for y in range(H):
-            for x in range(W):
-                d = math.hypot((x - px) / prx, (y - py) / pry)
-                if d < 1.0:
-                    self._set(x, y, WATER, "pond", 0)
-                elif d < 1.2:
-                    self._set(x, y, SAND, "pond", 0)
-                elif d < 1.6:
-                    self.height[y][x] = min(self.height[y][x], 1)
-        # ---- buildings, then the rooms inside the house
-        doors = {}
-        for name, label, rect, door, wall, roof, floor in BUILDINGS:
-            doors[name] = self._building(name, label, rect, door, wall, roof, floor)
-        house = self.buildings[0]
-        h0 = self.height[26][20]
-        self._rect(13, 21, 28, 21, WALL, "house", h0)        # hall wall between the bedrooms and the rooms below
-        self._rect(19, 16, 19, 20, WALL, "house", h0)
-        self._rect(23, 16, 23, 20, WALL, "house", h0)
-        self._rect(22, 22, 22, 25, WALL, "house", h0)
-        for dx, dy in ((16, 21), (21, 21), (26, 21), (22, 24)):
-            self._set(dx, dy, DOOR, None, h0)
-        self._set(29, 24, DOOR, None, h0)                     # the kitchen door, to the yard
-        house["doors"].append([29, 24])
-        house["inner"] = "#f3e9d8"
-        house["rooms"] = []
-        for name, (x0, y0, x1, y1), floor in HOUSE_ROOMS:
-            for y in range(y0, y1 + 1):
-                for x in range(x0, x1 + 1):
-                    if self.terrain[y][x] == FLOOR:
-                        self.region[y][x] = name
-            house["rooms"].append({"name": name, "x0": x0, "y0": y0, "x1": x1, "y1": y1, "floor": floor})
-        for (dx, dy), name in (((16, 21), "little bedroom"), ((21, 21), "washroom"), ((26, 21), "big bedroom"),
-                               ((22, 24), "kitchen"), ((20, 26), "living room"), ((29, 24), "kitchen")):
-            self.region[dy][dx] = name
-        self.anchors.update({"little bedroom": (15, 18), "washroom": (21, 18), "big bedroom": (26, 18),
-                             "living room": (17, 24), "kitchen": (25, 23), "house": (20, 25)})
-        # the greenhouse beds
-        for y in range(33, 36):
-            for x in range(34, 38):
-                if x != 35:
-                    self._set(x, y, SOIL, "greenhouse")
-        # ---- the porch and the jetty
-        for x in range(16, 25):
-            for y in (27, 28):
-                self._set(x, y, DOCK, "porch", h0)
-        self.anchors["porch"] = (22, 27)
-        for x in range(43, 47):
-            self._set(x, 45, DOCK, "pond", 0)
-        # ---- the garden: a fence, beds of soil and paths between them
-        self._rect(13, 30, 30, 30, FENCE, "garden")
-        self._rect(13, 30, 13, 41, FENCE, "garden")
-        self._rect(13, 41, 30, 41, FENCE, "garden")
-        self._rect(30, 30, 30, 41, FENCE, "garden")
-        self._set(21, 30, PATH, "garden")                     # the gate
-        self._rect(14, 31, 29, 40, GRASS, "garden", 0)
-        for y in range(32, 40):
-            for x in range(15, 29):
-                self._set(x, y, SOIL if y in (32, 33, 35, 36, 38, 39) and x != 21 else PATH, "garden", 0)
-        self.anchors["garden"] = (21, 34)
-        # ---- the coop's run
-        self._rect(1, 33, 9, 33, FENCE, "coop")
-        self._rect(1, 33, 1, 38, FENCE, "coop")
-        self._rect(1, 38, 9, 38, FENCE, "coop")
-        self._rect(9, 33, 9, 38, FENCE, "coop")
-        self._rect(2, 34, 8, 37, GRASS, "coop", 0)
-        self._set(5, 33, GRASS, "coop")                       # the coop opens into its run
-        self._set(9, 35, PATH, "coop")                        # the run's gate
-        self.region[32][5] = "coop"
-        # ---- the orchard
-        self.trees = []
-        for y in range(41, 54, 3):
-            for x in range(2, 12, 3):
-                self._set(x, y, TREE, "orchard")
-                self.trees.append((x, y))
-        # ---- the woods
-        for y in range(0, 14):
-            for x in range(W):
-                if self.terrain[y][x] != GRASS or self.region[y][x] == "lookout":
-                    continue
-                trail = abs(x - (30 + y // 3)) <= 1 or abs(y - 8) <= 0 and x > 30
-                if not trail and r.random() < 0.38 - (0.2 if y > 10 else 0):
-                    self._set(x, y, PINE if r.random() < 0.5 else TREE, "woods")
-        # ---- meadow flowers and tall grass, scattered trees and rocks
-        for _ in range(260):
-            x, y = r.randrange(W), r.randrange(H)
-            if self.terrain[y][x] == GRASS and self.region[y][x] in ("meadow", "orchard"):
-                self._set(x, y, FLOWERS if r.random() < 0.6 else TALLGRASS)
-        for _ in range(50):
-            x, y = r.randrange(W), r.randrange(H)
-            if self.terrain[y][x] == GRASS and self.region[y][x] in ("yard", "meadow") and \
-                    not (8 <= x <= 44 and 12 <= y <= 42):
-                self._set(x, y, ROCK if r.random() < 0.25 else TREE)
-        # ---- paths
-        front = doors["house"]
-        for a, b in [(front, (21, 29)), ((21, 29), (21, 31)), ((30, 24), (36, 24)), ((36, 24), doors["workshop"]),
-                     ((36, 24), (36, 29)), ((36, 29), doors["greenhouse"]), ((21, 29), (11, 29)),
-                     ((11, 29), (10, 35)), ((11, 29), doors["coop"]), ((11, 29), (11, 42)),
-                     ((36, 29), (40, 42)), ((40, 42), (42, 45)), ((36, 24), (47, 24)), ((47, 24), (58, 24)),
-                     ((30, 13), (34, 3)), ((24, 15), (30, 13)), ((34, 8), (58, 8)), ((58, 8), (63, 6))]:
-            self._path(a, b)
-        self._set(30, 24, PATH)
-        # ---- places to stand
-        self.anchors.update({"woods": (32, 7), "meadow": (58, 22), "orchard": (7, 46), "pond": (45, 45),
-                             "stream": (stream_x(18) - 2, 18), "lookout": (64, 7), "yard": (24, 29),
-                             "coop": (5, 35), "greenhouse": (35, 33), "workshop": (37, 20)})
-        for name, (x, y) in list(self.anchors.items()):
-            if self.terrain[y][x] in BLOCKING:
-                self._set(x, y, PATH)
-        self._furnish(r)
-        self._index_cells()
-        for (x, y), kind in zip(self.trees, ["apple tree", "pear tree", "plum tree", "apple tree", "apple tree",
-                                             "pear tree", "plum tree", "apple tree", "apple tree", "plum tree",
-                                             "pear tree", "apple tree", "apple tree", "plum tree", "pear tree"]):
-            self.add(kind, x, y, fruit=0)
-        for x, y in ((25, 4), (37, 10), (52, 6), (20, 9)):
-            if self.walkable(x, y):
-                self.add("berry bush", x, y, fruit=2)
-        for y in range(H):
-            for x in range(W):
-                if self.terrain[y][x] == SOIL:
-                    self.moisture[(x, y)] = 0.5
-        creatures = [("hen", "coop", 3), ("rooster", "coop", 1), ("duck", "pond", 2), ("frog", "pond", 2),
-                     ("fish", "pond", 5), ("butterfly", "meadow", 3), ("bee", "meadow", 2), ("robin", "garden", 1)]
-        for kind, region, n in creatures:
-            for _ in range(n):
-                self.spawn_near(kind, region, on=WATER if kind in ("fish", "duck") else None)
-        self.add("cat", 18, 24, name="Moss", hunger=20.0)
-        for kind, region, n in (("mushroom", "woods", 3), ("stick", "woods", 4), ("pinecone", "woods", 3),
-                                ("stone", "stream", 3), ("flower", "meadow", 6), ("clay", "pond", 2),
-                                ("feather", "coop", 1), ("leaf", "woods", 2)):
-            for _ in range(n):
-                self.spawn_near(kind, region, on=SAND if kind in ("stone", "clay") else None)
-        del self._prng
-
-    def _furnish(self, r):
-        """The house and the outbuildings, ready to live in."""
-        fixed = [
-            # living room
-            ("fireplace", 13, 23, {"fuel": 240.0, "lit": False, "ash": 0}), ("sofa", 15, 25, {}),
-            ("bookshelf", 21, 22, {}), ("piano", 19, 22, {}), ("rug", 16, 23, {}), ("clock", 13, 25, {}),
-            ("lamp", 20, 25, {"lit": False, "burn": 1500.0}), ("matches", 14, 22, {}),
-            # kitchen
-            ("stove", 28, 22, {"fuel": 0.0, "lit": False, "ash": 0}), ("oven", 27, 22, {}), ("sink", 25, 22, {}),
-            ("pantry", 23, 22, {}), ("table", 25, 24, {}), ("cat bowl", 23, 25, {}),
-            ("pot", 26, 22, {"water": 0.0}), ("kettle", 28, 23, {"water": 0.0}), ("cup", 26, 24, {}),
-            ("cup", 26, 25, {}), ("bowl", 24, 24, {}), ("bowl", 24, 25, {}), ("basket", 28, 25, {}),
-            ("jar", 23, 24, {}),
-            # bedrooms and the washroom
-            ("bed", 13, 16, {"owner": "synth"}), ("toy chest", 18, 16, {}), ("music box", 14, 20, {}),
-            ("candle", 18, 20, {"lit": False, "burn": 900.0}), ("picture book", 17, 17, {}),
-            ("bed", 28, 16, {"owner": "companion"}), ("desk", 24, 16, {}), ("paper", 25, 16, {}),
-            ("pencil", 24, 17, {}), ("candle", 28, 20, {"lit": False, "burn": 900.0}),
-            ("bathtub", 20, 16, {}), ("mirror", 22, 16, {}), ("towel", 22, 18, {}),
-            # outside
-            ("bench", 18, 27, {}), ("sign", 23, 28, {"text": "Welcome home. The stove cooks, the fire warms, "
-                                                          "the garden feeds us and the hens give eggs."}),
-            ("chopping block", 39, 24, {}), ("bucket", 31, 25, {"water": 0.0}),
-            ("workbench", 35, 17, {}), ("quern", 40, 17, {}), ("woodpile", 40, 21, {}), ("seed tin", 36, 17, {}),
-            ("easel", 35, 21, {}), ("axe", 38, 17, {}), ("hammer", 39, 17, {}), ("chisel", 39, 18, {}),
-            ("fishing rod", 40, 18, {}),
-            ("water barrel", 14, 31, {"water": 30.0}), ("watering can", 15, 31, {"water": 0.0}),
-            ("compost bin", 29, 40, {}), ("scarecrow", 21, 37, {}), ("bird feeder", 16, 40, {}),
-            ("nest box", 4, 29, {}), ("beehive", 62, 24, {"honey": 1}), ("telescope", 65, 5, {}),
-            ("swing", 6, 45, {}), ("bench", 47, 42, {}),
-        ]
-        for kind, x, y, st in fixed:
-            e = self.add(kind, x, y, **st)
-            if KINDS[kind].get("portable"):
-                e["home"] = [x, y]                      # where it belongs, to put it back
-        e = {k["kind"]: k for k in self.entities.values()}
-
-        def fill(holder, *kinds):
-            for k in kinds:
-                holder.setdefault("items", []).append(self.make(k))
-
-        fill(e["pantry"], "flour", "flour", "potato", "potato", "potato", "carrot", "carrot", "apple", "apple",
-             "egg", "egg", "honey", "mint")
-        fill(e["toy chest"], "ball", "blocks", "teddy")
-        fill(e["bookshelf"], "book", "book", "book", "picture book")
-        fill(e["woodpile"], *["log"] * 8)
-        fill(e["seed tin"], "carrot seed", "carrot seed", "seed potato", "seed potato", "bean seed", "bean seed",
-             "tomato seed", "pumpkin seed", "wheat seed", "wheat seed", "mint seed")
-        fill(e["nest box"], "egg")
-        fill(e["fireplace"])
-        # a garden already under way
-        for (x, y), crop, stage in (((16, 32), "carrot", 2.2), ((17, 32), "carrot", 2.0), ((22, 35), "potato", 1.4),
-                                    ((23, 35), "potato", 1.5), ((26, 38), "beans", 3.1), ((34, 33), "tomato", 2.6),
-                                    ((24, 32), "wheat", 3.6), ((25, 32), "wheat", 3.5)):
-            self.add("plant", x, y, crop=crop, stage=stage, health=1.0)
-
-    def _index_cells(self):
-        """Tiles by region, keeping only those you can walk to from the house (and water, for fish)."""
-        start = self.anchors["living room"]
-        seen, todo = {start}, [start]
-        while todo:
-            x, y = todo.pop()
-            for dx, dy in ((0, 1), (1, 0), (0, -1), (-1, 0)):
-                n = (x + dx, y + dy)
-                if n not in seen and self.walkable(*n):
-                    seen.add(n)
-                    todo.append(n)
-        self.reachable = seen
-        self.cells: dict[str, list[tuple[int, int]]] = {}
-        for y in range(H):
-            for x in range(W):
-                if (x, y) in seen or self.terrain[y][x] == WATER:
-                    self.cells.setdefault(self.region[y][x], []).append((x, y))
-
-    # ================================================================== things
-    def make(self, kind: str, **state) -> dict:
-        """A new thing that isn't anywhere yet (held, or inside something)."""
-        k = KINDS[kind]
-        e = {"id": self.next_id, "kind": kind, "x": 0, "y": 0}
-        if k.get("thermal"):
-            e["temp"] = 18.0
-        if k.get("fresh"):
-            e["fresh"] = float(k["fresh"])
-        if k.get("vessel") and "water" not in state:
-            e["water"] = 0.0
-        if kind == "log":
-            e["wet"] = 0.0
-        e.update(state)
-        self.next_id += 1
-        return e
-
-    def add(self, kind: str, x: int, y: int, **state) -> dict:
-        e = self.make(kind, **state)
-        e["x"], e["y"] = x, y
-        self.entities[e["id"]] = e
-        self.dirty.add(e["id"])
-        return e
-
-    def put(self, e: dict, x: int, y: int):
-        """Set something down on the ground."""
-        e["x"], e["y"] = x, y
-        e.pop("on", None)
-        self.entities[e["id"]] = e
-        self.dirty.add(e["id"])
-
-    def remove(self, e: dict):
-        if self.entities.pop(e["id"], None) is not None:
-            self.removed.add(e["id"])
-            self.dirty.discard(e["id"])
-
-    def touch(self, e: dict):
-        if e["id"] in self.entities:
-            self.dirty.add(e["id"])
-
-    def find(self, eid: int) -> dict | None:
-        """A thing anywhere: on the ground, carried, or inside something."""
-        if eid in self.entities:
-            return self.entities[eid]
-        for b in self.beings():
-            for e in b.carrying:
-                if e["id"] == eid:
-                    return e
-        for c in self.entities.values():
-            for e in c.get("items", ()):
-                if e["id"] == eid:
-                    return e
-        return None
-
-    def spawn_near(self, kind: str, region: str, on: int | None = None, near: tuple | None = None) -> dict | None:
-        cells = self.cells.get(region, [])
-        for _ in range(60):
-            if not cells:
-                return None
-            x, y = self.rng.choice(cells)
-            if near is not None:
-                x, y = near[0] + self.rng.randint(-2, 2), near[1] + self.rng.randint(-2, 2)
-            t = self.terrain[y][x] if 0 <= x < W and 0 <= y < H else WATER
-            if on is not None:
-                if t != on:
-                    continue
-            elif not self.walkable(x, y) or t in (DOOR, BRIDGE, DOCK, SOIL):
-                continue
-            if self.at(x, y):
-                continue
-            return self.add(kind, x, y)
-        return None
-
-    def count(self, kind: str) -> int:
-        n = 0
-        for e in self.entities.values():
-            n += e["kind"] == kind
-            n += sum(1 for i in e.get("items", ()) if i["kind"] == kind)
-        return n
-
-    # ================================================================== geometry
-    def reach_ok(self, x: int, y: int) -> bool:
-        """Something at (x, y) can be reached: you can stand on it or next to it."""
-        r = self.reachable
-        return (x, y) in r or any((x + dx, y + dy) in r for dx, dy in ((0, 1), (1, 0), (0, -1), (-1, 0)))
-
-    def walkable(self, x, y) -> bool:
-        return 0 <= x < W and 0 <= y < H and self.terrain[y][x] not in BLOCKING
-
-    def at(self, x, y) -> list[dict]:
-        return [e for e in self.entities.values() if e["x"] == x and e["y"] == y]
-
-    def place_of(self, x, y) -> str:
-        return self.region[y][x]
-
-    def building_of(self, x, y) -> str | None:
-        for b in self.buildings:
-            if b["x0"] <= x <= b["x1"] and b["y0"] <= y <= b["y1"]:
-                return b["name"]
-        return None
-
-    def indoors(self, x, y) -> bool:
-        return self.building_of(x, y) is not None
-
-    def occupied(self, x, y, me: Being | None = None) -> bool:
-        return any(b is not me and (b.x, b.y) == (x, y) for b in self.beings())
-
-    def beings(self) -> list[Being]:
-        out = [self.ada, self.wren]
-        if self.visitor:
-            out.append(self.visitor)
-        return out
-
-    def being(self, name: str) -> Being | None:
-        n = (name or "").lower()
-        if n in (self.ada.name.lower(), "synth", "me"):
-            return self.ada
-        if n in (self.wren.name.lower(), "companion"):
-            return self.wren
-        if n in ("friend", "you", "my friend", "visitor"):
-            return self.visitor
-        return None
-
-    def near(self, a: Being, b: Being | dict, d: int = 1) -> bool:
-        bx, by = (b.x, b.y) if isinstance(b, Being) else (b["x"], b["y"])
-        return abs(a.x - bx) + abs(a.y - by) <= d
-
-    def path(self, start, goal, me: Being | None = None, adjacent: bool = False, limit: int = 6000,
-             avoid: bool = True):
-        """A* over the grid. With adjacent=True, stop next to the goal (for things you can't stand on)."""
-        sx, sy = start
-        gx, gy = goal
-        if adjacent and abs(sx - gx) + abs(sy - gy) == 1:
-            return []
-        if not adjacent and (sx, sy) == (gx, gy):
-            return []
-        busy = {(b.x, b.y) for b in self.beings() if b is not me} if avoid else set()
-        openq = [(abs(sx - gx) + abs(sy - gy), 0, (sx, sy))]
-        came = {(sx, sy): None}
-        cost = {(sx, sy): 0}
-        terrain = self.terrain
-        while openq and len(came) < limit:
-            _, g, cur = heapq.heappop(openq)
-            cx, cy = cur
-            done = (abs(cx - gx) + abs(cy - gy) == 1) if adjacent else (cur == (gx, gy))
-            if done:
-                out = []
-                while cur != (sx, sy):
-                    out.append(cur)
-                    cur = came[cur]
-                return out[::-1]
-            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
-                nx, ny = cx + dx, cy + dy
-                if not (0 <= nx < W and 0 <= ny < H) or terrain[ny][nx] in BLOCKING:
-                    continue
-                step = 1 if terrain[ny][nx] in (PATH, BRIDGE, DOCK, FLOOR, DOOR) else 1.3
-                if terrain[ny][nx] == SOIL:
-                    step = 2.5                               # mind the beds
-                ng = g + step
-                if (nx, ny) in cost and cost[(nx, ny)] <= ng:
-                    continue
-                if (nx, ny) in busy and (nx, ny) != (gx, gy):
-                    continue
-                cost[(nx, ny)] = ng
-                came[(nx, ny)] = cur
-                heapq.heappush(openq, (ng + abs(nx - gx) + abs(ny - gy), ng, (nx, ny)))
-        return None
-
-    def nearest(self, kinds, frm: tuple[int, int], where=None) -> dict | None:
-        kinds = {kinds} if isinstance(kinds, str) else set(kinds)
-        best, bd = None, 1e9
-        for e in self.entities.values():
-            if e["kind"] in kinds and (where is None or where(e)):
-                d = abs(e["x"] - frm[0]) + abs(e["y"] - frm[1])
-                if d < bd:
-                    best, bd = e, d
-        return best
-
-    def holder_of(self, kind: str, frm: tuple[int, int]) -> tuple[dict | None, dict | None]:
-        """The nearest container holding a `kind` (and the thing inside it)."""
-        best, bd = (None, None), 1e9
-        for c in self.entities.values():
-            for i in c.get("items", ()):
-                if i["kind"] == kind:
-                    d = abs(c["x"] - frm[0]) + abs(c["y"] - frm[1])
-                    if d < bd:
-                        best, bd = (c, i), d
-                    break
-        return best
-
-    def nearest_tile(self, kinds, frm, need_neighbour_walkable=True):
-        kinds = {kinds} if isinstance(kinds, int) else set(kinds)
-        best, bd = None, 1e9
-        fx, fy = frm
-        for r in range(1, max(W, H)):
-            if r > bd:
-                break
-            for y in range(max(0, fy - r), min(H, fy + r + 1)):
-                for x in (fx - r, fx + r) if abs(y - fy) != r else range(max(0, fx - r), min(W, fx + r + 1)):
-                    if 0 <= x < W and self.terrain[y][x] in kinds:
-                        if need_neighbour_walkable and not any(self.walkable(x + dx, y + dy) for dx, dy in DIRS.values()):
-                            continue
-                        d = abs(x - fx) + abs(y - fy)
-                        if d < bd:
-                            best, bd = (x, y), d
-        return best
-
-    def free_spot(self, x: int, y: int, radius: int = 3) -> tuple[int, int] | None:
-        """An open tile next to (x, y) where something can be set down."""
-        for r in range(1, radius + 1):
-            for dx in range(-r, r + 1):
-                for dy in range(-r, r + 1):
-                    if abs(dx) + abs(dy) != r:
-                        continue
-                    nx, ny = x + dx, y + dy
-                    if self.walkable(nx, ny) and self.terrain[ny][nx] not in (DOOR, BRIDGE) \
-                            and not self.at(nx, ny) and not self.occupied(nx, ny):
-                        return nx, ny
-        return None
-
-    # ================================================================== time, weather, climate
+    # ================================================================== time and sky
     @property
     def season(self) -> str:
-        return SEASONS[((self.day - 1) // 3) % 4]
+        return SEASONS[((self.day - 1) // 4) % 4]
 
-    def time_of_day(self, day_seconds: float | None = None) -> str:
-        if self.phase == "night":
-            return "night"
-        f = self.phase_t / max(day_seconds or self.day_seconds, 1)
-        return "dawn" if f < 0.1 else "morning" if f < 0.4 else "noon" if f < 0.55 else \
-            "afternoon" if f < 0.85 else "evening"
+    @property
+    def weather(self) -> str:
+        return self.weather_at(self.zen.x, self.zen.y)
 
-    def light(self, day_seconds: float | None = None) -> float:
-        if self.phase == "night":
-            return 0.2
-        f = self.phase_t / max(day_seconds or self.day_seconds, 1)
-        if f < 0.1:
-            return 0.5 + 0.5 * f / 0.1
-        if f > 0.85:
-            return 0.5 + 0.5 * max(0.0, 1 - f) / 0.15
-        return 1.0
+    def weather_at(self, x: int, y: int) -> str:
+        w = self.base_weather
+        b = BIOMES[self.terrain.biome(x, y)]
+        t = self.terrain.base_temp(x, y) + _SEASON_T[self.season]
+        if w in ("rain", "storm") and t < 1:
+            return "snow"
+        if w == "snow" and t > 3:
+            return "rain"
+        if b == "desert" and w in ("rain", "storm", "fog"):
+            return "cloudy"
+        if b == "swamp" and w == "cloudy":
+            return "fog"
+        return w
 
-    def outdoor_temperature(self) -> float:
-        t = {"spring": 13, "summer": 23, "autumn": 10, "winter": 0}[self.season]
-        tod = self.time_of_day()
-        t += {"night": -7, "dawn": -5, "morning": -1, "noon": 3, "afternoon": 3, "evening": -2}[tod]
-        t -= {"rain": 3, "storm": 4, "snow": 3, "fog": 1, "windy": 2}.get(self.weather, 0)
-        return float(t)
+    def time_of_day(self, *_ignored) -> str:
+        if self.phase == "day":
+            f = self.phase_t / max(1.0, self.day_seconds)
+            return "dawn" if f < 0.07 else "morning" if f < 0.38 else "midday" if f < 0.58 else \
+                "afternoon" if f < 0.82 else "evening" if f < 0.94 else "dusk"
+        f = self.phase_t / max(1.0, self.night_seconds)
+        return "night" if f < 0.4 else "midnight" if f < 0.6 else "late night"
 
-    def temperature_at(self, x: int, y: int) -> float:
-        b = self.building_of(x, y)
-        t = self.indoor[b] if b else self.outdoor_t
-        for e in self.entities.values():                      # standing right by a fire
-            if e.get("lit") and e["kind"] in ("fireplace", "stove") and abs(e["x"] - x) + abs(e["y"] - y) <= 2:
-                t += 6 if e["kind"] == "fireplace" else 3
-        return t
+    def daylight(self) -> float:
+        """0..1 sky light at the moment (before fires and lanterns)."""
+        if self.phase == "day":
+            f = min(1.0, self.phase_t / max(1.0, self.day_seconds))
+            light = 0.3 + 0.7 * math.sin(math.pi * f) ** 0.5
+            return light * {"storm": 0.55, "rain": 0.75, "cloudy": 0.85, "fog": 0.7, "snow": 0.8}.get(
+                self.base_weather, 1.0)
+        return 0.18 * self.moon() * (1.0 if self.base_weather in ("clear", "wind") else 0.3)
 
-    def dark(self, x: int, y: int) -> bool:
-        """Too dark to see well: night (or dusk) with no lit lamp, candle or fire close by."""
-        if self.light() >= 0.6 and not self.indoors(x, y):
-            return False
-        if self.light() >= 0.9:
-            return False
-        b = self.building_of(x, y)
-        for e in self.entities.values():
-            if e.get("lit") and kind_of(e).get("light"):
-                if abs(e["x"] - x) + abs(e["y"] - y) <= kind_of(e)["light"] and self.building_of(e["x"], e["y"]) == b:
-                    return False
-        for being in self.beings():
-            for e in being.carrying:
-                if e.get("lit") and abs(being.x - x) + abs(being.y - y) <= 3:
-                    return False
-        return True
+    def moon(self) -> float:
+        p = self.day % 8
+        return 1.0 - abs(4 - p) / 4.0
 
-    def raining(self) -> bool:
-        return self.weather in WET_WEATHER
-
-    # ================================================================== the world going on by itself
-    def advance(self, dt: float):
-        self.tick_n += 1
-        self.phase_t += dt
-        self.weather_left -= dt
-        r = self.rng
-        if self.weather_left <= 0:
-            was = self.weather
-            self.weather = r.choice(WEATHER[self.season])
-            self.weather_left = r.uniform(150, 420)
-            if was in ("rain", "storm") and self.weather in ("clear", "cloudy") and self.phase == "day":
-                self.rainbow_until = time.time() + 90
-                self.event("rainbow", "The rain stops. A rainbow arches over the hollow!")
-            elif self.weather != was:
-                self.event("weather", {"rain": "It starts to rain.", "storm": "Thunder rumbles. A storm is coming.",
-                                       "snow": "Snow begins to fall.", "fog": "Fog rolls in.",
-                                       "windy": "The wind picks up.", "clear": "The sky clears.",
-                                       "cloudy": "Clouds cover the sky."}[self.weather])
-        self.sounds = []
-        if self.tick_n % 4 == 0:
-            self.physics(dt * 4)
-        self.animals(dt)
-
-    def event(self, kind: str, text: str, **data):
-        self.note(text)
-        self.events.append({"kind": kind, "text": text, "t": time.time(), **data})
-        del self.events[:-60]
-
-    def physics(self, dt: float):
-        """One second of heat, fire, water, growth, freshness and light."""
-        r = self.rng
-        self.outdoor_t = out = self.outdoor_temperature()
-        fires = {e["kind"]: e for e in self.entities.values() if e["kind"] in ("fireplace", "stove")}
-        # ---- rooms warm and cool
-        for b, ins in INSULATED.items():
-            target = out + ins
-            if b == "house":
-                if fires.get("fireplace", {}).get("lit"):
-                    target = max(target + 6, 21.0)            # a fire makes the house cosy, not hot
-                target += 2 if fires.get("stove", {}).get("lit") else 0
-            if b == "greenhouse":
-                target += {"clear": 14, "cloudy": 8, "windy": 9}.get(self.weather, 5) * self.light() + 4
-            self.indoor[b] += (target - self.indoor[b]) * min(1.0, 0.006 * dt)
-        # ---- fires use up their fuel
-        for e in fires.values():
-            if e.get("lit"):
-                e["fuel"] = max(0.0, e.get("fuel", 0) - dt)
-                if e["kind"] == "fireplace":
-                    self.sounds.append(("the fire crackling", e["x"], e["y"], 6))
-                if e["fuel"] <= 0:
-                    e["lit"] = False
-                    e["ash"] = min(5, e.get("ash", 0) + 1)
-                    self.event("fire_out", f"The fire in {kind_of(e)['noun']} burns out.", thing=e["kind"])
-                self.touch(e)
-        stove_lit = bool(fires.get("stove", {}).get("lit"))
-        # ---- lamps and candles burn down
-        for holder in [list(self.entities.values())] + [b.carrying for b in self.beings()]:
-            for e in holder:
-                if e.get("lit") and e["kind"] in ("lamp", "candle"):
-                    e["burn"] = e.get("burn", 0) - dt
-                    if e["burn"] <= 0:
-                        e["lit"], e["burn"] = False, 0
-                        self.event("light_out", f"{kind_of(e)['noun'].capitalize()} flickers and goes out.")
-                    self.touch(e)
-        # ---- things: heat, cooking, freshness, wetness
-        wet_out = self.raining() and self.weather != "snow"
-        for e in list(self.entities.values()):
-            k = kind_of(e)
-            indoors = self.indoors(e["x"], e["y"])
-            if wet_out and not indoors and (k.get("portable") or e["kind"] in ("bench", "swing")):
-                e["wet"] = min(1.0, e.get("wet", 0) + 0.02 * dt)
-                self.touch(e)
-            elif e.get("wet"):
-                dry = 0.004 + (0.01 if indoors and self.indoor.get(self.building_of(e["x"], e["y"]) or "", 0) > 18 else 0)
-                e["wet"] = max(0.0, e["wet"] - dry * dt)
-                self.touch(e)
-            if e["kind"] == "water barrel" and wet_out:
-                e["water"] = min(k["vessel"], e.get("water", 0) + 0.05 * dt)
-            if e["kind"] in ("pot", "kettle"):
-                self._vessel_heat(e, stove_lit and e.get("on") == fires["stove"]["id"], dt)
-            elif e["kind"] == "oven":
-                self._oven(e, stove_lit, dt)
-            elif k.get("thermal"):
-                self._cool(e, self.temperature_at(e["x"], e["y"]), dt)
-            if k.get("fresh"):
-                self._age(e, self.temperature_at(e["x"], e["y"]), dt)
-            items = e.get("items")
-            if items and e["kind"] not in ("oven",):
-                cool = k.get("cool")
-                for i in list(items):
-                    if kind_of(i).get("thermal") and e["kind"] != "pot":
-                        self._cool(i, self.temperature_at(e["x"], e["y"]) - (6 if cool else 0), dt)
-                    if kind_of(i).get("fresh"):
-                        here = self.temperature_at(e["x"], e["y"])
-                        self._age(i, min(here - 8, 11.0) if cool else here, dt, inside=e)   # the pantry stays cool
-                    if e["kind"] == "woodpile" and i.get("wet"):
-                        i["wet"] = max(0.0, i["wet"] - 0.002 * dt)
-        for b in self.beings():
-            for i in b.carrying:
-                if kind_of(i).get("thermal"):
-                    self._cool(i, self.temperature_at(b.x, b.y), dt)
-                if kind_of(i).get("fresh"):
-                    self._age(i, self.temperature_at(b.x, b.y), dt, holder=b)
-            self._being_weather(b, dt)
-        # ---- soil and plants
-        sun = self.light() * (1.0 if self.weather in ("clear", "windy") else 0.4)
-        for pos in self.moisture:
-            m = self.moisture[pos]
-            in_gh = self.region[pos[1]][pos[0]] == "greenhouse"
-            if wet_out and not in_gh:
-                m += 0.01 * dt
-            m -= (0.0003 + 0.0006 * sun * max(0.0, self.temperature_at(*pos) / 25)) * dt
-            self.moisture[pos] = max(0.0, min(1.0, m))
-        for e in list(self.entities.values()):
-            if e["kind"] == "plant":
-                self._grow(e, dt)
-            elif e.get("fruit") is not None and k_season(e, self.season) and self.phase == "day" \
-                    and r.random() < 0.0025 * dt and e["fruit"] < 5:
-                e["fruit"] += 1
-                self.touch(e)
-            elif e.get("fruit") and not k_season(e, self.season) and r.random() < 0.004 * dt:
-                e["fruit"] -= 1                       # the last fruit falls, out of season
-                self.touch(e)
-        # ---- the hens lay in the morning; the bees make honey while flowers bloom
-        tod = self.time_of_day()
-        if tod in ("dawn", "morning"):
-            box = self.nearest("nest box", (4, 29))
-            hens = [e for e in self.entities.values() if e["kind"] == "hen" and e.get("laid") != self.day]
-            if box and hens and len(box.get("items", [])) < 6 and r.random() < 0.004 * dt * len(hens) \
-                    and self.season != "winter":
-                hens[0]["laid"] = self.day                     # one egg a day from each hen
-                box.setdefault("items", []).append(self.make("egg"))
-                self.event("egg", "A hen clucks proudly. There is a new egg in the nest box.")
-                self.touch(box)
-        hive = self.nearest("beehive", (62, 24))
-        if hive and self.season in ("spring", "summer") and self.phase == "day" and r.random() < 0.0015 * dt:
-            hive["honey"] = min(3, hive.get("honey", 0) + 1)
-            self.touch(hive)
-        # ---- wild things come and go
-        if self.tick_n % 40 == 0:
-            self._regrow()
-
-    def _cool(self, e: dict, ambient: float, dt: float, rate: float = 0.01):
-        t = e.get("temp", ambient)
-        e["temp"] = t + (ambient - t) * min(1.0, rate * dt)
-        if abs(t - e["temp"]) > 0.3:
-            self.touch(e)
-
-    def _vessel_heat(self, e: dict, on_fire: bool, dt: float):
-        """A pot or kettle: heats on a lit stove, boils, cooks what's in it, boils dry and burns."""
-        water = e.get("water", 0.0)
-        if on_fire:
-            cap = 100.0 if water > 0 else 260.0
-            e["temp"] = min(cap, e.get("temp", 18) + (6.0 if water else 10.0) * dt / max(0.4, water + 0.3))
+    def air_temp(self, x: int, y: int) -> float:
+        """Air temperature (°C) at a tile: land, season, time, weather, shelter and fires nearby."""
+        c = self.terrain.base_temp(x, y) + _SEASON_T[self.season]
+        if self.phase == "day":
+            f = self.phase_t / max(1.0, self.day_seconds)
+            c += 4.0 * math.sin(math.pi * min(1.0, f)) - 1.0
         else:
-            ambient = self.temperature_at(e["x"], e["y"])
-            e["temp"] = e.get("temp", ambient) + (ambient - e.get("temp", ambient)) * min(1.0, 0.012 * dt)
-        e["steam"] = e["temp"] >= 80 and water > 0
-        boiling = e["temp"] >= 99 and water > 0
-        if boiling:
-            e["water"] = max(0.0, water - 0.004 * dt)
-            if e["kind"] == "kettle":
-                self.sounds.append(("the kettle whistling", e["x"], e["y"], 8))
-                if not e.get("boiled"):
-                    e["boiled"] = True
-                    self.event("boiled", "The kettle whistles. The water is boiling!")
-            else:
-                self.sounds.append(("the pot bubbling", e["x"], e["y"], 3))
-        if e["kind"] == "pot":
-            items = e.get("items", [])
-            for i in items:
-                i["temp"] = e["temp"]
-            raw = [i for i in items if i["kind"] in SOUP_THINGS | {"berries", "egg"}]
-            if boiling and raw:
-                e["cook"] = e.get("cook", 0.0) + dt
-                if e["cook"] >= 40:
-                    kinds = {i["kind"] for i in raw}
-                    product = next((p for need, p in POT_RECIPES if kinds <= need), None) or "soup"
-                    n = len(raw) if product in ("boiled egg",) else max(1, (len(raw) + 1) // 2) if product == "jam" \
-                        else len(raw) + 1
-                    e["items"] = [i for i in items if i not in raw] + [self.make(product, temp=95.0) for _ in range(n)]
-                    e["cook"] = 0.0
-                    self.event("cooked", f"The {'soup' if product == 'soup' else product} in the pot is ready!",
-                               product=product)
-            elif on_fire and water <= 0 and items and e["temp"] > 150:
-                e["burn"] = e.get("burn", 0.0) + dt
-                if e["burn"] > 25:
-                    e["items"] = [self.make("burnt food") for _ in items]
-                    e["burn"] = 0.0
-                    e["smoke"] = True
-                    self.event("burnt", "Smoke! The pot boiled dry and the food burnt.")
-        self.touch(e)
-
-    def _oven(self, e: dict, lit: bool, dt: float):
-        items = e.get("items", [])
-        target = 200.0 if lit else self.temperature_at(e["x"], e["y"])
-        e["temp"] = e.get("temp", 18.0) + (target - e.get("temp", 18.0)) * min(1.0, 0.02 * dt)
-        if not items:
-            return
-        if e["temp"] > 150:
-            e["bake"] = e.get("bake", 0.0) + dt
-            kinds = [i["kind"] for i in items]
-            if e["bake"] >= 60 and not e.get("baked"):
-                out, left = [], list(kinds)
-                for need, product in OVEN_RECIPES:
-                    while all(left.count(n) >= need.count(n) for n in set(need)):
-                        for n in need:
-                            left.remove(n)
-                        out.append(product)
-                out += [k for k in left]
-                e["items"] = [self.make(k, temp=180.0) for k in out]
-                e["baked"] = True
-                made = [k for k in out if k not in kinds]
-                if made:
-                    self.event("baked", f"A warm smell fills the kitchen: {_and([KINDS[k]['noun'] for k in made])} "
-                                        f"{'is' if len(made) == 1 else 'are'} ready in the oven!", products=made)
-            elif e["bake"] >= 170:
-                e["items"] = [self.make("burnt food") for _ in items]
-                e["bake"], e["baked"] = 0.0, False
-                self.event("burnt", "Smoke comes out of the oven. Everything inside has burnt!")
-        for i in e.get("items", []):
-            i["temp"] = e["temp"]
-        e["steam"] = bool(e.get("items")) and e["temp"] > 120
-        self.touch(e)
-
-    def _age(self, e: dict, temp: float, dt: float, inside: dict | None = None, holder: Being | None = None) -> bool:
-        """Food keeps for a while, longer when cool. Returns True if it rotted."""
-        rate = max(0.25, 1.0 + (temp - 18) / 12)
-        e["fresh"] = e.get("fresh", 1000.0) - rate * dt
-        if e["fresh"] > 0:
-            return False
-        rotten = self.make("rotten food")
-        noun = KINDS[e["kind"]]["noun"]
-        if inside is not None:
-            inside["items"] = [rotten if i is e else i for i in inside["items"]]
-        elif holder is not None:
-            holder.carrying = [rotten if i is e else i for i in holder.carrying]
+            c -= 5.0
+        f_here = self.terrain.feature(x, y)
+        inside = f_here in SHELTER
+        if inside:
+            c = 0.4 * c + 0.6 * 13.0
         else:
-            self.remove(e)
-            if e["kind"] != "flower":
-                self.add("rotten food", e["x"], e["y"])
-        self.event("rotted", f"{_cap(noun.replace('a ', 'the ', 1).replace('some ', 'the ', 1))} went bad.")
-        return True
-
-    def _being_weather(self, b: Being, dt: float):
-        indoors = self.indoors(b.x, b.y) or self.terrain[b.y][b.x] == DOCK and self.region[b.y][b.x] == "porch"
-        if self.raining() and not indoors and self.weather != "snow":
-            b.wet = min(1.0, b.wet + 0.03 * dt)
-            b.needs["clean"] = max(0.0, b.needs["clean"] - 0.02 * dt)     # muddy
-        elif b.wet:
-            warm = self.temperature_at(b.x, b.y)
-            b.wet = max(0.0, b.wet - (0.004 + max(0.0, warm - 15) * 0.0015) * dt)
-
-    def _grow(self, e: dict, dt: float):
-        x, y = e["x"], e["y"]
-        m = self.moisture.get((x, y), 0.0)
-        t = self.temperature_at(x, y)
-        before = int(e["stage"])
-        if self.phase == "day" and m > 0.15 and t > 5 and e["stage"] < 4:
-            e["stage"] = min(4.0, e["stage"] + 0.0045 * dt * (1.3 if m > 0.5 else 1.0) * (1.2 if t > 15 else 0.8))
-        if m < 0.05 and self.phase == "day" and t > 12:
-            e["health"] = max(0.0, e["health"] - 0.0006 * dt)
-            e["thirsty"] = True
-        else:
-            e.pop("thirsty", None)
-            e["health"] = min(1.0, e["health"] + 0.0005 * dt)
-        if t < 0 and e["crop"] not in ("wheat",):
-            e["health"] = max(0.0, e["health"] - 0.004 * dt)
-        if e["health"] <= 0:
-            self.remove(e)
-            self.add("leaf", x, y) if self.walkable(x, y) else None
-            self.event("plant_died", f"The {e['crop']} plant {'froze' if t < 0 else 'dried out'} and died.")
-            return
-        if int(e["stage"]) != before:
-            e["glyph"] = KINDS["plant"]["stages"][int(e["stage"])] if e["stage"] < 4 else KINDS[e["crop"]]["glyph"]
-            if e["stage"] >= 4:
-                self.event("ripe", f"The {e['crop']} {'is' if e['crop'] not in ('beans',) else 'are'} ripe!", crop=e["crop"])
-            self.touch(e)
-
-    def _regrow(self):
-        r = self.rng
-        counts: dict[str, int] = {}
-        for e in self.entities.values():
-            counts[e["kind"]] = counts.get(e["kind"], 0) + 1
-        s = self.season
-        for kind, region, cap, chance, ok in (
-                ("mushroom", "woods", 5, 0.2 if s == "autumn" or self.raining() else 0.05, s != "winter"),
-                ("stick", "woods", 5, 0.1, True), ("pinecone", "woods", 4, 0.08, True),
-                ("leaf", "woods", 6, 0.3 if s == "autumn" else 0.03, s != "winter"),
-                ("flower", "meadow", 8, 0.15, s in ("spring", "summer")), ("stone", "stream", 4, 0.05, True),
-                ("clay", "pond", 3, 0.05, True), ("feather", "coop", 2, 0.04, True)):
-            if ok and counts.get(kind, 0) < cap and r.random() < chance:
-                self.spawn_near(kind, region, on=SAND if kind in ("stone", "clay") else None)
-        desk = next((e for e in self.entities.values() if e["kind"] == "desk"), None)
-        if desk and counts.get("paper", 0) < 2 and r.random() < 0.04:   # Wren keeps a little paper in the drawer
-            spot = self.free_spot(desk["x"], desk["y"], 1)
-            if spot:
-                self.add("paper", *spot)
-        for e in [e for e in self.entities.values() if e.get("fruit") and e["kind"].endswith("tree")]:
-            if r.random() < 0.02:                     # ripe fruit drops to the ground
-                spot = self.free_spot(e["x"], e["y"], 1)
-                if spot:
-                    e["fruit"] -= 1
-                    self.add(KINDS[e["kind"]]["fruit"], *spot)
-                    self.touch(e)
-
-    # ================================================================== animals
-    def animals(self, dt: float):
-        r = self.rng
-        tod = self.time_of_day()
-        night = self.phase == "night"
-        if tod == "dawn" and not getattr(self, "_crowed", False) and self.phase_t > 5:
-            self._crowed = True
-            rooster = self.nearest("rooster", (5, 35))
-            if rooster:
-                self.sounds.append(("the rooster crowing", rooster["x"], rooster["y"], 40))
-                self.event("rooster", "Cock-a-doodle-doo! The rooster greets the morning.")
-        if tod != "dawn":
-            self._crowed = False
-        if self.tick_n % 2:
-            return
-        for e in list(self.entities.values()):
-            k = e["kind"]
-            if not KINDS.get(k, {}).get("creature"):
+            c += _WEATHER_T[self.weather_at(x, y)]
+            if self.phase == "night" and self.base_weather == "clear":
+                c -= 2.0
+        for fid in self.fires:
+            e = self.ents.get(fid)
+            if not e or not e.get("lit"):
                 continue
-            if k == "cat":
-                self._cat(e, dt)
-            elif k in ("hen", "rooster"):
-                if night:
-                    self._step_toward(e, (5, 30), within=("coop",))
-                elif r.random() < 0.3:
-                    self._wander(e, ("coop",))
-                if k == "hen" and not night and r.random() < 0.004:
-                    self.sounds.append(("a hen clucking", e["x"], e["y"], 6))
-            elif k in ("fish", "duck"):
-                if r.random() < 0.4:
-                    self._swim(e)
-                if k == "duck" and r.random() < 0.003:
-                    self.sounds.append(("a duck quacking", e["x"], e["y"], 10))
-            elif k == "frog":
-                if r.random() < 0.15:
-                    self._wander(e, ("pond",))
-                if tod in ("evening", "night") and r.random() < 0.01:
-                    self.sounds.append(("frogs croaking", e["x"], e["y"], 12))
-            elif k == "bee":
-                if night or self.season == "winter" or self.raining():
-                    self._step_toward(e, (62, 25))
-                elif r.random() < 0.7:
-                    self._wander(e, ("meadow",))
-                    self.sounds.append(("bees buzzing", e["x"], e["y"], 3))
-            elif k == "butterfly":
-                if self.season in ("spring", "summer") and not night and r.random() < 0.7:
-                    self._wander(e, ("meadow", "garden", "orchard"))
-            elif k == "robin":
-                feeder = self.nearest("bird feeder", (16, 40))
-                if feeder and feeder.get("items") and r.random() < 0.02:
-                    feeder["items"].pop()                      # a robin eats a seed
-                    self.touch(feeder)
-                if r.random() < 0.4:
-                    self._wander(e, ("garden", "yard", "orchard"))
-                if tod in ("dawn", "morning") and r.random() < 0.02:
-                    self.sounds.append(("a robin singing", e["x"], e["y"], 14))
-            elif k == "deer":
-                close = any(abs(b.x - e["x"]) + abs(b.y - e["y"]) <= 4 for b in self.beings())
-                if close or tod not in ("dawn", "evening"):
-                    self.remove(e)                             # it bounds away into the trees
-                    if close:
-                        self.event("deer", "A deer looks up, then leaps away into the woods.")
-                elif r.random() < 0.2:
-                    self._wander(e, ("woods", "meadow"))
-            elif k == "owl":
-                if not night:
-                    self.remove(e)
-                elif r.random() < 0.01:
-                    self.sounds.append(("an owl hooting", e["x"], e["y"], 20))
-            elif k == "hedgehog":
-                if not night:
-                    self.remove(e)
-                elif r.random() < 0.3:
-                    self._wander(e, ("garden", "yard"))
-        # visitors of dusk and night
-        if tod in ("dawn", "evening") and not any(e["kind"] == "deer" for e in self.entities.values()) and r.random() < 0.004:
-            self.spawn_near("deer", "woods")
-        if night and not any(e["kind"] == "owl" for e in self.entities.values()) and r.random() < 0.01:
-            self.spawn_near("owl", "woods")
-        if night and self.season != "winter" and not any(e["kind"] == "hedgehog" for e in self.entities.values()) \
-                and r.random() < 0.004:
-            self.spawn_near("hedgehog", "garden")
-
-    def _cat(self, e: dict, dt: float):
-        """Moss: eats when hungry, then finds the warmest spot and sleeps; sometimes follows someone."""
-        r = self.rng
-        e["hunger"] = min(100.0, e.get("hunger", 30.0) + 0.04 * dt * 2)
-        bowl = self.nearest("cat bowl", (23, 25))
-        if e["hunger"] > 60:
-            e["state"] = "hungry"
-            if bowl and bowl.get("items"):
-                if abs(bowl["x"] - e["x"]) + abs(bowl["y"] - e["y"]) <= 1:
-                    food = bowl["items"].pop()
-                    e["hunger"] = max(0.0, e["hunger"] - 60)
-                    self.touch(bowl)
-                    self.event("cat_ate", f"Moss eats {KINDS[food['kind']]['noun'].split(' ', 1)[-1]} from the bowl and licks its whiskers.")
-                else:
-                    self._step_toward(e, (bowl["x"], bowl["y"]))
-            else:
-                target = min(self.beings(), key=lambda b: abs(b.x - e["x"]) + abs(b.y - e["y"]))
-                if abs(target.x - e["x"]) + abs(target.y - e["y"]) > 1:
-                    self._step_toward(e, (target.x, target.y))
-                if r.random() < 0.03:
-                    self.sounds.append(("Moss meowing", e["x"], e["y"], 6))
-            self.touch(e)
-            return
-        fire = self.nearest("fireplace", (13, 23))
-        if fire and fire.get("lit"):
-            e["state"] = "asleep by the fire"
-            if abs(fire["x"] - e["x"]) + abs(fire["y"] - e["y"]) > 1:
-                self._step_toward(e, (fire["x"] + 1, fire["y"]))
-        elif self.phase == "night":
-            e["state"] = "asleep"
-        elif r.random() < 0.08:
-            e["state"] = "exploring"
-            self._wander(e, ("living room", "kitchen", "little bedroom", "porch", "yard", "garden"))
-        elif r.random() < 0.01:
-            e["state"] = "asleep in a sunny spot"
-        self.touch(e)
-
-    def _step_toward(self, e: dict, goal, within=None):
-        p = self.path((e["x"], e["y"]), goal, adjacent=False, limit=400, avoid=True)
-        if p:
-            nx, ny = p[0]
-            if within is None or self.region[ny][nx] in within or self.region[e["y"]][e["x"]] not in within:
-                e["x"], e["y"] = nx, ny
-                self.touch(e)
-
-    def _wander(self, e: dict, regions):
-        dx, dy = self.rng.choice(list(DIRS.values()))
-        nx, ny = e["x"] + dx, e["y"] + dy
-        if self.walkable(nx, ny) and not self.occupied(nx, ny) and self.terrain[ny][nx] not in (DOOR, SOIL) \
-                and (self.region[ny][nx] in regions or self.region[e["y"]][e["x"]] not in regions):
-            e["x"], e["y"] = nx, ny
-            self.touch(e)
-
-    def _swim(self, e: dict):
-        dx, dy = self.rng.choice(list(DIRS.values()))
-        nx, ny = e["x"] + dx, e["y"] + dy
-        if 0 <= nx < W and 0 <= ny < H and self.terrain[ny][nx] == WATER and self.region[ny][nx] == "pond":
-            e["x"], e["y"] = nx, ny
-            self.touch(e)
-
-    def note(self, text: str):
-        self.log.append(text)
-        del self.log[:-40]
-
-    # ================================================================== the gallery
-    def create(self, kind: str, author: str, data: dict, title: str = "", entity: dict | None = None) -> dict:
-        c = {"id": len(self.creations) + 1, "kind": kind, "author": author, "title": title, "text": "",
-             "day": self.day, "season": self.season, "data": data, "t": time.time(),
-             "entity": entity["id"] if entity else None}
-        self.creations.append(c)
-        self.new_creations.append(c)
-        if entity is not None:
-            entity["work"] = c["id"]
-            self.touch(entity)
+            d = max(abs(e["x"] - x), abs(e["y"] - y))
+            if e["kind"] == "fireplace" and inside and d <= 5 and f_here == F["floor"]:
+                c = max(c + 12.0, 21.0)
+            elif e["kind"] == "campfire" and d <= 2:
+                c += 10.0 * (1.0 - d / 3.0)
+            elif e["kind"] == "fireplace" and d <= 1:
+                c += 6.0
         return c
 
-    # ================================================================== art skill
-    def skill(self, name: str, medium: str) -> float:
-        return self.skills.get(name, {}).get(medium, 0.0)
+    def light_at(self, x: int, y: int) -> float:
+        light = self.daylight()
+        if self.terrain.feature(x, y) in SHELTER and self.phase == "day":
+            light *= 0.7
+        for fid in self.fires:
+            e = self.ents.get(fid)
+            if e and e.get("lit"):
+                d = max(abs(e["x"] - x), abs(e["y"] - y))
+                r = KINDS[e["kind"]].get("light", 4)
+                if d <= r:
+                    light = max(light, 0.8 - 0.4 * d / (r + 1))
+        if (x, y) == (self.zen.x, self.zen.y) and any(h["kind"] == "lantern" and h.get("lit") for h in self.zen.hands):
+            light = max(light, 0.6)
+        return light
 
-    def practice(self, name: str, medium: str, how: str) -> float:
-        from .art import grow
+    def sight_radius(self) -> int:
+        light = self.light_at(self.zen.x, self.zen.y)
+        r = 7 if light >= 0.5 else 5 if light >= 0.3 else 3 if light >= 0.12 else 1
+        w = self.weather
+        if w == "fog":
+            r = min(r, 3)
+        elif w in ("storm", "snow"):
+            r = min(r, 5)
+        if self.terrain.feature(self.zen.x, self.zen.y) in SHELTER:
+            r = min(r, 6)
+        return r
 
-        m = self.skills.setdefault(name, {})
-        m[medium] = grow(m.get(medium, 0.0), how)
-        return m[medium]
+    # ================================================================== things
+    def _gen_id(self, cx: int, cy: int, n: int) -> int:
+        return GEN_BASE + ((((cx & 0xFFFF) << 16) | (cy & 0xFFFF)) << 12) + n
 
-    def art_skills(self, b: Being) -> dict:
-        from .art import MEDIA, effective_skill
+    def make(self, kind: str, **state) -> dict:
+        e = {"id": self.next_id, "kind": kind, "x": 0, "y": 0}
+        e.update(state)
+        self.next_id += 1
+        self.alive.add(e["id"])
+        self.mod.add(e["id"])
+        return e
 
-        return {m: effective_skill(self.skill(b.name, m), b.role, self.zen_stage) for m in MEDIA}
+    def place(self, e: dict, x: int, y: int):
+        e["x"], e["y"] = x, y
+        self.ents[e["id"]] = e
+        self.cidx.setdefault((x >> 5, y >> 5), set()).add(e["id"])
+        self.tidx.setdefault((x, y), []).append(e["id"])
+        self.alive.add(e["id"])
+        self._dirty.add(e["id"])
+        if e["kind"] in ("fireplace", "campfire"):
+            self.fires.add(e["id"])
 
-    def hang(self, e: dict) -> bool:
-        """Hang a painting on a wall in the house: a floor tile beside a wall, facing into the room."""
-        hung = {(x["x"], x["y"], x.get("wall")) for x in self.entities.values() if x.get("wall")}
-        spots = []
-        for b in self.buildings:
-            if b["name"] != "house":
+    def unplace(self, e: dict):
+        i = e["id"]
+        if self.ents.pop(i, None) is None:
+            return
+        s = self.cidx.get((e["x"] >> 5, e["y"] >> 5))
+        if s:
+            s.discard(i)
+        lst = self.tidx.get((e["x"], e["y"]))
+        if lst and i in lst:
+            lst.remove(i)
+            if not lst:
+                del self.tidx[(e["x"], e["y"])]
+        self.fires.discard(i)
+        self._removed.add(i)
+        self._dirty.discard(i)
+
+    def destroy(self, e: dict):
+        """A thing is used up (eaten, burned): it is gone for good."""
+        self.unplace(e)
+        i = e["id"]
+        self.alive.discard(i)
+        self.mod.discard(i)
+        if i >= GEN_BASE:
+            self.gone.add(i)
+
+    def touch(self, e: dict):
+        self.mod.add(e["id"])
+        if e["id"] in self.ents:
+            self._dirty.add(e["id"])
+
+    def at(self, x: int, y: int) -> list[dict]:
+        ids = self.tidx.get((x, y))
+        return [self.ents[i] for i in ids] if ids else []
+
+    def find(self, eid: int) -> dict | None:
+        return self.ents.get(eid)
+
+    def _ensure_chunk(self, cx: int, cy: int):
+        key = (cx, cy)
+        if key in self.spawned:
+            return
+        self.spawned.add(key)
+        k = 2048
+        for n, (kind, x, y, st) in enumerate(self.terrain.spawns(cx, cy)):
+            items = st.get("items")
+            i = self._gen_id(cx, cy, n)
+            st = {a: b for a, b in st.items() if a != "items"}
+            made_items = []
+            for ik, ist in items or []:
+                ii = self._gen_id(cx, cy, k)
+                k += 1
+                if ii not in self.gone and ii not in self.alive:
+                    made_items.append(dict({"id": ii, "kind": ik, "x": x, "y": y}, **ist))
+            if i in self.gone or i in self.alive:
                 continue
-            for y in range(b["y0"] + 1, b["y1"]):
-                for x in range(b["x0"] + 1, b["x1"]):
-                    if self.terrain[y][x] != FLOOR:
-                        continue
-                    for side, (dx, dy) in DIRS.items():
-                        if self.terrain[y + dy][x + dx] == WALL and (x, y, side) not in hung and \
-                                not any(o["kind"] in ("bed", "bookshelf", "piano", "stove", "sink", "pantry", "fireplace",
-                                                      "oven", "bathtub", "desk", "toy chest") for o in self.at(x, y)):
-                            spots.append((x, y, side))
-        if not spots:
+            e = dict({"id": i, "kind": kind, "x": x, "y": y}, **st)
+            if items is not None:
+                e["items"] = made_items
+                for it in made_items:
+                    self.alive.add(it["id"])
+            self.place(e, x, y)
+
+    def _ensure_area(self):
+        """Things and animals exist around Zen and you."""
+        keys = [(self.zen.x >> 5, self.zen.y >> 5)]
+        if self.visitor:
+            keys.append((self.visitor.x >> 5, self.visitor.y >> 5))
+        key = tuple(keys)
+        if key == self._area_key:
+            return
+        self._area_key = key
+        for cx, cy in keys:
+            for dx in (-2, -1, 0, 1, 2):
+                for dy in (-2, -1, 0, 1, 2):
+                    self._ensure_chunk(cx + dx, cy + dy)
+        active = {(cx + dx, cy + dy) for cx, cy in keys for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+        for k in list(self.animal_chunks - active):
+            self._despawn_animals(k)
+        for k in sorted(active - self.animal_chunks):
+            self._spawn_animals(k)
+
+    # ================================================================== tiles
+    def walkable(self, x: int, y: int) -> bool:
+        b, w, f = self.terrain.tile(x, y)
+        if w == WATER_DEEP or f in BLOCKING:
             return False
-        order = {"living room": 0, "kitchen": 1, "little bedroom": 2, "big bedroom": 3, "washroom": 4}
-        spots.sort(key=lambda t: (order.get(self.region[t[1]][t[0]], 9), self.rng.random()))
-        x, y, side = spots[0]
-        self.remove(e)
-        e["wall"] = side
-        self.put(e, x, y)
+        for e in self.at(x, y):
+            if KINDS.get(e["kind"], {}).get("blocks"):
+                return False
         return True
 
-    def update_creation(self, cid: int, **fields):
-        c = next((c for c in self.creations if c["id"] == cid), None)
+    def _blocker(self, x: int, y: int) -> str | None:
+        b, w, f = self.terrain.tile(x, y)
+        if f in BLOCKING:
+            return noun_of(FEATURE_KIND[FEATURES[f]])
+        if w == WATER_DEEP:
+            return "the sea" if BIOMES[b] == "ocean" else "deep water"
+        for e in self.at(x, y):
+            if KINDS.get(e["kind"], {}).get("blocks"):
+                return self.ent_noun(e)
+        a = self.animal_at.get((x, y))
+        if a is not None and a in self.animals:
+            return noun_of(self.animals[a]["kind"])
+        return None
+
+    def has_fruit(self, x: int, y: int, f: int | None = None) -> bool:
+        f = self.terrain.feature(x, y) if f is None else f
+        k = KINDS.get(FEATURE_KIND.get(FEATURES[f], ""), {})
+        if not k.get("fruit") or self.season not in k.get("season", ()):
+            return False
+        if f in (F["palm"], F["jungle_tree"]) and shash(self.seed, x, y, "bears") % 3 == 0:
+            return False
+        p = self.picked.get((x, y))
+        return p is None or self.t - p >= REGROW
+
+    def ent_noun(self, e: dict) -> str:
+        k = e["kind"]
+        n = noun_of(k)
+        if k in ("bucket", "cup") and e.get("water"):
+            return f"a {k} of {'sea ' if e.get('salty') else ''}water"
+        if k == "lantern" and e.get("lit"):
+            return "a lit lantern"
+        if k == "fireplace" and e.get("lit"):
+            return "the fireplace with a fire burning"
+        if k == "campfire":
+            return "a burning campfire" if e.get("lit") else "a cold campfire"
+        if k == "chest" and e.get("open"):
+            return "an open chest"
+        if k == "bed" and (e["x"], e["y"]) == (-3, 1):
+            return "my bed"
+        return n
+
+    def tile_word(self, x: int, y: int, me: tuple | None = None) -> str:
+        """The most noticeable thing at a tile, as a noun phrase."""
+        a = self.animal_at.get((x, y))
+        if a is not None and a in self.animals:
+            an = self.animals[a]
+            return ("a sleeping " + an["kind"]) if an["state"] == "sleep" and an["kind"] not in ("fish",) \
+                else noun_of(an["kind"])
+        ents = self.at(x, y)
+        if ents:
+            furn = [e for e in ents if e["kind"] in _FURNITURE]
+            loose = [e for e in ents if e["kind"] not in _FURNITURE]
+            if furn:
+                n = self.ent_noun(furn[0])
+                if loose:
+                    n += " with " + count_list([self.ent_noun(e) for e in loose[-3:]])
+                return n
+            return count_list([self.ent_noun(e) for e in loose[-3:]])
+        b, w, f = self.terrain.tile(x, y)
+        if f:
+            name = FEATURES[f]
+            if name == "spring":
+                return "a spring"
+            n = noun_of(FEATURE_KIND[name])
+            if _FRUIT_WITH.get(FEATURE_KIND[name]) and self.has_fruit(x, y, f):
+                n += " with " + _FRUIT_WITH[FEATURE_KIND[name]]
+            if not w:
+                return n
+        if w:
+            ocean = BIOMES[b] == "ocean"
+            if w == WATER_RIVER:
+                return "a stream"
+            if w == WATER_DEEP:
+                return "the deep sea" if ocean else "deep water"
+            if self._frozen(x, y):
+                return "ice"
+            return "shallow sea water" if ocean else "shallow water"
+        if self.season == "winter" and self.terrain.base_temp(x, y) + _SEASON_T["winter"] < 2:
+            return "snow"
+        return _GROUND[BIOMES[b]]
+
+    def _frozen(self, x: int, y: int) -> bool:
+        return self.terrain.base_temp(x, y) + _SEASON_T[self.season] < -4
+
+    # ================================================================== places
+    def _pois_near(self, x: int, y: int, r: int) -> list[dict]:
+        out = []
+        for cx in range((x - r) >> 5, ((x + r) >> 5) + 1):
+            for cy in range((y - r) >> 5, ((y + r) >> 5) + 1):
+                for p in self.terrain.chunk(cx, cy).pois:
+                    if abs(p["x"] - x) <= r and abs(p["y"] - y) <= r:
+                        out.append(p)
+        return out
+
+    def place_at(self, x: int, y: int) -> dict | None:
+        best = None
+        for p in self._pois_near(x, y, 8):
+            d = max(abs(p["x"] - x), abs(p["y"] - y))
+            if d <= T.POI_RADIUS.get(p["kind"], 4) and (best is None or d < best[0]):
+                best = (d, p)
+        return best[1] if best else None
+
+    def _know_place(self, p: dict, visit: bool = True) -> float:
+        """Learn of a named place: +0.25 for seeing it from afar, +0.5 in all for reaching it."""
+        k = self.places.get(p["name"])
+        if k and (k.get("visited") or not visit):
+            return 0.0
+        gain = 0.0 if p["kind"] == "home" else (0.5 if not k else 0.25) if visit else 0.25
+        self.places[p["name"]] = {"name": p["name"], "kind": p["kind"], "x": p["x"], "y": p["y"], "visited": visit}
+        if visit and p["kind"] != "home":
+            self.note(f"I find {p['name']}.", "place", name=p["name"])
+        return gain
+
+    # ================================================================== beings: animals
+    def _spawn_animals(self, key: tuple):
+        cx, cy = key
+        self.animal_chunks.add(key)
+        ch = self.terrain.chunk(cx, cy)
+        rng = random.Random(shash(self.seed, cx, cy, self.day, self.phase, "animals"))
+        b = BIOMES[ch.dominant]
+        far = max(abs(cx), abs(cy)) >= 6
+        night = self.phase == "night"
+        kinds = [(k, p, n) for k, p, n in _ANIMALS.get(b, []) if k != "bear" or far]
+        if any(ch.water[i] for i in range(0, CHUNK * CHUNK, 37)):
+            kinds.append(("fish", 0.9, 4))
+            if self.season != "winter":
+                kinds.append(("frog", 0.5, 2))
+        if night and self.season == "summer" and b in ("meadow", "forest", "swamp", "grassland", "jungle"):
+            kinds.append(("fireflies", 0.8, 2))
+        for kind, p, n in kinds:
+            if rng.random() >= p:
+                continue
+            for _ in range(rng.randint(1, n)):
+                for _try in range(12):
+                    x, y = cx * CHUNK + rng.randrange(CHUNK), cy * CHUNK + rng.randrange(CHUNK)
+                    if self._animal_ok(kind, x, y):
+                        self._add_animal(kind, x, y, key, rng)
+                        break
+        for i in self.cidx.get(key, ()):
+            e = self.ents.get(i)
+            if e and e["kind"] == "beehive":
+                for _ in range(2):
+                    self._add_animal("bees", e["x"] + rng.choice((-1, 1)), e["y"] + rng.choice((-1, 0, 1)), key, rng,
+                                     hx=e["x"], hy=e["y"])
+
+    def _add_animal(self, kind, x, y, key, rng, **kw):
+        if (x, y) in self.animal_at:
+            return
+        a = {"id": self.next_animal, "kind": kind, "x": x, "y": y, "fx": float(x), "fy": float(y),
+             "facing": rng.randrange(4), "state": "idle", "chunk": key, "timer": rng.uniform(0.5, 3.0), "cool": 0.0}
+        a.update(kw)
+        self.next_animal += 1
+        self.animals[a["id"]] = a
+        self.animal_at[(x, y)] = a["id"]
+
+    def _remove_animal(self, a: dict):
+        self.animals.pop(a["id"], None)
+        if self.animal_at.get((a["x"], a["y"])) == a["id"]:
+            del self.animal_at[(a["x"], a["y"])]
+
+    def _despawn_animals(self, key: tuple):
+        self.animal_chunks.discard(key)
+        for a in [a for a in self.animals.values() if a["chunk"] == key]:
+            self._remove_animal(a)
+
+    def _animal_ok(self, kind: str, x: int, y: int) -> bool:
+        if (x, y) in self.animal_at or (x, y) == (self.zen.x, self.zen.y):
+            return False
+        b, w, f = self.terrain.tile(x, y)
+        if kind == "fish":
+            return w != 0 and not self._frozen(x, y)
+        if kind == "frog" and (BIOMES[b] == "ocean" or self.terrain.base_temp(x, y) + _SEASON_T[self.season] < 6):
+            return False
+        if kind in ("bees", "fireflies", "bird"):
+            return w != WATER_DEEP and f not in (F["wall"], F["stone_wall"], F["cave_wall"]) and \
+                f not in SHELTER
+        if w == WATER_DEEP or (w and kind not in ("frog",)) or f in BLOCKING or f in SHELTER:
+            return False
+        if self.tidx.get((x, y)) and not self.walkable(x, y):
+            return False
+        return True
+
+    def _animals(self, dt: float):
+        zx, zy = self.zen.x, self.zen.y
+        others = [(zx, zy)] + ([(self.visitor.x, self.visitor.y)] if self.visitor else [])
+        night = self.phase == "night"
+        k = min(1.0, dt * 5.0)
+        for a in list(self.animals.values()):
+            a["fx"] += (a["x"] - a["fx"]) * k
+            a["fy"] += (a["y"] - a["fy"]) * k
+            a["timer"] -= dt
+            a["cool"] = max(0.0, a["cool"] - dt)
+            if a["timer"] > 0:
+                continue
+            kind = a["kind"]
+            rng = self.rng
+            sleepy = (kind in _NIGHT) != night and kind not in ("fish",)
+            near = min(max(abs(a["x"] - ox), abs(a["y"] - oy)) for ox, oy in others)
+            flee = _FLEE.get(kind, 0)
+            if near <= flee and not (sleepy and near > 1) and kind not in ("bees", "fireflies"):
+                a["state"] = "flee"
+                a["timer"] = 0.35 if kind != "bear" else 0.6
+                if not self._step_animal(a, others, away=True) and kind == "bear" and near <= 1 \
+                        and a["cool"] <= 0 and not self.zen.sleeping:
+                    a["cool"] = 6.0
+                    self._hurt(15, "A bear swipes at me! It hurts.", "bear")
+                continue
+            if sleepy:
+                a["state"] = "sleep"
+                a["timer"] = rng.uniform(4, 10)
+                continue
+            a["timer"] = rng.uniform(0.8, 3.5)
+            if rng.random() < 0.55:
+                a["state"] = "walk"
+                self._step_animal(a, others)
+            else:
+                a["state"] = "idle"
+
+    def _step_animal(self, a: dict, others, away: bool = False) -> bool:
+        opts = []
+        for d, (dx, dy) in enumerate(DIRS):
+            nx, ny = a["x"] + dx, a["y"] + dy
+            if not self._animal_ok(a["kind"], nx, ny) or any((nx, ny) == o for o in others):
+                continue
+            if a["kind"] == "bees" and max(abs(nx - a.get("hx", nx)), abs(ny - a.get("hy", ny))) > 3:
+                continue
+            if away:
+                gain = min(abs(nx - ox) + abs(ny - oy) for ox, oy in others) - \
+                    min(abs(a["x"] - ox) + abs(a["y"] - oy) for ox, oy in others)
+                if gain <= 0:
+                    continue
+                opts.append((-gain, d, nx, ny))
+            else:
+                opts.append((self.rng.random(), d, nx, ny))
+        if not opts:
+            return False
+        opts.sort()
+        _, d, nx, ny = opts[0]
+        if self.animal_at.get((a["x"], a["y"])) == a["id"]:
+            del self.animal_at[(a["x"], a["y"])]
+        a["x"], a["y"], a["facing"] = nx, ny, d
+        self.animal_at[(nx, ny)] = a["id"]
+        return True
+
+    # ================================================================== time passes
+    def advance(self, dt: float, day_seconds: float | None = None, night_seconds: float | None = None):
+        """Time passes: sky, weather, fires, regrowth, animals, Zen's body, the Sprite."""
+        if day_seconds:
+            self.day_seconds = float(day_seconds)
+        if night_seconds:
+            self.night_seconds = float(night_seconds)
+        self.tick_n += 1
+        self.t += dt
+        self.phase_t += dt
+        span = self.day_seconds if self.phase == "day" else self.night_seconds
+        if self.phase_t >= span:
+            self.phase_t -= span
+            self._turn_phase()
+        self.weather_left -= dt
+        if self.weather_left <= 0:
+            self._change_weather()
+        if self.base_weather in ("rain", "storm"):
+            self.last_rain_t = self.t
+        self._fires(dt)
+        if self.t - self._regen_t >= 30.0:
+            self._regen_t = self.t
+            self._regrow()
+        self._animals(dt)
+        wb0 = self.wellbeing()
+        h0 = self.zen.needs["health"]
+        self._body(dt)
+        lost = max(0.0, h0 - self.zen.needs["health"])
+        self._passive += WB_GAIN * (self.wellbeing() - wb0) - 0.2 * lost
+        self._move_sprite(dt)
+        z = self.zen
+        k = min(1.0, dt * 8.0)
+        z.fx += (z.x - z.fx) * k
+        z.fy += (z.y - z.fy) * k
+        if self.visitor and self.t - self.visitor.said_t > 10:
+            self.visitor.said = ""
+        if z.said and self.t - z.said_t > 10:
+            z.said = ""
+        if self.sprite.said and self.t - self.sprite.said_t > 20 and self.sprite.state != "answering":
+            self.sprite.said = ""
+        if z.activity and not self.studio and self.t - z.activity_t > 2.5 and not z.sleeping:
+            z.activity = ""
+
+    def _turn_phase(self):
+        if self.phase == "day":
+            self.phase = "night"
+            self.note("The sun sets. Night falls.", "phase")
+        else:
+            self.phase = "day"
+            self.day += 1
+            self.note(f"The sun rises. It is day {self.day}, {self.season}.", "phase")
+            self._new_day()
+        for k in list(self.animal_chunks):
+            self._despawn_animals(k)
+            self._spawn_animals(k)
+
+    def _new_day(self):
+        for e in self.ents.values():
+            k = e["kind"]
+            if k in ("easel", "desk") and e.get("paper", 0) < 5:
+                e["paper"] = e.get("paper", 0) + 1
+                self.touch(e)
+            elif k == "beehive" and e.get("honey", 0) < 3 and self.season != "winter":
+                e["honey"] = e.get("honey", 0) + 1
+                self.touch(e)
+            elif k == "nest" and e.get("eggs", 0) < 3 and self.season in ("spring", "summer"):
+                e["eggs"] = e.get("eggs", 0) + 1
+                self.touch(e)
+
+    def _change_weather(self):
+        r = self.rng
+        was = self.base_weather
+        self.base_weather = r.choices(WEATHERS, weights=_WEATHER_W[self.season])[0]
+        self.weather_left = r.uniform(150.0, 420.0)
+        if self.base_weather != was:
+            w = self.weather
+            self.note({"rain": "It starts to rain.", "storm": "Thunder rumbles. A storm comes.",
+                       "snow": "Snow begins to fall.", "fog": "Fog rolls in.", "wind": "The wind picks up.",
+                       "clear": "The sky clears.", "cloudy": "Clouds cover the sky."}[w], "weather")
+
+    def _fires(self, dt: float):
+        for fid in list(self.fires):
+            e = self.ents.get(fid)
+            if not e or not e.get("lit"):
+                continue
+            e["fuel"] = max(0.0, e.get("fuel", 0.0) - dt)
+            if e["kind"] == "campfire" and self.weather_at(e["x"], e["y"]) in ("rain", "storm", "snow") \
+                    and self.terrain.feature(e["x"], e["y"]) not in SHELTER:
+                e["fuel"] = max(0.0, e["fuel"] - 4 * dt)
+            if e["fuel"] <= 0:
+                e["lit"] = False
+                if max(abs(e["x"] - self.zen.x), abs(e["y"] - self.zen.y)) <= 8:
+                    self.note(f"The fire in {the(self.ent_noun(e)).replace(' with a fire burning', '')} "
+                              f"goes out." if e["kind"] == "fireplace" else "The campfire goes out.", "fire")
+            if self.tick_n % 8 == 0 or not e["lit"]:
+                self.touch(e)
+        for h in self.zen.hands:
+            if h["kind"] == "lantern" and h.get("lit"):
+                h["fuel"] = max(0.0, h.get("fuel", 900.0) - dt)
+                if h["fuel"] <= 0:
+                    h["lit"] = False
+                    self.note("My lantern goes out.", "fire")
+
+    def _regrow(self):
+        """Every half minute, near Zen: apples fall, mushrooms come up after rain, sticks drop."""
+        rng = self.rng
+        cx0, cy0 = self.zen.x >> 5, self.zen.y >> 5
+        season = self.season
+        rained = self.t - self.last_rain_t < 900 and season != "winter"
+        if self.base_weather in ("rain", "storm"):
+            for fid in self.cidx.get((0, 0), ()):
+                e = self.ents[fid]
+                if e["kind"] == "rain barrel" and e.get("water", 0) < 20:
+                    e["water"] = min(20, e.get("water", 0) + 2)
+                    self.touch(e)
+        for cx in (cx0 - 1, cx0, cx0 + 1):
+            for cy in (cy0 - 1, cy0, cy0 + 1):
+                ch = self.terrain.chunk(cx, cy)
+                ids = self.cidx.get((cx, cy), ())
+                loose = sum(1 for i in ids if self.ents[i]["kind"] in ("apple", "mushroom", "toadstool", "stick"))
+                if loose >= 14:
+                    continue
+                for x, y, f in ch.fruit:
+                    if f == F["apple_tree"] and season in ("summer", "autumn") and rng.random() < 0.03:
+                        self._drop_near(x, y, "apple")
+                b = BIOMES[ch.dominant]
+                if rained and b in ("forest", "pine_forest", "swamp", "jungle", "meadow") and rng.random() < 0.25:
+                    x, y = cx * CHUNK + rng.randrange(CHUNK), cy * CHUNK + rng.randrange(CHUNK)
+                    if self.terrain.feature(x, y) in TREES:
+                        self._drop_near(x, y, "toadstool" if rng.random() < 0.25 else "mushroom")
+                if b in ("forest", "pine_forest", "jungle") and rng.random() < 0.08:
+                    x, y = cx * CHUNK + rng.randrange(CHUNK), cy * CHUNK + rng.randrange(CHUNK)
+                    if self.terrain.feature(x, y) in TREES:
+                        self._drop_near(x, y, "stick")
+
+    def _drop_near(self, x: int, y: int, kind: str):
+        for dx, dy in ((0, 1), (1, 0), (-1, 0), (0, -1), (1, 1), (-1, 1)):
+            nx, ny = x + dx, y + dy
+            b, w, f = self.terrain.tile(nx, ny)
+            if not w and f not in BLOCKING and f not in SHELTER and f < F["wall"] and not self.tidx.get((nx, ny)):
+                self.place(self.make(kind), nx, ny)
+                return
+
+    # ================================================================== Zen's body
+    def _body(self, dt: float):
+        z, n = self.zen, self.zen.needs
+        b, w, f = self.terrain.tile(z.x, z.y)
+        inside = f in SHELTER
+        weather = self.weather
+        near_fire = self._near_fire(z.x, z.y)
+        # wet and dry
+        if w and not self._frozen(z.x, z.y):
+            z.wet = 1.0
+        elif not inside and weather in ("rain", "storm"):
+            z.wet = min(1.0, z.wet + (0.02 if weather == "rain" else 0.04) * dt)
+        elif not inside and weather == "snow":
+            z.wet = min(1.0, z.wet + 0.006 * dt)
+        else:
+            dry = 0.03 if near_fire else 0.008 if (self.phase == "day" and weather == "clear" and not inside) \
+                else 0.004 if inside else 0.002
+            z.wet = max(0.0, z.wet - dry * dt)
+        # needs
+        if z.sleeping:
+            n["rest"] += (0.22 if z.in_bed else 0.15) * dt
+            n["energy"] -= 0.010 * dt
+            n["water"] -= 0.012 * dt
+        else:
+            n["rest"] -= 0.05 * dt
+            n["energy"] -= 0.02 * dt
+            n["water"] -= 0.03 * dt
+        felt = self.air_temp(z.x, z.y) - 6.0 * z.wet + (8.0 if z.sleeping and z.in_bed else 0.0)
+        target = max(0.0, min(100.0, 50.0 + (felt - 10.0) * 4.5))
+        n["warmth"] += (target - n["warmth"]) * min(1.0, dt / 90.0)
+        for k in NEEDS:
+            n[k] = max(0.0, min(100.0, n[k]))
+        # health
+        dmg = (0.06 if n["energy"] <= 0.5 else 0.0) + (0.09 if n["water"] <= 0.5 else 0.0) + \
+            (0.12 * (1.0 - n["warmth"] / 10.0) if n["warmth"] < 10 else 0.0)
+        if dmg:
+            n["health"] = max(0.0, n["health"] - dmg * dt)
+        elif n["energy"] > 25 and n["water"] > 25 and n["warmth"] > 25:
+            n["health"] = min(100.0, n["health"] + (0.05 if z.sleeping else 0.02) * dt)
+        if n["health"] <= 0:
+            self._faint()
+            return
+        # sleep and waking
+        if z.sleeping:
+            day = self.phase == "day"
+            morning = day and self.phase_t < 60
+            if (day and n["rest"] >= 98) or (morning and n["rest"] >= 60) or (dmg and n["rest"] > 25):
+                z.sleeping = False
+                z.in_bed = False
+                z.activity = ""
+                why = "" if not dmg else " I am " + and_list(self.feelings()[:2]) + "." if self.feelings() else ""
+                self.note("I wake up." + why, "wake")
+        elif n["rest"] <= 0:
+            self._fall_asleep(voluntary=False)
+
+    def _near_fire(self, x: int, y: int) -> bool:
+        for fid in self.fires:
+            e = self.ents.get(fid)
+            if e and e.get("lit") and max(abs(e["x"] - x), abs(e["y"] - y)) <= (4 if e["kind"] == "fireplace" else 2):
+                return True
+        return False
+
+    def _fall_asleep(self, voluntary: bool):
+        z = self.zen
+        z.sleeping = True
+        z.voluntary = voluntary
+        z.in_bed = any(e["kind"] == "bed" for e in self.at(z.x, z.y))
+        z.activity = "sleeping"
+        if not voluntary:
+            self.note("I am so tired that I fall asleep" + (" in my bed." if z.in_bed else " on the ground."), "sleep")
+
+    def _hurt(self, points: float, text: str, why: str):
+        n = self.zen.needs
+        lost = min(points, n["health"])
+        wb0 = self.wellbeing()
+        n["health"] -= lost
+        self._passive += WB_GAIN * (self.wellbeing() - wb0) - 0.2 * lost
+        self.note(text, "hurt", why=why)
+        if n["health"] <= 0:
+            self._faint()
+
+    def _faint(self):
+        z, n = self.zen, self.zen.needs
+        wb0 = self.wellbeing()
+        for e in z.hands:
+            if self.terrain.water(z.x, z.y) == WATER_DEEP:
+                self.destroy(e)
+            else:
+                self.place(e, z.x, z.y)
+                self.touch(e)
+        z.hands = []
+        z.x, z.y, z.facing = -3, 1, 1
+        z.fx, z.fy = float(z.x), float(z.y)
+        n["health"] = 35.0
+        n["energy"] = max(n["energy"], 35.0)
+        n["water"] = max(n["water"], 35.0)
+        n["rest"] = max(n["rest"], 50.0)
+        n["warmth"] = 70.0
+        z.wet = 0.0
+        z.sleeping = False
+        z.in_bed = False
+        z.activity = ""
+        self.faints += 1
+        self._passive -= 1.0 + WB_GAIN * (self.wellbeing() - wb0)      # waking up restored is no gift
+        self.sprite.fx, self.sprite.fy = float(z.x + 1), float(z.y)
+        self._ensure_area()
+        self.note("Everything goes dark and I faint. I wake up in my bed at home.", "faint")
+
+    def wellbeing(self) -> float:
+        n = self.zen.needs
+        return (_utility(n["energy"]) + _utility(n["water"]) + _utility(n["rest"]) + _utility(n["warmth"]) +
+                2 * _utility(n["health"])) / 6.0
+
+    def feelings(self) -> list[str]:
+        n, out = self.zen.needs, []
+        for need, low, word in (("energy", 40, "hungry"), ("water", 40, "thirsty"), ("rest", 30, "tired"),
+                                ("warmth", 35, "cold"), ("health", 50, "hurt")):
+            if n[need] < low:
+                out.append(("very " if n[need] < low * 0.4 else "") + word)
+        if self.zen.wet > 0.5:
+            out.append("wet")
+        if n["warmth"] > 97 and self.air_temp(self.zen.x, self.zen.y) > 30:
+            out.append("hot")
+        return out
+
+    # ================================================================== the Sprite and you
+    def _move_sprite(self, dt: float):
+        z, s = self.zen, self.sprite
+        fx, fy = DIRS[z.facing]
+        lx, ly = fy, -fx
+        tx, ty = z.x + lx - fx, z.y + ly - fy
+        if max(abs(s.fx - z.x), abs(s.fy - z.y)) > 4:
+            s.fx, s.fy = float(tx), float(ty)
+        k = min(1.0, dt * 2.0)
+        s.fx += (tx - s.fx) * k
+        s.fy += (ty - s.fy) * k
+        s.x, s.y = int(round(s.fx)), int(round(s.fy))
+
+    def sprite_say(self, text: str):
+        self.sprite.said = (text or "")[:400]
+        self.sprite.said_t = self.t
+
+    def sprite_state(self, state: str):
+        if state in ("idle", "listening", "answering"):
+            self.sprite.state = state
+
+    def visitor_join(self) -> Body:
+        if not self.visitor:
+            z = self.zen
+            spot = (z.x, z.y + 1)
+            for r in range(1, 10):
+                ring = [(z.x + dx, z.y + dy) for dx in range(-r, r + 1) for dy in range(-r, r + 1)
+                        if max(abs(dx), abs(dy)) == r]
+                ok = [p for p in ring if self.walkable(*p)]
+                if ok:
+                    spot = ok[0]
+                    break
+            self.visitor = Body(x=spot[0], y=spot[1], fx=float(spot[0]), fy=float(spot[1]), facing=0, hands=[],
+                                said="", said_t=-1e9)
+            self._ensure_area()
+            self.note("My friend comes to visit.", "visitor")
+        return self.visitor
+
+    def visitor_leave(self):
+        v = self.visitor
+        if v:
+            for e in v.hands:
+                self.place(e, v.x, v.y)
+                self.touch(e)
+            self.visitor = None
+            self._area_key = None
+            self._ensure_area()
+            self.note("My friend leaves.", "visitor")
+
+    def visitor_move(self, x: float, y: float, facing=None):
+        v = self.visitor or self.visitor_join()
+        tx, ty = int(round(x)), int(round(y))
+        if (tx, ty) == (v.x, v.y) or self.walkable(tx, ty):
+            v.fx, v.fy, v.x, v.y = float(x), float(y), tx, ty
+        if isinstance(facing, str) and facing in DIR_NAMES:
+            facing = DIR_NAMES.index(facing)
+        if isinstance(facing, (int, float)):
+            v.facing = int(facing) % 4
+        self._ensure_area()
+
+    def visitor_say(self, text: str) -> bool:
+        """You say something. Returns True if Zen is close enough (8 tiles) to hear it."""
+        v = self.visitor or self.visitor_join()
+        v.said, v.said_t = (text or "")[:400], self.t
+        heard = max(abs(v.x - self.zen.x), abs(v.y - self.zen.y)) <= 8
+        if heard:
+            self.note(f'My friend says: "{v.said}"', "visitor_said", said=v.said)
+        return heard
+
+    def visitor_give(self) -> dict | None:
+        """Give your last held thing to Zen if you are next to it."""
+        v, z = self.visitor, self.zen
+        if not v or not v.hands or max(abs(v.x - z.x), abs(v.y - z.y)) > 1:
+            return None
+        e = v.hands.pop()
+        self.touch(e)
+        if len(z.hands) < MAX_HANDS and not z.sleeping:
+            z.hands.append(e)
+            self.note(f"My friend gives me {self.ent_noun(e)}.", "gift", kind=e["kind"])
+        else:
+            self.place(e, z.x, z.y)
+            self.note(f"My friend puts {self.ent_noun(e)} down by me.", "gift", kind=e["kind"])
+        return e
+
+    def visitor_take(self, entity_id: int) -> dict | None:
+        v = self.visitor
+        e = self.ents.get(entity_id)
+        if not v or not e or len(v.hands) >= 6 or not KINDS.get(e["kind"], {}).get("portable"):
+            return None
+        if max(abs(e["x"] - v.x), abs(e["y"] - v.y)) > 2:
+            return None
+        self.unplace(e)
+        self.touch(e)
+        v.hands.append(e)
+        return e
+
+    def visitor_place(self, kind: str, x: int | None = None, y: int | None = None) -> dict | None:
+        """Place a new thing (from ``PLACEABLE``) on a free tile near where you say."""
+        if kind not in PLACEABLE:
+            return None
+        v = self.visitor
+        x = int(round(x if x is not None else (v.x if v else self.zen.x)))
+        y = int(round(y if y is not None else (v.y if v else self.zen.y + 1)))
+        if (x, y) == (self.zen.x, self.zen.y) and kind == "campfire":
+            return None
+        if not self.walkable(x, y) or self.terrain.water(x, y):
+            return None
+        st = {"lit": False, "fuel": 0.0} if kind == "campfire" else {"water": 0} if kind in ("cup", "bucket") else \
+            {"book": self.rng.randrange(len(T.BOOKS))} if kind == "book" else \
+            {"lit": False, "fuel": 900.0} if kind == "lantern" else {}
+        e = self.make(kind, **st)
+        self.place(e, x, y)
+        self.note(f"My friend puts {self.ent_noun(e)} on the ground.", "placed", kind=kind)
+        return e
+
+    # ================================================================== hearing and the Sprite's answers
+    def heard(self, text: str) -> bool:
+        """Zen said something aloud. Returns True if you (the visitor) are near enough to hear it."""
+        z = self.zen
+        z.said, z.said_t = (text or "")[:400], self.t
+        self.log_line(f'I say: "{z.said}"')
+        v = self.visitor
+        return bool(v and max(abs(v.x - z.x), abs(v.y - z.y)) <= 8)
+
+    def answer_arrived(self):
+        self._bonus += 0.4
+
+    def reward_since_last(self) -> float:
+        r = self._passive + self._bonus
+        self._passive = self._bonus = 0.0
+        return round(r, 4)
+
+    # ================================================================== the studio and art
+    def set_studio(self, d: dict | None):
+        self.studio = d
+        self._studio_changed = True
+
+    def create(self, kind: str, author: str = "Zen", data: dict | None = None, title: str = "") -> dict:
+        c = {"id": self.next_cid, "kind": kind, "author": author, "title": title or kind.capitalize(),
+             "day": self.day, "season": self.season, "t": round(self.t, 1), "data": data or {}, "loves": 0,
+             "x": self.zen.x, "y": self.zen.y}
+        self.next_cid += 1
+        self.creations.append(c)
+        self.new_creations.append(c)
+        medium = {"paint": "painting", "compose": "music", "sculpt": "sculpture", "write": "poem"}.get(kind, kind)
+        if medium in self.practice:
+            from .art import grow
+            self.practice[medium] = grow(self.practice[medium], "work")
+        self.note(f"I finish {('a ' + kind) if kind not in ('music',) else 'a tune'}: {c['title']}.", "create",
+                  id=c["id"])
+        return c
+
+    def love(self, creation_id: int) -> dict | None:
+        c = next((c for c in self.creations if c["id"] == creation_id), None)
         if c:
-            c.update({k: v for k, v in fields.items() if v})
+            c["loves"] = c.get("loves", 0) + 1
             self.new_creations.append(c)
         return c
 
-    # ================================================================== the synth's own state
-    @property
-    def needs(self) -> dict:
-        return self.ada.needs
+    def skills(self) -> dict:
+        from .art import effective_skill
+        return {m: effective_skill(self.practice.get(m, 0.0), "synth", self.zen_stage) for m in MEDIA}
 
-    def describe(self, b: Being) -> str:
-        if b is self.visitor:
-            return "my friend"
-        return b.name
+    # ================================================================== log
+    def log_line(self, text: str):
+        self.log.append(text)
+        del self.log[:-40]
+
+    def note(self, text: str, ev: str = "note", /, **data):
+        self.log_line(text)
+        self.events.append(dict(data, kind=ev, text=text, t=round(self.t, 2), day=self.day))
+        del self.events[:-80]
+
+    def take_events(self) -> list[dict]:
+        out, self.events = self.events, []
+        return out
 
     # ================================================================== senses
-    def _rel(self, x, y, me: Being | None = None) -> str:
-        a = me or self.ada
-        dx, dy = x - a.x, y - a.y
-        if dx == 0 and dy == 0:
-            return "here"
-        if abs(dx) + abs(dy) == 1:
-            return "right next to me"
-        parts = []
-        if dy:
-            parts.append(f"{abs(dy)} {'north' if dy < 0 else 'south'}")
-        if dx:
-            parts.append(f"{abs(dx)} {'west' if dx < 0 else 'east'}")
-        return " and ".join(parts)
+    def _frame(self):
+        z = self.zen
+        fx, fy = DIRS[z.facing]
+        rx, ry = -fy, fx
+        return fx, fy, rx, ry
 
-    def feelings(self, me: Being | None = None) -> list[str]:
-        b = me or self.ada
-        n = b.needs
+    def ahead(self, n: int = 1) -> tuple[int, int]:
+        fx, fy = DIRS[self.zen.facing]
+        return self.zen.x + fx * n, self.zen.y + fy * n
+
+    def _sight(self):
+        """What Zen can see: (candidates for naming, kinds seen)."""
+        z = self.zen
+        R = self.sight_radius()
+        fx, fy, rx, ry = self._frame()
+        inside = self.terrain.feature(z.x, z.y) in SHELTER
+        near = {(z.x + fx, z.y + fy), (z.x - rx, z.y - ry), (z.x + rx, z.y + ry), (z.x, z.y)}
+        best: dict[str, tuple] = {}
+        kinds: set[str] = set()
+        ter = self.terrain
+        indoorish = SHELTER | {F["wall"], F["door"], F["cave_wall"]}
+        for dy in range(-R, R + 1):
+            y = z.y + dy
+            for dx in range(-R, R + 1):
+                if dx * dx + dy * dy > R * R + R:
+                    continue
+                x = z.x + dx
+                b, w, f = ter.tile(x, y)
+                if inside and f not in indoorish:
+                    continue
+                if not inside and f in SHELTER:
+                    continue
+                d = abs(dx) + abs(dy)
+                named = (x, y) not in near
+                cands = []
+                kinds.add(BIOME_KIND[BIOMES[b]] if not w or b in (0, 1) else "lake")
+                if w == WATER_RIVER:
+                    kinds.add("river")
+                    cands.append(("a stream", 2.0))
+                elif w and not self._frozen(x, y):
+                    cands.append(("the sea" if BIOMES[b] == "ocean" else "water", 2.0))
+                if f:
+                    fk = FEATURE_KIND[FEATURES[f]]
+                    kinds.add(fk)
+                    if _FRUIT_WITH.get(fk) and self.has_fruit(x, y, f):
+                        cands.append((f"{noun_of(fk)} with {_FRUIT_WITH[fk]}", 3.0))
+                    elif fk == "flowers" and self.has_fruit(x, y, f) and d <= 3:
+                        cands.append(("flowers", 1.2))
+                    elif fk in ("standing stone", "well", "cairn", "spring", "door", "apple tree", "cave floor"):
+                        cands.append(("a cave" if fk == "cave floor" else noun_of(fk), 1.6))
+                    elif fk in ("berry bush", "cactus", "palm", "boulder", "stone wall", "stump"):
+                        cands.append((noun_of(fk), 1.0))
+                ids = self.tidx.get((x, y))
+                if ids:
+                    for i in ids:
+                        e = self.ents[i]
+                        kinds.add(e["kind"])
+                        k = KINDS.get(e["kind"], {})
+                        s = 3.0 if (k.get("food") or k.get("drink")) and k.get("portable") else \
+                            2.2 if k.get("portable") else 1.5
+                        cands.append((self.ent_noun(e), s))
+                a = self.animal_at.get((x, y))
+                if a is not None and a in self.animals:
+                    an = self.animals[a]
+                    kinds.add(an["kind"])
+                    cands.append((("a sleeping " + an["kind"]) if an["state"] == "sleep" and an["kind"] != "fish"
+                                  else noun_of(an["kind"]), 3.5))
+                if not named:
+                    continue
+                for phrase, s in cands:
+                    key = phrase
+                    cur = best.get(key)
+                    if cur is None or (d, y, x) < (cur[1], cur[3], cur[2]):
+                        best[key] = (s, d, x, y)
         out = []
-        for need, low, word in (("energy", 35, "hungry"), ("water", 35, "thirsty"), ("rest", 25, "tired"),
-                                ("warmth", 35, "cold"), ("company", 30, "lonely"), ("fun", 30, "bored"),
-                                ("clean", 25, "dirty")):
-            if n[need] < low:
-                out.append(("very " if n[need] < low / 2 else "") + word)
-        if b.wet > 0.4:
-            out.append("wet")
-        if not out and min(n.values()) > 70:
-            out.append("happy")
-        return out
+        for phrase, (s, d, x, y) in best.items():
+            ddx, ddy = x - z.x, y - z.y
+            out.append((-s, d, y, x, phrase, ddx * fx + ddy * fy, ddx * rx + ddy * ry))
+        out.sort()
+        return out, kinds
 
-    def describe_thing(self, e: dict) -> str:
-        """'a hot cup of tea', 'the stove (lit)', 'a wet log', 'a ripe carrot plant'."""
-        k = kind_of(e)
-        noun = k.get("noun", e["kind"])
-        if e["kind"] == "plant":
-            st = int(e.get("stage", 0))
-            if st >= 4:
-                return f"a ripe {e['crop']} plant" if e["crop"] not in ("beans", "wheat") else f"ripe {e['crop']}"
-            base = f"{e['crop']} {'seedling' if st <= 1 else 'plant'}"
-            return ("a thirsty " if e.get("thirsty") else "a ") + base
-        if e["kind"] == "cat":
-            return f"Moss the cat ({e.get('state', 'awake')})"
-        words = []
-        if e.get("temp") is not None and k.get("thermal"):
-            t = e["temp"]
-            if t >= 70:
-                words.append("hot")
-            elif t >= 35:
-                words.append("warm")
-            elif t <= 3:
-                words.append("cold")
-        if e.get("wet", 0) > 0.35:
-            words.append("wet")
-        if k.get("fresh") and e.get("fresh", 1e9) < k["fresh"] * 0.25:
-            words.append("old" if k["is_a"] != "plant" else "wilted")
-        if words and noun.split(" ", 1)[0] in ("a", "an", "some", "the"):
-            art, rest = noun.split(" ", 1)
-            art = "a" if art == "an" else art
-            noun = f"{art} {' '.join(words)} {rest}"
-            if art == "a" and words[0][0] in "aeiou":
-                noun = "an" + noun[1:]
-        if e.get("lit"):
-            noun += " that is burning" if e["kind"] in ("fireplace", "stove", "candle") else " that is lit"
-        if e.get("fruit"):
-            fruit = KINDS[k["fruit"]]["noun"].split(" ", 1)[-1]
-            noun += f" with {e['fruit']} {fruit}{'s' if e['fruit'] > 1 and not fruit.endswith('s') else ''}"
-        if e["kind"] in ("pot", "kettle", "bucket", "watering can", "water barrel") and e.get("water", 0) > 0.05:
-            noun += " of water" if e["kind"] not in ("water barrel",) else " full of rainwater"
-        if e.get("steam"):
-            noun += ", steaming"
-        if e.get("items") and e["kind"] in ("pot", "oven", "basket", "cat bowl", "nest box", "bird feeder"):
-            noun += " with " + _and([KINDS[i["kind"]]["noun"] for i in e["items"]][:4]) + " in it"
-        return noun
+    def _header(self) -> str:
+        z = self.zen
+        p = self.place_at(z.x, z.y)
+        if p and p["kind"] == "home" and self.terrain.feature(z.x, z.y) != F["floor"]:
+            p = None
+        if p and p["kind"] in ("ruins", "cabin", "cave", "stones", "lookout", "home"):
+            where = cap(p["name"])
+        else:
+            b, w, f = self.terrain.tile(z.x, z.y)
+            where = cap(BIOME_KIND[BIOMES[b]]) if not (w and BIOMES[b] in ("lake", "ocean")) else \
+                ("The sea" if BIOMES[b] == "ocean" else "Lake")
+            if f == F["cave_floor"]:
+                where = "A cave"
+        return f"{where}, {self.time_of_day()}, {temp_word(self.air_temp(z.x, z.y))}, {self.weather}."
 
-    def perceive(self, day_seconds: float | None = None, radius: int = 6, me: Being | None = None) -> str:
-        """Everything a mind senses, in its own words (the synth's by default)."""
-        a = me or self.ada
-        place = self.place_of(a.x, a.y)
-        dark = self.dark(a.x, a.y)
-        temp = self.temperature_at(a.x, a.y)
-        feel = "cold" if temp < 8 else "cool" if temp < 15 else "warm" if temp < 26 else "hot"
-        s = [f"It is {self.time_of_day(day_seconds)} on day {self.day}, in {self.season}. "
-             f"{'Outside the' if self.indoors(a.x, a.y) else 'The'} weather is {self.weather}. "
-             f"I am {where(place)}. It is {feel} here."]
-        if dark:
-            s.append("It is dark. I can't see much.")
-            radius = 2
-        f = self.feelings(a)
-        s.append("I feel " + " and ".join(f) + "." if f else "I feel fine.")
-        if a.carrying:
-            s.append("I carry " + _and([self.describe_thing(e) for e in a.carrying]) + ".")
+    def perceive(self, *_ignored) -> str:
+        """What Zen senses now, in ≤ ~45 words: egocentric and deterministic."""
+        z = self.zen
+        if z.sleeping:
+            return "I am asleep."
+        fx, fy, rx, ry = self._frame()
+        parts = [self._header()]
+        if self.sight_radius() <= 1:
+            parts.append("It is dark.")
+        parts.append(f"Ahead: {self.tile_word(z.x + fx, z.y + fy)}. Left: {self.tile_word(z.x - rx, z.y - ry)}. "
+                     f"Right: {self.tile_word(z.x + rx, z.y + ry)}. Here: {self._here_word()}.")
+        cands, _ = self._sight()
+        seen = [f"{c[4]} {rel_phrase(c[5], c[6])}" for c in cands[:3]]
+        tail = []
+        if z.hands:
+            tail.append("I hold " + count_list([self.ent_noun(e) for e in z.hands]) + ".")
+        f = self.feelings()
+        if f:
+            tail.append("I am " + and_list(f) + ".")
+        while True:
+            text = " ".join(parts + (["I see " + and_list(seen) + "."] if seen else []) + tail)
+            if len(seen) <= 1 or len(text.split()) <= 45:
+                return text
+            seen.pop()
+
+    def _here_word(self) -> str:
+        z = self.zen
+        ents = self.at(z.x, z.y)
+        b, w, f = self.terrain.tile(z.x, z.y)
+        if ents:
+            return count_list([self.ent_noun(e) for e in ents[-3:]])
+        if f == F["floor"]:
+            return "the floor"
+        return self.tile_word(z.x, z.y)
+
+    def look(self) -> str:
+        """A fuller description (≤ ~120 words): where I am, what is around and what things are."""
+        z = self.zen
+        fx, fy, rx, ry = self._frame()
+        b, w, f = self.terrain.tile(z.x, z.y)
+        p = self.place_at(z.x, z.y)
+        bk = BIOME_KIND[BIOMES[b]]
+        prep = "on" if bk in ("beach", "mountain", "snowfield", "rocky land", "tundra") else "in"
+        if p and p["kind"] != "home":
+            where = f"I am {'in' if p['kind'] in ('ruins', 'cabin', 'cave') else 'on' if p['kind'] == 'lookout' else 'at'} " \
+                    f"{p['name']}"
+        elif p and f == F["floor"]:
+            where = "I am in my cabin"
+        elif w:
+            where = "I am in " + ("the sea" if bk == "sea" else "a stream" if w == WATER_RIVER else "the water")
+        else:
+            where = ("I am near my cabin, " if p else "I am ") + f"{prep} {noun_of(bk)}"
+        temp = self.air_temp(z.x, z.y)
+        out = [f"{where}. It is {self.time_of_day()} on day {self.day}, in {self.season}. "
+               f"The weather is {self.weather} and the air is {temp_word(temp)}."]
+        if self.sight_radius() <= 1:
+            out.append("It is dark; I can see only what is next to me.")
+        out.append(f"Ahead is {self.tile_word(z.x + fx, z.y + fy)}, left {self.tile_word(z.x - rx, z.y - ry)}, "
+                   f"right {self.tile_word(z.x + rx, z.y + ry)}, behind {self.tile_word(z.x - fx, z.y - fy)}.")
+        cands, _ = self._sight()
         seen = []
-        b_here = self.building_of(a.x, a.y)
-        for e in sorted(self.entities.values(), key=lambda e: abs(e["x"] - a.x) + abs(e["y"] - a.y)):
-            d = abs(e["x"] - a.x) + abs(e["y"] - a.y)
-            if d > radius or len(seen) >= 5:
-                break
-            if self.building_of(e["x"], e["y"]) != b_here and d > 1:
-                continue                                   # walls hide what is on the other side
-            if e["kind"] in ("rug", "window", "clock"):
-                continue
-            seen.append(f"{self.describe_thing(e)} {self._rel(e['x'], e['y'], a)}")
+        for c in cands[:5]:
+            phrase = c[4]
+            kind = self._kind_of_phrase(phrase)
+            gloss = ""
+            if kind:
+                k = KINDS[kind]
+                ia = k["is_a"]
+                gloss = f" ({ia if ia in _MASS else ('an ' if ia[0] in 'aeiou' else 'a ') + ia}"
+                if k.get("can"):
+                    gloss += f" that can {k['can']}"
+                elif k.get("used_for") and k["used_for"] not in ("nothing", "nothing much", "nothing now"):
+                    gloss += f", for {k['used_for']}"
+                gloss += ")"
+            seen.append(f"{phrase} {rel_phrase(c[5], c[6])}{gloss}")
         if seen:
-            s.append("I see " + "; ".join(seen) + ".")
-        for b in self.beings():
-            if b is a:
-                continue
-            d = abs(b.x - a.x) + abs(b.y - a.y)
-            if d <= radius and (self.building_of(b.x, b.y) == b_here or d <= 2):
-                doing = f", {b.activity}" if b.activity else (", asleep" if b.sleeping else "")
-                s.append(f"{_cap(self.describe(b))} is {self._rel(b.x, b.y, a)}{doing}.")
-        heard = self.hearing(a)
-        if heard:
-            s.append("I hear " + _and(heard) + ".")
-        if self.rainbow_until > time.time() and not self.indoors(a.x, a.y):
-            s.append("There is a rainbow in the sky.")
-        now = time.time()
-        for t, who, words in self.heard[-2:] if a is self.ada else []:
-            if now - t < 30:
-                s.append(f'{_cap(who)} said: "{words}"')
-        return " ".join(s)
-
-    def hearing(self, a: Being) -> list[str]:
-        out = []
-        b_here = self.building_of(a.x, a.y)
-        for what, x, y, far in self.sounds:
-            d = abs(x - a.x) + abs(y - a.y)
-            if d <= far and (self.building_of(x, y) == b_here or d <= far // 2) and what not in out:
-                out.append(what)
-        if self.raining() and self.weather != "snow" and b_here:
-            out.append("rain on the roof")
-        if self.weather == "storm" and self.rng.random() < 0.3:
-            out.append("thunder")
-        for b in self.beings():
-            if b is not a and b.activity.startswith("playing the piano") and abs(b.x - a.x) + abs(b.y - a.y) <= 12:
-                out.append("piano music")
-        return out[:4]
-
-    def hear(self, who: str, words: str):
-        self.heard.append((time.time(), who, words[:200]))
-        del self.heard[:-6]
-
-    # ================================================================== needs
-    def update_needs(self, dt: float):
-        for b in (self.ada, self.wren):
-            self._needs(b, dt)
-
-    def _needs(self, a: Being, dt: float):
-        n = a.needs
-        k = dt / 0.25 * a.rates
-        n["energy"] -= (0.008 if a.sleeping else 0.022) * k
-        n["water"] -= (0.008 if a.sleeping else 0.026) * k
-        n["rest"] += (0.5 if a.sleeping else -0.015) * k
-        warm = self.temperature_at(a.x, a.y) - a.wet * 8
-        if a.sleeping and self.terrain[a.y][a.x] == FLOOR:
-            warm += 6                                      # tucked in under a blanket
-        n["warmth"] += (0.25 if warm >= 16 else -0.1 * (16 - warm) / 10) * k
-        other = self.wren if a is self.ada else self.ada
-        together = abs(other.x - a.x) + abs(other.y - a.y) <= 4 and not other.sleeping
-        n["company"] += (0.05 if together else -0.02 if not a.sleeping else 0.0) * k
-        if a.engaged is not None:
-            n["company"] += 0.12 * k
-        n["fun"] -= (0.0 if a.sleeping else 0.02) * k
-        n["clean"] -= 0.006 * k
-        for key in n:
-            n[key] = max(0.0, min(100.0, n[key]))
-
-    def wellbeing(self, me: Being | None = None) -> float:
-        n = (me or self.ada).needs
-        return sum(min(v, 80) for v in n.values()) / (80 * len(n))
-
-    # ================================================================== you
-    def join(self) -> Being:
-        if not self.visitor:
-            a = self.ada
-            for r in range(1, 12):
-                spots = [(a.x + dx, a.y + dy) for dx in range(-r, r + 1) for dy in range(-r, r + 1)
-                         if abs(dx) + abs(dy) == r]
-                spots = [s for s in spots if self.walkable(*s) and not self.occupied(*s)]
-                if spots:
-                    self.visitor = Being("you", *spots[0], role="visitor")
-                    self.visitor.fx, self.visitor.fy = float(spots[0][0]), float(spots[0][1])
+            out.append("I see " + and_list(seen) + ".")
+        far = []
+        if self.daylight() >= 0.3 and self.terrain.feature(z.x, z.y) not in SHELTER:
+            for poi in sorted(self._pois_near(z.x, z.y, 32), key=lambda q: (abs(q["x"] - z.x) + abs(q["y"] - z.y),
+                                                                               q["name"])):
+                if poi["kind"] == "home" and max(abs(z.x), abs(z.y)) < 8:
+                    continue
+                ddx, ddy = poi["x"] - z.x, poi["y"] - z.y
+                far.append(f"{poi['name']} {rel_phrase(ddx * fx + ddy * fy, ddx * rx + ddy * ry)}")
+                self._look_bonus += self._know_place(poi, visit=False)
+                if len(far) == 2:
                     break
-            self.event("visitor", "My friend comes to visit!")
-        return self.visitor
+        if far:
+            out.append("Further off: " + and_list(far) + ".")
+        if z.hands:
+            out.append("I hold " + count_list([self.ent_noun(e) for e in z.hands]) + ".")
+        fl = self.feelings()
+        out.append(("I feel " + and_list(fl) + ".") if fl else "I feel well.")
+        return " ".join(out)
 
-    def move_visitor(self, fx: float, fy: float, facing: str | None = None):
-        """You walk freely; your tile is the nearest walkable one to where you are."""
-        v = self.visitor
-        if not v:
-            return
-        fx, fy = max(-0.49, min(W - 0.51, fx)), max(-0.49, min(H - 0.51, fy))
-        tx, ty = int(round(fx)), int(round(fy))
-        if self.walkable(tx, ty):
-            v.fx, v.fy, v.x, v.y = fx, fy, tx, ty
-        if facing in DIRS:
-            v.facing = facing
-
-    def leave(self):
-        v = self.visitor
-        if v:
-            for e in v.carrying:
-                self.put(e, v.x, v.y)
-            self.event("visitor", "My friend waves goodbye and leaves.")
-        self.visitor = None
-
-    # ================================================================== serialisation
-    def kinds_table(self) -> dict:
-        out = {}
+    def _kind_of_phrase(self, phrase: str) -> str | None:
+        p = phrase.replace("a sleeping ", "").split(" with ")[0]
+        p = {"water": "lake", "a stream": "river", "the sea": "sea", "a cave": "cave", "my bed": "bed",
+             "an open chest": "chest", "a burning campfire": "campfire", "a cold campfire": "campfire",
+             "a lit lantern": "lantern"}.get(p, p)
         for k, v in KINDS.items():
-            out[k] = {"glyph": v["glyph"], "color": v.get("hex", "#cccccc"), "noun": v["noun"],
-                      "size": "creature" if v.get("creature") else ("small" if v.get("portable") else "big")}
-            if v.get("fruit"):
-                out[k]["fruit"] = KINDS[v["fruit"]]["glyph"]
-            if v.get("light"):
-                out[k]["light"] = v["light"]
+            if v["noun"] == p or k == p:
+                return k
+        if p.startswith(("a bucket", "a cup")):
+            return p.split()[1]
+        return None
+
+    # ================================================================== novelty
+    def _mark_visit(self) -> tuple[bool, bool]:
+        z = self.zen
+        key = (z.x >> 5, z.y >> 5)
+        bit = 1 << (((z.y & 31) << 5) | (z.x & 31))
+        m = self.visited.get(key)
+        new_chunk = m is None
+        m = m or 0
+        new_tile = not (m & bit)
+        self.visited[key] = m | bit
+        for cx in ((z.x - 8) >> 5, (z.x + 8) >> 5):
+            for cy in ((z.y - 8) >> 5, (z.y + 8) >> 5):
+                self.explored.add((cx, cy))
+        last = self.trail[-1]
+        if abs(last[0] - z.x) + abs(last[1] - z.y) >= 3:
+            self.trail.append([z.x, z.y])
+            del self.trail[:-4000]
+        return new_tile, new_chunk
+
+    def _notice(self) -> tuple[float, list, list]:
+        """Novelty after an action: new tiles, chunks, kinds of thing and named places."""
+        r, events, texts = 0.0, [], []
+        new_tile, new_chunk = self._mark_visit()
+        if new_tile:
+            r += 0.01
+        if new_chunk:
+            r += 0.1
+            events.append({"kind": "new_chunk"})
+        _, kinds = self._sight()
+        for k in sorted(kinds - self.seen):
+            self.seen.add(k)
+            r += 0.25
+            events.append({"kind": "new_kind", "what": k})
+        p = self.place_at(self.zen.x, self.zen.y)
+        if p is None:
+            for q in self._pois_near(self.zen.x, self.zen.y, 7):
+                if not self.places.get(q["name"], {}).get("visited"):
+                    p = q
+                    break
+        if p:
+            gain = self._know_place(p)
+            if gain:
+                r += gain
+                texts.append(f"I find {p['name']}.")
+                events.append({"kind": "new_place", "name": p["name"]})
+        return r, events, texts
+
+    # ================================================================== actions
+    def act(self, word: str, context_text: str | None = None) -> dict:
+        """Carry out one motor word. Returns {ok, text, reward, events[, needs_words]}."""
+        z = self.zen
+        if word not in MOTOR:
+            return {"ok": False, "text": "I don't know how to do that.", "reward": -0.01, "events": []}
+        if z.sleeping:
+            return {"ok": False, "text": "I am asleep.", "reward": 0.0, "events": []}
+        self.context_text = context_text or ""
+        wb0 = self.wellbeing()
+        h0 = z.needs["health"]
+        res = getattr(self, "_do_" + word)()
+        ok, text = res[0], res[1]
+        extra = res[2] if len(res) > 2 else {}
+        pain = 0.0
+        if not ok:
+            pain = -0.02 if extra.pop("blocked", False) else -0.01
+        events = extra.pop("events", [])
+        bonus = extra.pop("bonus", 0.0)
+        lost = max(0.0, h0 - z.needs["health"])
+        reward = WB_GAIN * (self.wellbeing() - wb0) + pain - 0.2 * lost + bonus
+        if ok:
+            what = extra.pop("what", None)
+            if word not in self.firsts:
+                self.firsts.add(word)
+                reward += 0.3
+                events.append({"kind": "first", "what": word})
+            if what and f"{word}:{what}" not in self.firsts:
+                self.firsts.add(f"{word}:{what}")
+                reward += 0.1
+        else:
+            extra.pop("what", None)
+        self._ensure_area()
+        nov, ev2, texts = self._notice()
+        reward += nov
+        events += ev2
+        if texts:
+            text = (text + " " + " ".join(texts)).strip()
+        reward = max(-1.0, min(1.0, reward))
+        self.last_action = word
+        self.steps += 1
+        self.reward_rate += (reward - self.reward_rate) * 0.02
+        out = {"ok": ok, "text": text, "reward": round(reward, 4), "events": events}
+        out.update(extra)
         return out
 
+    def _activity(self, s: str):
+        self.zen.activity, self.zen.activity_t = s, self.t
+
+    def _cost(self, energy: float, water: float, rest: float):
+        n = self.zen.needs
+        n["energy"] = max(0.0, n["energy"] - energy)
+        n["water"] = max(0.0, n["water"] - water)
+        n["rest"] = max(0.0, n["rest"] - rest)
+
+    # ---- moving
+    def _move(self, d: int, word: str):
+        z = self.zen
+        dx, dy = DIRS[d]
+        nx, ny = z.x + dx, z.y + dy
+        blk = self._blocker(nx, ny)
+        if blk:
+            return False, cap(blk) + " is in the way.", {"blocked": True}
+        b0, w0, f0 = self.terrain.tile(z.x, z.y)
+        b1, w1, f1 = self.terrain.tile(nx, ny)
+        z.x, z.y = nx, ny
+        self._cost(0.04, 0.03, 0.02)
+        self._activity("walking")
+        text = [f"I step {word}."]
+        if w1 and not w0 and not self._frozen(nx, ny):
+            text.append("I wade into the stream." if w1 == WATER_RIVER else "I wade into the water.")
+        elif w0 and not w1:
+            text.append("I step out of the water.")
+        if f1 in SHELTER and f0 not in SHELTER:
+            text.append("I go inside." if f1 == F["floor"] else "I go into the cave.")
+        elif f0 in SHELTER and f1 not in SHELTER:
+            text.append("I go outside.")
+        elif not w1 and b1 != b0 and BIOMES[b1] not in ("lake", "ocean") and f1 not in SHELTER:
+            text.append(f"I enter {the(noun_of(BIOME_KIND[BIOMES[b1]]))}.")
+        return True, " ".join(text)
+
+    def _do_forward(self):
+        return self._move(self.zen.facing, "forward")
+
+    def _do_back(self):
+        return self._move((self.zen.facing + 2) % 4, "back")
+
+    def _do_left(self):
+        self.zen.facing = (self.zen.facing + 3) % 4
+        return True, "I turn left."
+
+    def _do_right(self):
+        self.zen.facing = (self.zen.facing + 1) % 4
+        return True, "I turn right."
+
+    def _do_wait(self):
+        self._activity("")
+        return True, "I wait."
+
+    def _do_look(self):
+        self._activity("looking around")
+        self._look_bonus = 0.0
+        text = self.look()
+        return True, text, {"bonus": self._look_bonus}
+
+    def _do_speak(self):
+        self._activity("speaking")
+        return True, "", {"needs_words": "speak"}
+
+    def _do_ask(self):
+        self._activity("asking")
+        return True, "", {"needs_words": "ask"}
+
+    # ---- hands
+    def _take_from(self, e: dict, where: str) -> str:
+        z = self.zen
+        self.unplace(e)
+        self.touch(e)
+        z.hands.append(e)
+        return f"I take {the(self.ent_noun(e))}{where}."
+
+    def _do_take(self):
+        z = self.zen
+        if len(z.hands) >= MAX_HANDS:
+            return False, "My hands are full."
+        ax, ay = self.ahead()
+        for (x, y) in ((ax, ay), (z.x, z.y)):
+            ents = self.at(x, y)
+            furn = next((e for e in ents if e["kind"] in _FURNITURE), None)
+            loose = [e for e in ents if KINDS.get(e["kind"], {}).get("portable")]
+            if loose:
+                e = loose[-1]
+                where = f" from {the(self.ent_noun(furn))}" if furn and furn["kind"] != "bed" else ""
+                self._activity("taking")
+                return True, self._take_from(e, where), {"what": e["kind"]}
+            if furn:
+                r = self._take_furniture(furn)
+                if r:
+                    return r
+            if (x, y) == (ax, ay):
+                a = self.animal_at.get((x, y))
+                if a is not None and self.animals.get(a, {}).get("kind") == "fish":
+                    if self.rng.random() < 0.45:
+                        self._remove_animal(self.animals[a])
+                        e = self.make("raw fish")
+                        z.hands.append(e)
+                        self._cost(0.1, 0.05, 0.1)
+                        return True, "I grab at the water and catch a fish!", {"what": "raw fish"}
+                    return False, "The fish slips away."
+            f = self.terrain.feature(x, y)
+            fk = FEATURE_KIND.get(FEATURES[f]) if f else None
+            if fk and KINDS[fk].get("fruit") and self.has_fruit(x, y, f):
+                kind = KINDS[fk]["fruit"]
+                self.picked[(x, y)] = self.t
+                e = self.make(kind)
+                z.hands.append(e)
+                self._activity("picking")
+                if fk == "flowers":
+                    return True, "I pick a flower.", {"what": kind}
+                return True, f"I pick {noun_of(kind)} from {the(noun_of(fk))}.", {"what": kind}
+        return False, "There is nothing here to take."
+
+    def _take_furniture(self, e: dict):
+        z, k = self.zen, e["kind"]
+        if k in ("chest", "bookshelf"):
+            if k == "chest" and not e.get("open"):
+                return False, "The chest is closed."
+            if not e.get("items"):
+                return False, f"{cap(the(noun_of(k)))} is empty."
+            it = e["items"].pop()
+            self.touch(e)
+            self.touch(it)
+            z.hands.append(it)
+            return True, f"I take {the(self.ent_noun(it))} from {the(noun_of(k))}.", {"what": it["kind"]}
+        give = {"woodpile": ("count", "log"), "beehive": ("honey", "honey"), "nest": ("eggs", "egg"),
+                "easel": ("paper", "paper"), "desk": ("paper", "paper")}.get(k)
+        if not give:
+            return None
+        key, kind = give
+        if e.get(key, 0) <= 0:
+            return False, {"woodpile": "The woodpile is empty.", "beehive": "There is no honey in the hive.",
+                           "nest": "The nest is empty.", "easel": "There is no paper on the easel.",
+                           "desk": "There is no paper on the desk."}[k]
+        e[key] -= 1
+        self.touch(e)
+        it = self.make(kind)
+        z.hands.append(it)
+        text = f"I take {noun_of(kind)} from {the(noun_of(k))}."
+        if k == "beehive" and self.rng.random() < 0.5:
+            self._hurt(4, "A bee stings me!", "bee")
+            text += " A bee stings me!"
+        return True, text, {"what": kind}
+
+    def _do_drop(self):
+        z = self.zen
+        if not z.hands:
+            return False, "My hands are empty."
+        e = z.hands[-1]
+        ax, ay = self.ahead()
+        target = next((t for t in self.at(ax, ay) if t["kind"] in _FURNITURE), None)
+        k = e["kind"]
+        if target:
+            tk = target["kind"]
+            if tk == "chest" and target.get("open") and len(target.get("items", [])) < 8:
+                z.hands.pop()
+                target.setdefault("items", []).append(e)
+                self.touch(target)
+                return True, f"I put {the(self.ent_noun(e))} in the chest.", {"what": k}
+            if tk == "bookshelf" and k == "book":
+                z.hands.pop()
+                target.setdefault("items", []).append(e)
+                self.touch(target)
+                return True, "I put the book on the bookshelf.", {"what": k}
+            if tk in ("easel", "desk") and k == "paper":
+                z.hands.pop()
+                self.destroy(e)
+                target["paper"] = target.get("paper", 0) + 1
+                self.touch(target)
+                return True, f"I put the paper on {the(noun_of(tk))}.", {"what": k}
+            if tk == "woodpile" and k == "log":
+                z.hands.pop()
+                self.destroy(e)
+                target["count"] = target.get("count", 0) + 1
+                self.touch(target)
+                return True, "I put the log on the woodpile.", {"what": k}
+            if tk in ("fireplace", "campfire") and KINDS[k].get("fuel") and k != "lantern":
+                return self._fuel(target, e)
+        z.hands.pop()
+        w = self.terrain.water(z.x, z.y)
+        if w and not self._frozen(z.x, z.y):
+            if k == "raw fish":
+                self.destroy(e)
+                return True, "I drop the fish. It swims away.", {"what": k}
+            if w == WATER_RIVER:
+                self.destroy(e)
+                return True, f"I drop {the(self.ent_noun(e))}. The stream carries it away.", {"what": k}
+        self.place(e, z.x, z.y)
+        self.touch(e)
+        return True, f"I drop {the(self.ent_noun(e))}.", {"what": k}
+
+    # ---- eating and drinking
+    def _do_eat(self):
+        z, n = self.zen, self.zen.needs
+        target = None
+        for e in reversed(z.hands):
+            if KINDS.get(e["kind"], {}).get("food") is not None:
+                target = ("held", e)
+                break
+        ax, ay = self.ahead()
+        if not target:
+            for (x, y) in ((ax, ay), (z.x, z.y)):
+                for e in reversed(self.at(x, y)):
+                    if KINDS.get(e["kind"], {}).get("food") is not None:
+                        target = ("ground", e)
+                        break
+                if target:
+                    break
+        if not target:
+            for (x, y) in ((ax, ay), (z.x, z.y)):
+                f = self.terrain.feature(x, y)
+                fk = FEATURE_KIND.get(FEATURES[f]) if f else None
+                if fk and KINDS[fk].get("fruit") and KINDS[KINDS[fk]["fruit"]].get("food") and \
+                        self.has_fruit(x, y, f):
+                    target = ("plant", (x, y, fk))
+                    break
+        if not target:
+            if z.hands:
+                return False, f"I can't eat {the(self.ent_noun(z.hands[-1]))}."
+            return False, "I have nothing to eat."
+        if n["energy"] >= 97:
+            return False, "I am too full to eat."
+        hungry = n["energy"] < 40
+        if target[0] == "plant":
+            x, y, fk = target[1]
+            kind = KINDS[fk]["fruit"]
+            self.picked[(x, y)] = self.t
+            text = f"I eat {noun_of(kind)} from {the(noun_of(fk))}."
+        else:
+            e = target[1]
+            kind = e["kind"]
+            if target[0] == "held":
+                z.hands.remove(e)
+            self.destroy(e)
+            text = f"I eat {the(self.ent_noun(e))}."
+        k = KINDS[kind]
+        n["energy"] = min(100.0, n["energy"] + k.get("food", 0))
+        n["water"] = min(100.0, n["water"] + k.get("drink", 0))
+        self._activity("eating")
+        if k.get("poison"):
+            n["health"] = max(0.0, n["health"] - k["poison"])
+            text += " It tastes bitter. I feel sick."
+            if n["health"] <= 0:
+                self._faint()
+        elif kind in ("raw fish", "egg"):
+            text += " It is raw and slimy."
+        elif n["energy"] >= 90:
+            text += " I am full."
+        elif hungry:
+            text += " I am less hungry."
+        else:
+            text += " It is good."
+        return True, text, {"what": kind}
+
+    def _do_drink(self):
+        z, n = self.zen, self.zen.needs
+        vessel = next((e for e in reversed(z.hands) if e["kind"] in ("cup", "bucket") and e.get("water")), None)
+        source = None
+        if vessel:
+            source = "vessel"
+        else:
+            ax, ay = self.ahead()
+            barrel = next((e for e in self.at(ax, ay) if e["kind"] == "rain barrel"), None)
+            if barrel and barrel.get("water", 0) <= 0:
+                return False, "The rain barrel is empty."
+            if barrel:
+                source = "barrel"
+            for (x, y) in ((z.x, z.y), (ax, ay)) if not source else ():
+                b, w, f = self.terrain.tile(x, y)
+                if f == F["well"]:
+                    source = "well"
+                    break
+                if w and not self._frozen(x, y):
+                    source = "sea" if BIOMES[b] == "ocean" else "spring" if f == F["spring"] else "fresh"
+                    break
+                if w:
+                    return False, "The water is frozen."
+        if not source:
+            return False, "There is no water here."
+        if n["water"] >= 97 and source != "sea":
+            return False, "I am not thirsty."
+        thirsty = n["water"] < 40
+        self._activity("drinking")
+        if source == "vessel" and vessel.get("salty"):
+            source = "sea"
+            vessel["water"] -= 1
+            self.touch(vessel)
+            if vessel["water"] <= 0:
+                vessel.pop("salty", None)
+        if source == "sea":
+            n["water"] = max(0.0, n["water"] - 6)
+            return True, "I drink the sea water. It is salty. I am more thirsty.", {"what": "sea"}
+        if source == "vessel":
+            vessel["water"] -= 1
+            self.touch(vessel)
+            n["water"] = min(100.0, n["water"] + 30)
+            text = f"I drink water from the {vessel['kind']}."
+            what = vessel["kind"]
+        else:
+            t = self.terrain.base_temp(z.x, z.y) + _SEASON_T[self.season]
+            word = "cold" if t < 12 or source in ("spring", "well") else "cool" if t < 24 else "warm"
+            n["water"] = min(100.0, n["water"] + 30)
+            if source == "barrel":
+                barrel["water"] -= 1
+                self.touch(barrel)
+            text = {"well": f"I pull up water from the well and drink. It is {word}.",
+                    "barrel": "I drink rainwater from the rain barrel.",
+                    "spring": "I drink from the spring. The water is cold and clear."}.get(
+                source, f"I drink the {word} water.")
+            what = source
+        text += " I am no longer thirsty." if n["water"] >= 90 else " I am less thirsty." if thirsty else ""
+        return True, text, {"what": what}
+
+    # ---- using things
+    def _fuel(self, fire: dict, e: dict):
+        z = self.zen
+        z.hands.remove(e)
+        self.destroy(e)
+        fire["fuel"] = fire.get("fuel", 0.0) + KINDS[e["kind"]]["fuel"]
+        self.touch(fire)
+        where = "in the fireplace" if fire["kind"] == "fireplace" else "on the campfire"
+        self._activity("tending the fire")
+        return True, f"I put {the(noun_of(e['kind']))} {where}." + (" The fire burns brighter." if fire.get("lit")
+                                                                     else ""), {"what": e["kind"]}
+
+    def _held(self, kind: str) -> dict | None:
+        return next((e for e in reversed(self.zen.hands) if e["kind"] == kind), None)
+
+    def _do_use(self):
+        z = self.zen
+        ax, ay = self.ahead()
+        ahead = self.at(ax, ay)
+        furn = next((e for e in ahead if e["kind"] in _FURNITURE), None)
+        if furn:
+            r = self._use_thing(furn)
+            if r:
+                return r
+        clay = self._held("clay")
+        if clay:
+            z.hands.remove(clay)
+            self.destroy(clay)
+            self._activity("sculpting")
+            return True, "I knead the clay and begin to shape it.", {"needs_words": "sculpt", "what": "clay"}
+        b, w, f = self.terrain.tile(ax, ay)
+        r = self._use_feature(ax, ay, f, w, b)
+        if r:
+            return r
+        for e in reversed(ahead):
+            r = self._use_thing(e)
+            if r:
+                return r
+        for e in reversed(self.at(z.x, z.y)):
+            r = self._use_thing(e)
+            if r:
+                return r
+        bh, wh, fh = self.terrain.tile(z.x, z.y)
+        if wh:
+            r = self._use_feature(z.x, z.y, fh, wh, bh)
+            if r:
+                return r
+        if fh == F["stump"]:
+            z.needs["rest"] = min(100.0, z.needs["rest"] + 2)
+            return True, "I sit on the stump and rest a little.", {"what": "stump"}
+        for e in reversed(z.hands):
+            r = self._use_held(e)
+            if r:
+                return r
+        if furn:
+            return False, f"I can't use {the(self.ent_noun(furn))}."
+        if f:
+            return False, f"I can't use {the(noun_of(FEATURE_KIND[FEATURES[f]]))}."
+        return False, "There is nothing here to use."
+
+    def _use_thing(self, e: dict):
+        z, k = self.zen, e["kind"]
+        if k in ("fireplace", "campfire"):
+            fuel = next((h for h in reversed(z.hands) if KINDS[h["kind"]].get("fuel") and h["kind"] != "lantern"),
+                        None)
+            cook = next((h for h in reversed(z.hands) if KINDS[h["kind"]].get("cooks_to")), None)
+            name = the(noun_of(k))
+            if e.get("lit") and cook:
+                new = KINDS[cook["kind"]]["cooks_to"]
+                old = cook["kind"]
+                cook["kind"] = new
+                self.touch(cook)
+                self._activity("cooking")
+                return True, f"I cook {the(noun_of(old))} on the fire. Now I have {noun_of(new)}.", {"what": old}
+            if not e.get("lit") and self._held("flint") and e.get("fuel", 0) > 0:
+                if k == "campfire" and self.weather in ("rain", "storm", "snow"):
+                    return False, "I strike the flint, but the rain puts out the sparks."
+                e["lit"] = True
+                self.fires.add(e["id"])
+                self.touch(e)
+                self._activity("lighting a fire")
+                return True, "I strike the flint. A spark catches and the fire burns.", {"what": k}
+            if fuel:
+                return self._fuel(e, fuel)
+            if not e.get("lit") and self._held("flint"):
+                return False, f"There is no wood in {name}."
+            if e.get("lit"):
+                z.needs["warmth"] = min(100.0, z.needs["warmth"] + 4)
+                z.wet = max(0.0, z.wet - 0.2)
+                return True, "I warm my hands at the fire.", {"what": k}
+            if e.get("fuel", 0) > 0:
+                return False, f"{cap(name)} is cold. I need a flint to light it."
+            return False, f"{cap(name)} is cold. It needs wood and a flint."
+        if k == "easel":
+            paper = self._held("paper")
+            if e.get("paper", 0) > 0:
+                e["paper"] -= 1
+                self.touch(e)
+            elif paper:
+                z.hands.remove(paper)
+                self.destroy(paper)
+            else:
+                return False, "There is no paper on the easel."
+            self._activity("painting")
+            return True, "I stand at the easel with a brush and a clean sheet of paper.", \
+                {"needs_words": "paint", "what": "easel"}
+        if k == "rain barrel":
+            vessel = next((h for h in reversed(z.hands) if h["kind"] in ("bucket", "cup")), None)
+            if not vessel:
+                return True, f"I look into the rain barrel. It is {'full' if e.get('water', 0) >= 15 else 'half full' if e.get('water', 0) >= 5 else 'nearly empty' if e.get('water') else 'empty'}.", {"what": k}
+            if e.get("water", 0) <= 0:
+                return False, "The rain barrel is empty."
+            cap_ = KINDS[vessel["kind"]]["vessel"]
+            if vessel.get("water", 0) >= cap_:
+                return False, f"The {vessel['kind']} is already full."
+            take = min(cap_ - vessel.get("water", 0), e["water"])
+            e["water"] -= take
+            vessel["water"] = vessel.get("water", 0) + take
+            vessel.pop("salty", None)
+            self.touch(e), self.touch(vessel)
+            return True, f"I fill the {vessel['kind']} from the rain barrel.", {"what": vessel["kind"]}
+        if k == "piano":
+            self._activity("playing the piano")
+            return True, "I sit down at the piano and put my hands on the keys.", \
+                {"needs_words": "compose", "what": "piano"}
+        if k == "desk":
+            paper = self._held("paper")
+            if e.get("paper", 0) > 0:
+                e["paper"] -= 1
+                self.touch(e)
+            elif paper:
+                z.hands.remove(paper)
+                self.destroy(paper)
+            else:
+                return False, "There is no paper on the desk."
+            self._activity("writing")
+            return True, "I sit at the desk with a pen and a sheet of paper.", {"needs_words": "write", "what": "desk"}
+        if k == "chest":
+            e["open"] = not e.get("open")
+            self.touch(e)
+            if e["open"]:
+                items = e.get("items", [])
+                inside = ("Inside: " + and_list([self.ent_noun(i) for i in items]) + ".") if items else \
+                    "It is empty."
+                return True, f"I open the chest. {inside}", {"what": k}
+            return True, "I close the chest.", {"what": k}
+        if k == "bookshelf":
+            books = [i for i in e.get("items", []) if i["kind"] == "book"]
+            if not books:
+                return False, "The bookshelf is empty."
+            b = next((i for i in books if i.get("book") not in self.read_books), books[0])
+            return self._read(b)
+        if k == "book":
+            return self._read(e)
+        if k == "bed":
+            return self._do_sleep()
+        if k == "nest":
+            n = e.get("eggs", 0)
+            return True, f"I look into the nest. There {'is 1 egg' if n == 1 else f'are {n} eggs'}." if n else \
+                "I look into the nest. It is empty.", {"what": k}
+        if k == "beehive":
+            return True, "I listen to the bees humming in the hive.", {"what": k}
+        if k == "woodpile":
+            return True, f"There are {e.get('count', 0)} logs on the woodpile.", {"what": k}
+        if k in ("stick", "log", "pinecone") and self._held("flint"):
+            if self.weather in ("rain", "storm", "snow") and self.terrain.feature(e["x"], e["y"]) not in SHELTER:
+                return False, "I strike the flint, but the rain puts out the sparks."
+            x, y = e["x"], e["y"]
+            if (x, y) == (z.x, z.y):
+                return False, "I need to put the wood in front of me first."
+            fuel = KINDS[k]["fuel"]
+            self.destroy(e)
+            fire = self.make("campfire", lit=True, fuel=float(fuel))
+            self.place(fire, x, y)
+            self._activity("lighting a fire")
+            return True, f"I strike the flint. The {k} catches fire. A campfire burns.", {"what": "campfire"}
+        return None
+
+    def _read(self, b: dict):
+        i = int(b.get("book", 0)) % len(T.BOOKS)
+        title, text = T.BOOKS[i]
+        new = i not in self.read_books
+        self.read_books.add(i)
+        self._activity("reading")
+        return True, f'I read "{title}". It says: "{text}"', {"what": "book", "events": [
+            {"kind": "read", "book": title, "new": new}]}
+
+    def _use_feature(self, x: int, y: int, f: int, w: int, b: int):
+        z = self.zen
+        vessel = next((e for e in reversed(z.hands) if e["kind"] in ("bucket", "cup")), None)
+        name = FEATURES[f] if f else ""
+        if (w or name == "well") and vessel:
+            if w and self._frozen(x, y):
+                return False, "The water is frozen."
+            cap_ = KINDS[vessel["kind"]]["vessel"]
+            if vessel.get("water", 0) >= cap_:
+                return False, f"The {vessel['kind']} is already full."
+            vessel["water"] = cap_
+            salty = BIOMES[b] == "ocean" and name != "well"
+            if salty:
+                vessel["salty"] = True
+            else:
+                vessel.pop("salty", None)
+            self.touch(vessel)
+            self._activity("filling a " + vessel["kind"])
+            return True, f"I fill the {vessel['kind']} with {'salty sea ' if salty else ''}water.", \
+                {"what": vessel["kind"]}
+        if not f:
+            return None
+        fk = FEATURE_KIND[name]
+        if f in TREES:
+            if not self._held("axe"):
+                return False, f"I need an axe to chop {the(noun_of(fk))}."
+            hits = self.chops.get((x, y), 0) + 1
+            self._cost(0.4, 0.3, 0.4)
+            self._activity("chopping wood")
+            if hits < 3:
+                self.chops[(x, y)] = hits
+                return True, f"I chop {the(noun_of(fk))} with the axe. Chips fly.", {"what": fk}
+            self.chops.pop((x, y), None)
+            self.terrain.set_feature(x, y, F["stump"])
+            self.picked.pop((x, y), None)
+            for _ in range(2):
+                self.place(self.make("log"), x, y)
+            return True, f"I chop {the(noun_of(fk))} with the axe. It falls! Two logs lie by the stump.", \
+                {"what": fk}
+        if name == "standing_stone":
+            carving = T.STONE_TEXTS[shash(self.seed, x, y, "carving") % len(T.STONE_TEXTS)]
+            return True, f"I touch the standing stone. It is cold and old. {carving}", {"what": fk}
+        if name == "cairn":
+            return self._lookout(x, y)
+        if name == "well":
+            return True, "I look down the well. Water glints far below.", {"what": fk}
+        if name == "flowers":
+            return True, "I smell the flowers. They smell sweet.", {"what": fk}
+        if name == "stump":
+            z.needs["rest"] = min(100.0, z.needs["rest"] + 2)
+            return True, "I sit on the stump and rest a little.", {"what": fk}
+        return None
+
+    def _lookout(self, x: int, y: int):
+        z = self.zen
+        if self.daylight() < 0.3:
+            return False, "I climb the cairn, but it is too dark to see far."
+        fx, fy, rx, ry = self._frame()
+        seen, events, bonus = [], [], 0.0
+        for p in sorted(self._pois_near(x, y, 96), key=lambda q: abs(q["x"] - x) + abs(q["y"] - y)):
+            if p["kind"] == "home" and p["name"] in self.places:
+                continue
+            ddx, ddy = p["x"] - z.x, p["y"] - z.y
+            dirn = ("north" if ddy < -abs(ddx) / 2 else "south" if ddy > abs(ddx) / 2 else "") + \
+                ("west" if ddx < -abs(ddy) / 2 else "east" if ddx > abs(ddy) / 2 else "")
+            seen.append(f"{p['name']} far to the {dirn or 'side'}")
+            gain = self._know_place(p, visit=False)
+            if gain:
+                bonus += gain
+                events.append({"kind": "seen_place", "name": p["name"]})
+            if len(seen) >= 4:
+                break
+        self._activity("looking far")
+        if not seen:
+            return True, "I climb the cairn and look far. I see only land and sky.", {"what": "cairn"}
+        return True, "I climb the cairn and look far. I see " + and_list(seen) + ".", {
+            "what": "cairn", "events": events, "bonus": bonus}
+
+    def _use_held(self, e: dict):
+        k = e["kind"]
+        if k == "book":
+            return self._read(e)
+        if k == "lantern":
+            if e.get("lit"):
+                e["lit"] = False
+                self.touch(e)
+                return True, "I put out the lantern.", {"what": k}
+            if not self._held("flint"):
+                return False, "I need a flint to light the lantern."
+            if e.get("fuel", 900.0) <= 0:
+                return False, "The lantern has no oil left."
+            e["lit"] = True
+            e.setdefault("fuel", 900.0)
+            self.touch(e)
+            return True, "I light the lantern. It glows.", {"what": k}
+        if k == "flower":
+            return True, "I smell the flower. It smells sweet.", {"what": k}
+        if k == "shell":
+            return True, "I hold the shell to my ear. It sounds like the sea.", {"what": k}
+        return None
+
+    def _do_sleep(self):
+        z, n = self.zen, self.zen.needs
+        if n["rest"] > 80 and self.phase == "day":
+            return False, "I am not tired."
+        ax, ay = self.ahead()
+        here_bed = any(e["kind"] == "bed" for e in self.at(z.x, z.y))
+        if not here_bed and any(e["kind"] == "bed" for e in self.at(ax, ay)) and self._blocker(ax, ay) is None:
+            z.x, z.y = ax, ay
+            here_bed = True
+        self._fall_asleep(voluntary=True)
+        return True, "I lie down in the bed and fall asleep." if here_bed else \
+            "I lie down on the ground and fall asleep.", {"what": "bed" if here_bed else "ground"}
+
+    # ================================================================== the page
     @staticmethod
     def public(e: dict) -> dict:
-        """An entity as the page sees it: what's inside is summarised, numbers rounded."""
-        out = {k: v for k, v in e.items() if k != "items"}
+        out = {"id": e["id"], "kind": e["kind"], "x": e["x"], "y": e["y"]}
+        for k in ("lit", "open", "water", "count", "paper", "honey", "eggs", "salty"):
+            if k in e:
+                out[k] = e[k]
+        if "fuel" in e:
+            out["fuel"] = round(e["fuel"])
         if "items" in e:
             out["contents"] = [i["kind"] for i in e["items"]]
-        for k in ("temp", "wet", "fresh", "water", "stage", "health", "fuel", "burn", "hunger", "cook", "bake"):
-            if isinstance(out.get(k), float):
-                out[k] = round(out[k], 1 if k in ("temp", "fuel", "burn", "hunger") else 2)
+        if e["kind"] == "book":
+            out["title"] = T.BOOKS[int(e.get("book", 0)) % len(T.BOOKS)][0]
         return out
 
-    def snapshot(self, full: bool = False, day_seconds: float = 600.0, night_seconds: float = 1200.0) -> dict:
-        now = time.time()
+    def _in_range(self) -> set[int]:
+        out = set()
+        cs = [(self.zen.x, self.zen.y)] + ([(self.visitor.x, self.visitor.y)] if self.visitor else [])
+        keys = {((x >> 5) + dx, (y >> 5) + dy) for x, y in cs for dx in (-2, -1, 0, 1, 2) for dy in (-2, -1, 0, 1, 2)}
+        for key in keys:
+            for i in self.cidx.get(key, ()):
+                e = self.ents[i]
+                if any(abs(e["x"] - x) <= ENT_RANGE and abs(e["y"] - y) <= ENT_RANGE for x, y in cs):
+                    out.add(i)
+        return out
 
-        def being(b: Being | None):
-            if b is None:
-                return None
-            d = {"name": b.name, "x": b.x, "y": b.y, "facing": b.facing, "sleeping": b.sleeping,
-                 "talking": b.engaged is not None, "wet": round(b.wet, 2), "activity": b.activity,
-                 "carrying": [e["kind"] for e in b.carrying], "said": b.said if now < b.said_until else ""}
-            if b.fx is not None:
-                d["fx"], d["fy"] = round(b.fx, 2), round(b.fy, 2)
-            return d
-
-        span = day_seconds if self.phase == "day" else night_seconds
-        a, wr = self.ada, self.wren
+    def snapshot(self, full: bool = False, **_ignored) -> dict:
+        z, s = self.zen, self.sprite
+        span = self.day_seconds if self.phase == "day" else self.night_seconds
+        b = self.terrain.biome(z.x, z.y)
+        p = self.place_at(z.x, z.y)
         out = {
             "tick": self.tick_n, "day": self.day, "phase": self.phase, "season": self.season,
-            "weather": self.weather, "time": self.time_of_day(day_seconds), "light": round(self.light(day_seconds), 3),
-            "sun": round(min(1.0, self.phase_t / max(span, 1)), 4),
-            "temperature": round(self.outdoor_t, 1), "terrain_v": self.terrain_v,
-            "env": {"outdoor": round(self.outdoor_t, 1), "rooms": {k: round(v, 1) for k, v in self.indoor.items()},
-                    "rainbow": self.rainbow_until > now, "sounds": [s[0] for s in self.sounds][:8]},
-            "ada": being(a) | {"place": self.place_of(a.x, a.y), "needs": {k: round(v, 1) for k, v in a.needs.items()},
-                               "feelings": self.feelings(), "dark": self.dark(a.x, a.y),
-                               "temp_here": round(self.temperature_at(a.x, a.y), 1)},
-            "companion": being(wr) | {"place": self.place_of(wr.x, wr.y), "role": "companion",
-                                      "needs": {k: round(v, 1) for k, v in wr.needs.items()},
-                                      "feelings": self.feelings(wr)},
-            "visitor": being(self.visitor),
-            "people": [being(wr) | {"role": "companion", "color": "#7fb3a6", "hat": "#3d5a80", "glyph": "🧑‍🌾",
-                                    "friendship": round(self.bond, 1)}],
-            "bond": round(self.bond, 1),
-            "skills": {b.name: self.art_skills(b) for b in (a, wr)},
+            "weather": self.weather, "time": self.time_of_day(), "light": round(self.light_at(z.x, z.y), 3),
+            "sun": round(min(1.0, self.phase_t / max(span, 1.0)), 4),
+            "temperature": round(self.air_temp(z.x, z.y), 1),
+            "zen": {"x": z.x, "y": z.y, "fx": round(z.fx, 2), "fy": round(z.fy, 2), "facing": z.facing,
+                    "needs": {k: round(v, 1) for k, v in z.needs.items()}, "feelings": self.feelings(),
+                    "hands": [h["kind"] for h in z.hands], "sleeping": z.sleeping, "activity": z.activity,
+                    "said": z.said, "waiting": bool(z.waiting), "biome": BIOMES[b],
+                    "place": p["name"] if p else "", "wet": round(z.wet, 2), "wellbeing": round(self.wellbeing(), 3)},
+            "sprite": {"x": s.x, "y": s.y, "fx": round(s.fx, 2), "fy": round(s.fy, 2), "state": s.state,
+                       "said": s.said},
+            "visitor": None if not self.visitor else {
+                "x": self.visitor.x, "y": self.visitor.y, "fx": round(self.visitor.fx, 2),
+                "fy": round(self.visitor.fy, 2), "facing": self.visitor.facing,
+                "hands": [h["kind"] for h in self.visitor.hands], "said": self.visitor.said},
+            "animals": [{"id": a["id"], "kind": a["kind"], "x": a["x"], "y": a["y"], "fx": round(a["fx"], 2),
+                         "fy": round(a["fy"], 2), "facing": a["facing"], "state": a["state"]}
+                        for a in self.animals.values()],
+            "home": {"x": 0, "y": 0},
+            "places": list(self.places.values()),
+            "mind": {"plan": "", "motor": {"last": self.last_action, "autonomy": 1, "entropy": None,
+                                           "reward_rate": round(self.reward_rate, 4), "steps": self.steps}},
+            "skills": self.skills(),
             "log": self.log[-14:],
         }
-        if self.new_creations and not full:
-            out["creations"] = self.new_creations[:]
-        self.new_creations.clear()
+        rng_ids = self._in_range()
         if full:
-            names = sorted({r for row in self.region for r in row})
-            index = {n: i for i, n in enumerate(names)}
-            out.update(full=True, W=W, H=H, terrain=self.terrain, height=self.height,
-                       regions=[[index[r] for r in row] for row in self.region], region_names=names,
-                       places={k: list(v) for k, v in self.anchors.items()}, buildings=self.buildings,
-                       kinds=self.kinds_table(), ents=[self.public(e) for e in self.entities.values()], removed=[],
-                       creations=self.creations[-300:])
+            out["full"] = True
+            out["ents"] = [self.public(self.ents[i]) for i in sorted(rng_ids)]
+            out["removed"] = []
+            out["creations"] = self.creations[-8:]
+            out["studio"] = self.studio
         else:
-            out["ents"] = [self.public(self.entities[i]) for i in self.dirty if i in self.entities]
-            out["removed"] = list(self.removed)
-        self.dirty.clear()
-        self.removed.clear()
+            new = (rng_ids - self._sent) | (self._dirty & rng_ids)
+            out["ents"] = [self.public(self.ents[i]) for i in sorted(new)]
+            out["removed"] = sorted((self._sent - rng_ids) | (self._removed & self._sent))
+            if self.new_creations:
+                out["creations"] = self.new_creations[:]
+            if self._studio_changed:
+                out["studio"] = self.studio
+        self._studio_changed = False
+        self.new_creations.clear()
+        self._sent = rng_ids
+        self._dirty.clear()
+        self._removed.clear()
         return out
 
+    def chunk_payload(self, cx: int, cy: int) -> dict:
+        return self.terrain.payload(int(cx), int(cy))
+
+    def world_meta(self) -> dict:
+        return {"BIOMES": BIOMES, "FEATURES": FEATURES, "seed": self.seed, "home": {"x": 0, "y": 0}}
+
+    def atlas(self) -> dict:
+        return {"explored": [[cx, cy, self.terrain.chunk(cx, cy).dominant] for cx, cy in sorted(self.explored)],
+                "places": list(self.places.values()), "trail": self.trail[-2000:] + [[self.zen.x, self.zen.y]],
+                "zen": {"x": self.zen.x, "y": self.zen.y}, "home": {"x": 0, "y": 0}}
+
+    # ================================================================== saving
     def state(self) -> dict:
-        def being(b: Being):
-            return {"x": b.x, "y": b.y, "carrying": b.carrying, "sleeping": b.sleeping, "needs": b.needs, "wet": b.wet}
+        z = self.zen
+        return {
+            "version": 4, "seed": self.seed, "t": self.t, "tick": self.tick_n, "day": self.day, "phase": self.phase,
+            "phase_t": self.phase_t, "weather": self.base_weather, "weather_left": self.weather_left,
+            "last_rain_t": self.last_rain_t, "next_id": self.next_id, "next_cid": self.next_cid,
+            "zen": {"x": z.x, "y": z.y, "facing": z.facing, "hands": z.hands, "needs": z.needs,
+                    "sleeping": z.sleeping, "in_bed": z.in_bed, "wet": z.wet, "voluntary": z.voluntary},
+            "ents": [self.ents[i] for i in sorted(self.mod) if i in self.ents] +
+                    [dict(e, x=self.visitor.x, y=self.visitor.y) for e in (self.visitor.hands if self.visitor else [])],
+            "gone": sorted(self.gone), "diffs": self.terrain.diff_state(),
+            "picked": [[x, y, round(t, 1)] for (x, y), t in self.picked.items()],
+            "chops": [[x, y, n] for (x, y), n in self.chops.items()],
+            "visited": {f"{cx},{cy}": format(m, "x") for (cx, cy), m in self.visited.items()},
+            "explored": sorted(self.explored), "seen": sorted(self.seen), "firsts": sorted(self.firsts),
+            "places": list(self.places.values()), "read": sorted(self.read_books), "trail": self.trail[-4000:],
+            "faints": self.faints, "creations": self.creations, "practice": self.practice,
+            "zen_stage": self.zen_stage, "log": self.log[-40:],
+        }
 
-        return {"version": 3, "W": W, "H": H, "terrain": self.terrain, "entities": list(self.entities.values()),
-                "next_id": self.next_id, "tick": self.tick_n, "day": self.day, "phase": self.phase,
-                "phase_t": self.phase_t, "weather": self.weather, "indoor": self.indoor,
-                "moisture": [[x, y, round(m, 3)] for (x, y), m in self.moisture.items()],
-                "visited": sorted(self.visited), "firsts": sorted(self.firsts), "read": sorted(self.read_books),
-                "creations": self.creations, "bond": self.bond, "skills": self.skills, "ada": being(self.ada), "wren": being(self.wren)}
+    @classmethod
+    def from_state(cls, d: dict) -> "World":
+        w = cls(d.get("seed", 11))
+        w.load_state(d)
+        return w
 
-    def load_state(self, s: dict):
-        if s.get("version", 1) < 3 or s.get("W") != W or s.get("H") != H:
-            # A world from before the homestead: keep what the synth has lived, not the old map.
-            self.day = s.get("day", 1)
-            self.firsts = set(s.get("firsts", []))
-            self.creations = s.get("creations", [])
-            self.event("moved", "We have moved to a new home in a quiet hollow, just the two of us.")
+    def load_state(self, d: dict):
+        if d.get("version") != 4:
             return
-        self.terrain = s["terrain"]
-        self.terrain_v += 1
-        self.entities = {e["id"]: e for e in s["entities"]}
-        self.next_id, self.tick_n, self.day = s["next_id"], s["tick"], s["day"]
-        self.phase, self.phase_t, self.weather = s["phase"], s["phase_t"], s["weather"]
-        self.indoor.update(s.get("indoor", {}))
-        for x, y, m in s.get("moisture", []):
-            self.moisture[(x, y)] = m
-        self.visited, self.firsts = set(s["visited"]), set(s["firsts"])
-        self.read_books = set(s.get("read", []))
-        self.creations = s.get("creations", [])
-        self.bond = s.get("bond", self.bond)
-        self.skills = s.get("skills", {})
-        for b, d in ((self.ada, s.get("ada")), (self.wren, s.get("wren"))):
-            if d:
-                b.x, b.y, b.carrying, b.sleeping = d["x"], d["y"], d["carrying"], d["sleeping"]
-                b.needs.update(d.get("needs", {}))
-                b.wet = d.get("wet", 0.0)
+        for e in list(self.ents.values()):
+            self.unplace(e)
+        self.ents.clear(), self.cidx.clear(), self.tidx.clear(), self.alive.clear(), self.spawned.clear()
+        self.fires.clear()
+        self.animals.clear(), self.animal_at.clear(), self.animal_chunks.clear()
+        self.t, self.tick_n, self.day = d["t"], d.get("tick", 0), d["day"]
+        self.phase, self.phase_t = d["phase"], d["phase_t"]
+        self.base_weather, self.weather_left = d["weather"], d["weather_left"]
+        self.last_rain_t = d.get("last_rain_t", -1e9)
+        self.next_id, self.next_cid = d["next_id"], d.get("next_cid", 1)
+        zs = d["zen"]
+        z = self.zen
+        z.x, z.y, z.facing = zs["x"], zs["y"], zs["facing"]
+        z.fx, z.fy = float(z.x), float(z.y)
+        z.hands, z.needs = list(zs["hands"]), dict(zs["needs"])
+        z.sleeping, z.in_bed, z.wet = zs["sleeping"], zs.get("in_bed", False), zs.get("wet", 0.0)
+        z.voluntary = zs.get("voluntary", False)
+        self.gone = set(d.get("gone", []))
+        self.mod = set()
 
-
-def k_season(e: dict, season: str) -> bool:
-    return season in KINDS[e["kind"]].get("season", [])
-
-
-def where(place: str) -> str:
-    """'kitchen' -> 'in the kitchen', 'pond' -> 'by the pond', 'porch' -> 'on the porch'."""
-    return {"pond": "by the pond", "stream": "by the stream", "porch": "on the porch", "yard": "in the yard",
-            "lookout": "at the lookout on the hill", "little bedroom": "in my little bedroom",
-            "meadow": "in the meadow", "house": "in the house"}.get(place, f"in the {place}")
-
-
-def _facing(x, y, nx, ny) -> str:
-    return "east" if nx > x else "west" if nx < x else "south" if ny > y else "north"
-
-
-def _and(items: list[str]) -> str:
-    items = list(items)
-    if not items:
-        return ""
-    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
-
-
-def _cap(s: str) -> str:
-    return s[:1].upper() + s[1:]
+        def mark(e):
+            self.alive.add(e["id"])
+            for it in e.get("items", []):
+                mark(it)
+        for e in z.hands:
+            mark(e)
+        for e in d.get("ents", []):
+            e = dict(e)
+            mark(e)
+            self.mod.add(e["id"])
+            self.place(e, e["x"], e["y"])
+        for e in z.hands:
+            self.mod.add(e["id"])
+        self.terrain.load_diffs(d.get("diffs"))
+        self.picked = {(x, y): t for x, y, t in d.get("picked", [])}
+        self.chops = {(x, y): n for x, y, n in d.get("chops", [])}
+        self.visited = {tuple(int(v) for v in k.split(",")): int(m, 16) for k, m in d.get("visited", {}).items()}
+        self.explored = {tuple(e) for e in d.get("explored", [])}
+        self.seen, self.firsts = set(d.get("seen", [])), set(d.get("firsts", []))
+        self.places = {p["name"]: p for p in d.get("places", [])}
+        self.read_books = set(d.get("read", []))
+        self.trail = d.get("trail") or [[z.x, z.y]]
+        self.faints = d.get("faints", 0)
+        self.creations = d.get("creations", [])
+        self.practice = dict({m: 0.0 for m in MEDIA}, **d.get("practice", {}))
+        self.zen_stage = d.get("zen_stage", 0)
+        self.log = d.get("log", [])
+        self._area_key = None
+        self._sent.clear(), self._dirty.clear(), self._removed.clear()
+        self._ensure_area()
+        self._move_sprite(10.0)

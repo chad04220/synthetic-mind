@@ -343,8 +343,8 @@ class Academy:
         loss = a.mix_experience * (lm + a.pg_coef * pg - a.entropy_coef * ent)
         (loss / a.grad_accum).backward()
         e = 0.95 if self.pg_loss is not None else 0.0
-        self.pg_loss = e * (self.pg_loss or 0.0) + (1 - e) * float(pg)
-        self.motor_entropy = e * (self.motor_entropy or 0.0) + (1 - e) * float(ent)
+        self.pg_loss = e * (self.pg_loss or 0.0) + (1 - e) * float(pg.detach())
+        self.motor_entropy = e * (self.motor_entropy or 0.0) + (1 - e) * float(ent.detach())
         self.exp_ret = e * (self.exp_ret or 0.0) + (1 - e) * (sum(rets) / len(rets))
 
     def gpu_wait(self):

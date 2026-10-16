@@ -402,7 +402,8 @@ class Life:
         s = self.session
         brain, temp = self.brain, self.cfg.world.motor_temperature
         vocab = self.vocab[s["kind"]]
-        self.speaker.ask("studio", lambda: self.mind.choose(brain, vocab, self.act_tok, temp, self.rng),
+        words = studio.VOCABS[s["kind"]]
+        self.speaker.ask("studio", lambda: self.mind.choose(brain, vocab, self.act_tok, temp, self.rng, words),
                          self.on_mark)
 
     def on_mark(self, choice: dict):
@@ -665,15 +666,14 @@ class Life:
             elif cmd == "atlas":
                 result = self.world.atlas()
             elif cmd == "world_meta":
-                from .world import terrain
-
-                result = {"BIOMES": terrain.BIOMES, "FEATURES": terrain.FEATURES, "seed": self.cfg.world.seed,
-                          "home": self.world.atlas().get("home")}
-            elif cmd == "sleep_now":
-                self.world.force_phase("night") if hasattr(self.world, "force_phase") else None
+                result = self.world.world_meta()
+            elif cmd == "sleep_now":                 # you make the night come now (Zen sleeps only if it is tired)
+                if self.world.phase == "day":
+                    self.world.phase_t = self.day_seconds
                 result = True
             elif cmd == "wake_now":
-                self.world.force_phase("day") if hasattr(self.world, "force_phase") else None
+                if self.world.phase == "night":
+                    self.world.phase_t = self.night_seconds
                 result = True
             elif cmd == "think":
                 self.next_thought = 0
@@ -708,7 +708,7 @@ class Life:
         snap["mind"] = {
             "awake": not w.zen.sleeping, "brain": self.brain_version, "brain_meta": self.brain_meta,
             "said": self.last_speech, "waiting": bool(self.waiting), "creating": self.session["kind"] if self.session else "",
-            "phase_left": w.phase_left() if hasattr(w, "phase_left") else None,
+            "phase_left": max(0.0, (self.day_seconds if w.phase == "day" else self.night_seconds) - w.phase_t),
             "motor": {"steps": st["steps"], "last": st["last"], "entropy": None if st["entropy"] is None else round(st["entropy"], 3),
                       "reward_rate": round(st["reward_rate"], 4),
                       "share": {MOTOR[i]: round(c / total, 3) for i, c in enumerate(st["counts"]) if c}},
@@ -763,6 +763,11 @@ class Life:
             return                                  # the world holds its breath while it only studies
         w.zen_stage = int(self.brain_meta.get("stage", 0) or 0)
         w.advance(cfg.world.tick, day_seconds=self.day_seconds, night_seconds=self.night_seconds)
+        for ev in w.take_events():                  # what happened to Zen by itself (sleep, weather, places found)
+            if ev.get("text"):
+                self.stream("<|world|>", ev["text"])
+                self.link.send("event", kind="happening", what=ev.get("kind", ""), text=ev["text"],
+                               **{k: v for k, v in ev.items() if k not in ("kind", "text", "t")})
         if w.phase != self.phase_seen:
             self.phase_seen = w.phase
             self.link.send("phase", phase=w.phase, day=w.day)
