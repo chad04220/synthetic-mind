@@ -1,24 +1,27 @@
 "use strict";
-// The community: every mind's state (the synth's and each villager's), the gallery of everything they
-// have made, and the stream of what they say and do. Shared by the overlay on the valley and the
-// Minds and Gallery tabs.
+// The two minds: the synth and its companion. Their state, everything they have made, and the stream of
+// what they say and do and what happens around them. Shared by the overlay on the 3D view and the
+// Together, Stories and Keepsakes tabs.
 
 const Community = (() => {
   const st = { minds: [], byName: {}, works: new Map(), feed: [], selected: null, filter: "all", author: "",
-               voices: {}, onSelect: null, playing: null };
-  const NEED_ICON = { energy: "🍞", water: "💧", rest: "😴", warmth: "🔥", company: "🤝", fun: "🎈" };
-  const KIND_ICON = { painting: "🖼️", music: "💿", sculpture: "🗿", building: "🏗️", writing: "📜" };
+               onSelect: null, playing: null, stories: [] };
+  const NEED_ICON = { energy: "🍞", water: "💧", rest: "😴", warmth: "🔥", company: "🤝", fun: "🎈", clean: "🛁" };
+  const KIND_ICON = { painting: "🖼️", music: "💿", sculpture: "🗿", building: "🏠", poem: "📜", writing: "📜" };
+  const HAPPEN_ICON = { rainbow: "🌈", weather: "🌦️", egg: "🥚", rooster: "🐓", boiled: "🫖", cooked: "🍲", baked: "🍞",
+                        burnt: "💨", ripe: "🌾", plant_died: "🥀", rotted: "🪰", fire_out: "🔥", light_out: "🕯️", cat_ate: "🐈",
+                        deer: "🦌", dusk: "🌇", night: "🌙", dawn: "🌅", carried: "🛏️", visitor: "👋", moved: "🏡" };
   const mood = (m) => {
     const f = m.feelings || [];
     if (m.sleeping) return ["😴", "asleep"];
-    if (m.talking_with) return ["💬", `talking with ${m.talking_with}`];
+    if (m.talking) return ["💬", "talking"];
     if (f.includes("happy")) return ["😊", "happy"];
     if (f.some((x) => /very/.test(x))) return ["😟", f.join(", ")];
     if (f.length) return ["😐", f.join(", ")];
     return ["🙂", "fine"];
   };
-  const color = (m) => m.color || "#9fb4ff";
-  const glyph = (m) => m.kind === "synth" ? "✨" : (m.glyph || "🙂");
+  const color = (m) => m?.color || "#9fb4ff";
+  const glyph = (m) => m.glyph || "🙂";
   const e = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   function setMinds(list) {
@@ -27,27 +30,32 @@ const Community = (() => {
   }
   function addWorks(list) { for (const c of list || []) st.works.set(c.id, c); }
   function addFeed(ev) {
-    st.feed.push(ev); if (st.feed.length > 300) st.feed.shift();
+    st.feed.push(ev); if (st.feed.length > 400) st.feed.shift();
+  }
+  function addStories(list) {
+    const seen = new Set(st.stories.map((s) => s.t));
+    for (const s of list || []) if (!seen.has(s.t)) { st.stories.push(s); seen.add(s.t); }
+    st.stories.sort((a, b) => a.t - b.t);
   }
 
   // ------------------------------------------------------------------ small pieces
   function needBars(m, compact) {
     return `<div class="nbars${compact ? " compact" : ""}">` + Object.entries(m.needs || {}).map(([k, v]) => {
       const c = v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
-      return `<div class="nb" title="${k}: ${v}"><span>${NEED_ICON[k] || ""}</span><i><b style="width:${v}%;background:${c}"></b></i></div>`;
+      return `<div class="nb" title="${k}: ${Math.round(v)}"><span>${NEED_ICON[k] || ""}</span><i><b style="width:${v}%;background:${c}"></b></i></div>`;
     }).join("") + "</div>";
   }
   function avatar(m, size = 34) {
     return `<span class="av" style="--c:${color(m)};width:${size}px;height:${size}px;font-size:${size * 0.55}px">${glyph(m)}</span>`;
   }
 
-  // ------------------------------------------------------------------ the strip on the valley
+  // ------------------------------------------------------------------ the strip on the 3D view
   function strip(el) {
     if (!el) return;
     const html = st.minds.map((m) => {
       const [face, why] = mood(m);
       return `<button class="mchip${st.selected === m.name ? " on" : ""}" data-mind="${e(m.name)}" title="${e(m.name)} · ${e(why)}">
-        ${avatar(m, 30)}<span class="mc-text"><b>${e(m.name)} <i>${face}</i></b><small>${e((m.doing || "").replace(/^I /, "").slice(0, 34))}</small></span></button>`;
+        ${avatar(m, 30)}<span class="mc-text"><b>${e(m.name)} <i>${face}</i></b><small>${e((m.activity || m.doing || "").replace(/^I /, "").slice(0, 36))}</small></span></button>`;
     }).join("");
     if (el._h !== html) { el._h = html; el.innerHTML = html; }
   }
@@ -56,24 +64,26 @@ const Community = (() => {
   function card(m, full) {
     if (!m) return '<div class="muted">Choose someone to see their mind.</div>';
     const [face, why] = mood(m);
-    const voice = st.voices[m.name];
-    const friends = Object.entries(m.friends || {}).slice(0, full ? 8 : 3)
-      .map(([n, v]) => `<span class="friend" title="${v}/100">${e(n)} <i style="width:${v}%"></i></span>`).join("");
+    const synth = m.kind === "synth";
     const made = [...st.works.values()].filter((c) => c.author === m.name).slice(-6).reverse();
-    const src = { self: "own words", "own words": "own words", needs: "needs", you: "your idea" }[m.source] || m.source || "";
+    const src = { self: "own words", needs: "its needs", you: "your idea", companion: "Wren's words" }[m.source] || "";
+    const srcLabel = m.source === "companion" ? `${m.companion || "Wren"}'s words` : src;
     return `<div class="mcard" style="--c:${color(m)}">
-      <div class="mc-head">${avatar(m, 46)}<div><h3>${e(m.name)} <span class="muted">${m.kind === "synth" ? "the synth" : "the " + e(m.role)}</span></h3>
-        <div class="muted">${face} ${e(why)} · ${e(m.place)}${m.coins != null ? ` · 🪙 ${m.coins}` : ""}</div></div></div>
+      <div class="mc-head">${avatar(m, 46)}<div><h3>${e(m.name)} <span class="muted">${synth ? "the synth" : "the companion"}</span></h3>
+        <div class="muted">${face} ${e(why)} · ${e(m.place)}${m.wet > 0.4 ? " · 💧 wet" : ""}</div></div></div>
       ${needBars(m)}
-      <div class="mc-now"><small>NOW</small><div>${e(m.doing || (m.sleeping ? "Sleeping" : "…"))}</div>
-        ${m.why ? `<div class="muted">Why: ${e(m.why)}</div>` : ""}${src ? `<span class="badge ${src === "own words" ? "self" : "needs"}">${e(src)}</span>` : ""}</div>
+      <div class="mc-now"><small>NOW</small><div>${e(m.activity ? m.activity[0].toUpperCase() + m.activity.slice(1) : m.doing || (m.sleeping ? "Sleeping" : "…"))}</div>
+        ${m.why ? `<div class="muted">Why: ${e(m.why)}</div>` : ""}${srcLabel ? `<span class="badge ${src === "own words" ? "self" : "needs"}">${e(srcLabel)}</span>` : ""}
+        ${m.steps ? `<span class="muted"> · ${m.steps} more step${m.steps === 1 ? "" : "s"} after this</span>` : ""}</div>
+      ${m.said ? `<div class="mc-thought">🗨️ “${e(m.said)}”</div>` : ""}
       ${m.thought ? `<div class="mc-thought">💭 ${e(m.thought)}</div>` : ""}
-      <div class="mc-row"><span title="Share of recent choices made in its own words">🗣️ ${Math.round((m.own_words || 0) * 100)}% own words</span>
-        <span>🎨 ${m.made || 0} works</span>${m.carrying?.length ? `<span>🎒 ${e(m.carrying.join(", "))}</span>` : ""}
-        ${m.kind === "synth" ? `<span>🧠 brain v${m.brain || 0}</span>` : voice ? `<span class="voice ${voice.status}">🎙️ ${e(voice.status)}${voice.model ? " · " + e(voice.model) : ""}</span>` : ""}</div>
-      ${friends ? `<div class="mc-friends"><small>FRIENDS</small>${friends}</div>` : ""}
+      <div class="mc-row">${synth
+        ? `<span title="Share of recent choices made in its own words">🗣️ ${Math.round((m.own_words || 0) * 100)}% own words</span><span>🧠 brain v${m.brain || 0} · ${e(m.stage || "Static")}</span>`
+        : `<span title="How Wren looks after the synth right now">🤲 ${e(m.care || "")}</span><span title="Share of Wren's recent choices made by its language model">🪶 ${Math.round((m.own_words || 0) * 100)}% chosen by its model</span>`}
+        <span>🎨 ${made.length ? made.length : 0} works</span>${m.carrying?.length ? `<span>🎒 ${e(m.carrying.join(", "))}</span>` : ""}
+        <span title="How close they feel">💞 ${Math.round(m.bond || 0)}</span></div>
       ${full && made.length ? `<div class="mc-made"><small>MADE</small>${made.map((c) => `<span class="chip work" data-work="${c.id}">${KIND_ICON[c.kind] || "✨"} ${e(c.title || c.kind)}</span>`).join("")}</div>` : ""}
-      ${full && m.diary?.length ? `<div class="mc-diary"><small>DIARY</small>${m.diary.slice().reverse().map((d) => `<div>${e(d)}</div>`).join("")}</div>` : ""}
+      ${full && m.diary?.length ? `<div class="mc-diary"><small>LATELY</small>${m.diary.slice(-6).reverse().map((d) => `<div>${e(d)}</div>`).join("")}</div>` : ""}
     </div>`;
   }
 
@@ -83,49 +93,67 @@ const Community = (() => {
     if (el._h !== html) { el._h = html; el.innerHTML = html; }
   }
 
-  // ------------------------------------------------------------------ the stream of community life
+  // ------------------------------------------------------------------ the stream of life at the homestead
   function feedItem(ev) {
     const who = (n) => `<b style="color:${color(st.byName[n] || {})}">${e(n)}</b>`;
     switch (ev.kind) {
-      case "npc": case "ada_says":
-        if (ev.text === "…") return "";
-        return `<div class="fi talk">${who(ev.name)}${ev.to ? ` <span class="muted">→ ${e(ev.to)}</span>` : ""}<div>${e(ev.text)}</div></div>`;
-      case "vthought": return `<div class="fi thought">💭 ${who(ev.name)} <i>${e(ev.text)}</i></div>`;
+      case "wren_says": case "ada_says": case "npc": {
+        if (!ev.text || ev.text === "…") return "";
+        const name = ev.kind === "ada_says" ? ev.who || st.minds[0]?.name : ev.name || st.minds[1]?.name;
+        return `<div class="fi talk">${who(name)}${ev.to ? ` <span class="muted">→ ${e(ev.to)}</span>` : ""}<div>${e(ev.text)}</div></div>`;
+      }
+      case "talk":
+        if (!ev.text || ev.text === "…") return "";
+        return `<div class="fi talk">💬 ${who(ev.name)}<div>${e(ev.text)}</div></div>`;
+      case "answer": return `<div class="fi talk">❓ ${e(ev.question)}<div>${e(ev.text)}</div></div>`;
+      case "wren_thought": return `<div class="fi thought">💭 ${who(st.minds[1]?.name || "Wren")} <i>${e(ev.text)}</i></div>`;
       case "created": { const c = ev.creation || {}; return `<div class="fi made">${KIND_ICON[c.kind] || "✨"} ${who(c.author)} made <span class="chip work" data-work="${c.id}">${e(c.title || c.kind)}</span></div>`; }
-      case "vdid": return ev.ok === false ? "" : `<div class="fi did">${who(ev.name)} <span class="muted">${e(ev.text)}</span></div>`;
-      case "talk": return `<div class="fi muted">💬 ${e(ev.members.join(" & "))} talked about ${e(ev.topic)}</div>`;
-      case "quest": return `<div class="fi made">🏅 ${e(ev.text)}</div>`;
+      case "wren_did": return ev.ok === false ? "" : `<div class="fi did">${who(st.minds[1]?.name || "Wren")} <span class="muted">${e(ev.text)}</span></div>`;
+      case "happening": return `<div class="fi happen">${HAPPEN_ICON[ev.what] || "•"} ${e(ev.text)}</div>`;
+      case "story": return `<div class="fi made">📖 Bedtime story: <b>${e(ev.title)}</b></div>`;
+      case "milestone": return `<div class="fi made">🌱 ${e(ev.title)}</div>`;
       default: return "";
     }
   }
-  function feed(el, kinds) {
+  function feed(el, kinds, n = 80) {
     if (!el) return;
-    const items = st.feed.filter((x) => !kinds || kinds.includes(x.kind)).slice(-80).reverse().map(feedItem).filter(Boolean).join("");
-    if (el._h !== items) { el._h = items; el.innerHTML = items || '<div class="muted">Nothing yet. The valley is waking up.</div>'; }
+    const items = st.feed.filter((x) => !kinds || kinds.includes(x.kind)).slice(-n).reverse().map(feedItem).filter(Boolean).join("");
+    if (el._h !== items) { el._h = items; el.innerHTML = items || '<div class="muted">Nothing yet. The hollow is waking up.</div>'; }
   }
 
-  // ------------------------------------------------------------------ the gallery
+  // ------------------------------------------------------------------ bedtime stories
+  function stories(el) {
+    if (!el) return;
+    const key = st.stories.length + ":" + (st.stories.at(-1)?.t || 0);
+    if (el._key === key) return;
+    el._key = key;
+    el.innerHTML = st.stories.length ? st.stories.slice().reverse().map((s) => `<article class="story">
+      <div class="muted">Day ${s.day}${s.season ? ", " + e(s.season) : ""}</div><h3>${e(s.title)}</h3><p>${e(s.text)}</p></article>`).join("")
+      : '<div class="card muted">No stories yet. The first one is told at the end of the first day.</div>';
+  }
+
+  // ------------------------------------------------------------------ keepsakes
   function gallery(el, chips) {
     if (!el) return;
     const authors = [...new Set([...st.works.values()].map((c) => c.author))];
     if (chips) {
-      const ch = ["all", "painting", "music", "sculpture", "building", "writing"].map((k) =>
+      const ch = ["all", "painting", "music", "sculpture", "building", "poem"].map((k) =>
         `<button class="${st.filter === k ? "on" : ""}" data-gfilter="${k}">${k === "all" ? "All" : (KIND_ICON[k] + " " + k[0].toUpperCase() + k.slice(1) + (k === "music" ? "" : "s"))}</button>`).join("")
         + `<select data-gauthor><option value="">Everyone</option>${authors.map((a) => `<option ${st.author === a ? "selected" : ""}>${e(a)}</option>`).join("")}</select>`;
       if (chips._h !== ch) { chips._h = ch; chips.innerHTML = ch; }
     }
-    const works = [...st.works.values()].filter((c) => (st.filter === "all" || c.kind === st.filter) && (!st.author || c.author === st.author))
-      .sort((a, b) => b.t - a.t).slice(0, 120);
+    const works = [...st.works.values()].filter((c) => (st.filter === "all" || c.kind === st.filter || (st.filter === "poem" && c.kind === "writing"))
+      && (!st.author || c.author === st.author)).sort((a, b) => b.t - a.t).slice(0, 120);
     const key = works.map((c) => c.id + ":" + c.title + ":" + (c.text || "").length).join("|") + st.filter + st.author;
     if (el._key === key) return;
     el._key = key;
     el.innerHTML = works.length ? works.map((c) => `<figure class="work ${c.kind}" data-work="${c.id}">
       ${c.kind === "painting" || c.kind === "sculpture" ? `<canvas width="320" height="${c.kind === "painting" ? 220 : 260}"></canvas>` : ""}
       ${c.kind === "music" ? `<div class="roll"><canvas width="320" height="90"></canvas><button class="play" data-play="${c.id}">▶ Play</button></div>` : ""}
-      ${c.kind === "writing" ? `<blockquote>${e(c.text || "(still writing…)").replace(/\n/g, "<br>")}</blockquote>` : ""}
-      ${c.kind === "building" ? `<div class="built">${(st.kinds?.[c.data?.what]?.glyph) || "🏗️"}<small>${e(c.data?.what || "")} · ${e(c.data?.place || "")}</small></div>` : ""}
+      ${c.kind === "poem" || c.kind === "writing" ? `<blockquote>${e(c.text || "(still writing…)").replace(/\n/g, "<br>")}</blockquote>` : ""}
+      ${c.kind === "building" ? `<div class="built">${(st.kinds?.[c.data?.what]?.glyph) || "🏠"}<small>${e(c.data?.what || "")} · ${e(c.data?.place || "")}</small></div>` : ""}
       <figcaption><b>${e(c.title || "Untitled")}</b><span class="muted">${KIND_ICON[c.kind] || ""} by ${e(c.author)} · day ${c.day}, ${e(c.season || "")}</span></figcaption></figure>`).join("")
-      : '<div class="muted" style="padding:20px">Nothing has been made yet. Give them time, materials and tools.</div>';
+      : '<div class="muted" style="padding:20px">Nothing has been made yet: paintings at the easel, songs at the piano, sculptures in clay, poems and birdhouses.</div>';
     for (const fig of el.querySelectorAll("figure.work")) {
       const c = st.works.get(+fig.dataset.work), cv = fig.querySelector("canvas");
       if (!c || !cv) continue;
@@ -163,7 +191,7 @@ const Community = (() => {
     if (!dlg) { dlg = document.createElement("dialog"); dlg.id = "workDlg"; document.body.append(dlg); dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); }); }
     dlg.innerHTML = `<div class="wd">${c.kind === "painting" || c.kind === "sculpture" ? `<canvas width="720" height="${c.kind === "painting" ? 480 : 520}"></canvas>` : ""}
       ${c.kind === "music" ? `<canvas width="720" height="160"></canvas><button class="primary" data-play="${c.id}">▶ Play</button>` : ""}
-      ${c.kind === "writing" ? `<blockquote class="big">${e(c.text || "").replace(/\n/g, "<br>")}</blockquote>` : ""}
+      ${c.kind === "poem" || c.kind === "writing" ? `<blockquote class="big">${e(c.text || "").replace(/\n/g, "<br>")}</blockquote>` : ""}
       <h2>${e(c.title || "Untitled")}</h2><div class="muted">${KIND_ICON[c.kind] || ""} ${e(c.kind)} by ${e(c.author)} · day ${c.day}, ${e(c.season || "")}</div>
       <form method="dialog"><button>Close</button></form></div>`;
     const cv = dlg.querySelector("canvas");
@@ -185,6 +213,6 @@ const Community = (() => {
     if (ev.target.matches("[data-gauthor]")) { st.author = ev.target.value; Community.onChange && Community.onChange(); }
   });
 
-  return { st, setMinds, addWorks, addFeed, strip, card, grid, feed, gallery, showWork, mood, color, onChange: null };
+  return { st, setMinds, addWorks, addFeed, addStories, strip, card, grid, feed, stories, gallery, showWork, mood, color, onChange: null };
 })();
 window.Community = Community;

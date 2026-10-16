@@ -1,150 +1,204 @@
 # Synthetic Mind: raise a mind from nothing
 
-**Zen** is a synth: a neural network that starts as random numbers and knows no words at all. You
-watch it learn language and live with what it learns, in a 3D valley it shares with seven other
-minds. You can visit, talk, give it things and keep it company.
+**Zen** is a synth: a neural network that starts as random numbers and knows no words at all. It
+lives in a little house in a quiet hollow with **Wren**, who raises it. You watch Zen learn
+language and live with what it learns. You can visit, talk with both of them, and bring them
+things.
 
-- **It studies.** The Academy trains Zen's brain from scratch on your GPU. It learns from web
-  text streamed from FineWeb, lessons from an Oracle, drills on the facts of its world, and its
-  own life. Zen goes from static, to babble, to first words, phrases and sentences.
-- **It lives.** Zen has six needs, and its own words steer its body. When its brain can write
-  "I go fishing at the dock.", it goes fishing. Until then its needs choose for it, and it studies
-  those choices.
-- **It has neighbours.** Seven villagers are minds too, each with its own small language model
-  (a llama.cpp server on your CPU). Each has needs, an inner monologue, intentions, a diary and
-  friendships. They work, eat, rest, make art and talk with each other and with Zen.
-- **They create.** Paintings, music recordings you can play, sculptures in stone, wood or clay,
-  buildings, and poems. Everything they make stays in the valley and in its Gallery.
+- **Zen studies.** The Academy trains Zen's brain from scratch on your GPU. Its sources:
+  - web text streamed from FineWeb;
+  - lessons Wren writes from the days they spent together;
+  - drills on the facts of its world;
+  - its own life.
+
+  Zen goes from static, to babble, to first words, phrases and sentences.
+- **Wren raises it.** Wren is one language model (llama.cpp on your CPU, or Ollama). It already
+  knows language, so it doesn't train. Each moment the World lists what Wren could sensibly do, and
+  the model chooses one and says what Wren says out loud. Wren:
+  - cooks, gardens, keeps the fire going and looks after Zen;
+  - names things for Zen and talks with it, one turn at a time;
+  - answers Zen's questions and tells it a bedtime story about the day, every night.
+- **Zen grows up in Wren's words.** Everything Wren says near Zen, Zen hears. It studies those
+  words next to what it saw at that moment, and so it studies Wren's deeds too, in words ("Wren puts
+  the pot on the stove."). When Zen's brain can write "I feed the cat.", Zen feeds the cat.
+- **A small world that is deep.**
+  - Rooms warm by the fire and cool at night.
+  - Soup cooks, the kettle boils, bread bakes, and anything left too long burns.
+  - Food goes stale and rots, more slowly in the cool pantry.
+  - Rain soaks what is outside, and wet logs won't burn.
+  - Plants need water and die in a frost.
+  - Hens lay eggs in the morning, bees make honey while flowers bloom, and Moss the cat finds the
+    warmest spot.
 
 ## Start (Windows with an NVIDIA GPU)
 
 1. Install Python 3.10 or newer from python.org (tick *Add to PATH*).
-2. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA and the
-   other requirements, and opens <http://127.0.0.1:8765>.
-3. The first time, the voices are downloaded into `oracle/`: llama.cpp (tens of MB), the Oracle's
-   model (Gemma 2 2B, 1.7 GB) and the villagers' model (Qwen 2.5 1.5B, 1.1 GB, shared by all seven).
-   The Oracle tab shows the progress. [Ollama](https://ollama.com) is optional; choose it on the
-   Oracle tab if you'd rather use your own models.
+2. Double-click **`start.bat`**. The first run:
+   - creates `.venv`;
+   - installs PyTorch with CUDA and the other requirements;
+   - opens <http://127.0.0.1:8765>.
+3. The first time, Wren's mind is downloaded into `oracle/`: llama.cpp (tens of MB) and the model
+   (Gemma 2 2B, 1.7 GB). The **Wren** tab shows the progress. [Ollama](https://ollama.com) is
+   optional; choose it on the Wren tab if you'd rather use your own models.
 
 **Linux / macOS:** `./start.sh`. **By hand:** install PyTorch for your machine, then
 `pip install -r requirements.txt` and `python run.py`.
 
 Each synth is saved continuously in `minds/<name>/`. Ctrl+C saves everything and stops. Minds made
-with earlier versions (Ada) still work: `python run.py --name Ada`.
+with earlier versions keep their brain, their days and their art, and move into the new house.
 
 ```
 python run.py                              Zen (created on the first run, resumed after)
 python run.py --name Kai                   another synth, starting from nothing
 python run.py --preset medium              a bigger brain for a new synth (12 GB+ GPU)
 python run.py --schedule day_night         study only while it sleeps at night
-python run.py --oracle ollama              the Oracle and the villagers speak through Ollama
-python run.py --no-fineweb --no-oracle     offline
+python run.py --oracle ollama              Wren's mind runs in Ollama
+python run.py --no-fineweb --no-oracle     offline (Wren lives by simple rules)
 ```
 
 ## Playing
 
-**🌍 Valley** is the 3D valley, with an overlay you can hide (◱):
+**🏡 Home** is the 3D homestead, with an overlay you can hide (◱):
 
-- the strip on the left lists every mind with its mood and what it is doing; click one to follow it
-  and see its card;
-- the minimap is at the top right (⤢ enlarges it);
-- the live feed shows conversations, thoughts and new works;
-- the talk bar sits at the bottom.
+- **Top left:** the time, the weather, the temperature outside and in the house, and what can be
+  heard.
+- **Left:** Zen and Wren, with their mood and what they are doing. Click one to follow it and see
+  its card.
+- **Top right:** the minimap. ⤢ enlarges it.
+- **Bottom left:** the live feed: what Wren says, Zen's attempts at words, their conversations, and
+  what happens (a new egg, the kettle whistling, a rainbow).
+- **Bottom:** the talk bar.
 
 | mode | controls |
 |---|---|
-| 👀 **Watch** | drag to orbit, wheel to zoom, click a mind or a work |
+| 👀 **Watch** | drag to orbit, wheel to zoom, click Zen, Wren or anything to look closer |
 | 🧍 **Visit** | click to capture the mouse; **WASD** walk, **Shift** run, **Space** hop, **V** first/third person, **E** use or talk to what you face, **G** give Zen what you carry, **H** hug, **Q** drop, **T** talk, **1–6** inventory, **Esc** free the mouse |
-| 🧺 **Add things** | place food, materials, tools, books with your own words, signs and animals on the map |
+| 🧺 **Add things** | place food, toys, books with your own words, signs and animals |
 
-What you say goes to Zen, or to the villager you are talking to; they answer with their own voices.
-Zen's replies are its own (babble at first), and the Oracle suggests the reply it should have given,
-which it then studies.
+- **Talking to Zen:** it answers with its own brain (babble at first), and Wren suggests the reply
+  Zen should learn to give.
+- **Talking to Wren:** Wren tells you how Zen is doing.
+- **Suggesting a deed:** type something like "feed the cat" and Zen tries to do it.
 
-**🧑‍🤝‍🧑 Minds** has Zen's journey (first word, first sentence, first conversation, first song…) and
-a card for every mind: needs, feelings, what it is doing and why, its latest thought, how often it
-acts in its own words, friendships, works and diary.
+### The other tabs
 
-**🖼️ Gallery** holds everything made in the valley:
+- **🌱 Together:**
+  - Zen's journey (first word, first sentence, first conversation, first song…);
+  - both minds in full;
+  - the words Wren has heard Zen say;
+  - how Wren is looking after Zen right now;
+  - Wren's diary.
+- **📖 Stories** collects Wren's bedtime stories, one per night.
+- **🖼️ Keepsakes** holds everything either of them made:
+  - paintings from the easel;
+  - songs played on the piano, which you can play back;
+  - clay and wood sculptures;
+  - poems and birdhouses.
+- **🎓 Academy**, **🧠 Concepts**, **🪶 Wren**, **⚙️ Settings** and **🩺 Health** show:
+  - the training;
+  - what Zen understands;
+  - Wren's model and its lessons;
+  - every setting;
+  - the program's own performance.
 
-- paintings, painted from each work's recipe;
-- songs, played in the browser;
-- sculptures, buildings and poems.
+  **Download report** on the Health tab saves a diagnostics file you can share.
 
-**🎓 Academy**, **🧠 Concepts**, **🔮 Oracle**, **⚙️ Settings** and **🩺 Health** show the training,
-what Zen understands, the voices, every setting and the program's own performance. **Download
-report** on the Health tab saves a diagnostics file you can share.
+## How Wren raises Zen
 
-## The valley
+How much Wren does for Zen follows Zen's language (Settings → *How Wren cares for Zen*):
 
-The valley is 128 × 96 tiles:
+- **Caretaker (Static to First words):**
+  - Wren feeds Zen, brings it water, dries it and puts it to bed;
+  - Wren takes Zen along to its chores and talks it through everything ("Look, Zen! I put the log
+    in the fireplace.");
+  - Wren shows Zen things and names them ("Look, Zen. This is an egg. It is smooth and white. Can
+    you say egg?").
+- **Guide (Phrases, Sentences):** Wren tells Zen what it needs and lets it do it ("You look
+  thirsty, Zen. You can drink water at the sink."). Zen's next deed follows Wren's words, so it
+  learns how the words and the deed go together.
+- **Friend (Conversational and up):** Zen looks after itself; Wren helps when asked.
 
-- **The mountains** have an old mine (ore and crystals) and a snowy peak.
-- **A river** runs down to a lake with a beach and Finn's dock.
-- **The village** has a plaza with a well and a fire pit, the bakery, the library, the school, the
-  workshop and forge, the market, the music hall, the painting studio, a park with swings and a
-  frog pond, and the Oracle's shrine on its hill.
-- **Zen's cottage** has a farm with fields, a barn and animal pens, next to an apple orchard.
-- **To the east** is a meadow with beehives and the observatory; **to the south-west**, a deep forest.
+**Conversations.** Whoever has something to say starts the conversation. If they are apart, that
+one walks up to the other, and both stop. Then they take turns:
 
-Days, nights, seasons and weather pass.
+1. The speaker composes a line (a "…" bubble shows it is thinking) while the other waits.
+2. Then the other composes its reply while the first one waits.
 
-Things to do:
+They go on for a few turns. Zen's lines come from its own brain. When they are babble, Wren guesses
+kindly what Zen meant and says it back properly.
 
-- farm (wheat, carrots, pumpkins), bake, cook, fish, mine, milk the cow, collect eggs and honey;
-- craft tools: axe, fishing rod, pickaxe, chisel, hammer, kite, lantern;
-- trade at the market (coins circulate: sellers are paid, work earns wages);
-- complete the villagers' quests;
-- paint, compose and record, sculpt, build (benches, birdhouses, lamp posts, fountains, flower
-  beds), write, read, swim, fly a kite, build a snowman, stargaze.
+**Big jobs unfold into steps.** "Cook soup" means:
 
-**The villagers:** Mira (baker), Theo (librarian), Rowan (smith), Juniper (merchant), Finn (fisher),
-Sage (teacher) and Pip (a child who loves to play).
+1. take the pot and fill it at the sink;
+2. take a carrot from the pantry and put it in the pot;
+3. put the pot on the stove;
+4. fetch a log from the woodpile and put it in the stove;
+5. take the matches and light the stove;
+6. wait until it bubbles.
 
-**How conversations work.** Whoever has something to say starts the conversation and walks up
-to the other mind. Both stop. The speaker composes its line (a "…" bubble shows it thinking) while
-the listener waits. Then the listener composes its reply while the first one waits, for a few turns.
-Every line comes from that speaker's own mind. When Zen is nearby, it overhears and studies the
-conversation.
+Each step is a sentence Zen can learn ("I fill the pot at the sink."), whether Zen does it or
+watches Wren do it.
+
+## The homestead
+
+- **The house:**
+  - a living room with the fireplace, the sofa, the bookshelf and the piano;
+  - the kitchen with the stove and oven, the sink, the table, the pantry and the cat's bowl;
+  - Zen's little bedroom (bed, toy chest, music box);
+  - Wren's bedroom with a desk;
+  - the washroom with a bathtub and a mirror.
+- **Outside:**
+  - the porch;
+  - the workshop (workbench, quern, woodpile, seeds, tools, easel);
+  - the glass greenhouse, warm even in winter;
+  - the vegetable garden with its water barrel and scarecrow;
+  - the chicken coop;
+  - a small orchard with a swing;
+  - a pond with ducks, frogs and a jetty;
+  - a stream through the woods, a meadow with the beehive, and a lookout on the hill for the stars.
+
+Days, nights, seasons and weather pass:
+
+- rain, storms, fog, wind and snow;
+- a rainbow after the rain;
+- deer at dusk, an owl and a hedgehog at night.
 
 ## How it is built
 
 Three processes, so nothing can freeze anything else:
 
 ```
-   FineWeb ──┐                                ┌── llama.cpp servers on the CPU: the Oracle + one per villager
+   FineWeb ──┐                                ┌── Wren's mind: one llama.cpp server on the CPU (or Ollama)
              ▼                                ▼
  ┌────────────────────────┐ brain  ┌──────────────────────┐ events ┌─────────────────────────────┐
  │ ACADEMY (GPU)          │───────▶│ HUB                  │◀──────▶│ WORLD (CPU)                 │
- │ trains Zen's brain;    │ files  │ web page, schedule,  │        │ the valley, Zen's body and  │
- │ tests concepts;        │◀───────┤ voices, supervision  │        │ brain, the villagers' minds,│
- │ publishes new brains   │journal └─────────▲────────────┘        │ conversations, art, journal │
- └────────────────────────┘ lessons          │ WebSocket           └─────────────────────────────┘
+ │ trains Zen's brain;    │ files  │ web page, schedule,  │        │ the homestead and its       │
+ │ tests concepts;        │◀───────┤ Wren's words and     │        │ physics, Zen's body and     │
+ │ publishes new brains   │journal │ lessons, supervision │        │ brain, Wren's body and mind │
+ └────────────────────────┘ lessons└─────────▲────────────┘        └─────────────────────────────┘
+                                              │ WebSocket
                                        your browser (three.js)
 ```
 
 - **Zen's brain:** a modern small transformer (RMSNorm, rotary positions, QK-norm, SwiGLU, tied
   embeddings, logit soft-capping) trained with Muon and AdamW in bf16.
-  - **Vocabulary:** 32,768 tokens, trained on FineWeb (`tools/train_tokenizer.py`). It writes any
-    text, fits FineWeb a little better than GPT-2's 50,257, and leaves more of a small brain for
-    thinking.
+  - **Vocabulary:** 32,768 tokens, trained on FineWeb (`tools/train_tokenizer.py`).
   - **Loss:** the vocabulary loss and its gradient are computed in one pass.
-  - **Batch:** sized to the GPU's free memory, measured rather than found by running out (on
-    Windows that would quietly spill into RAM).
+  - **Batch:** sized to the GPU's free memory.
   - **Growth:** the brain grows new layers when learning plateaus.
-- **The GPU is for training.** Zen's brain lives on the CPU, sharing the physical cores with the
-  Oracle. The villagers' servers share one copy of their model. A priority gate lets a few of them
-  generate at once: conversation turns first, then decisions, naming their works, and thoughts.
+- **The GPU is for training.** Zen's brain thinks on the CPU, sharing the physical cores with
+  Wren's model. The 3D view asks the browser for the low-power GPU and draws at most 60 frames a
+  second.
 
 ```
 run.py               starts the Hub, which starts the Academy and the World
-ada/academy.py       training, evaluation, publishing        ada/model.py    the brain (and the fused loss)
-ada/life.py          the World process: Zen's day            ada/community.py the villagers' minds, conversations
-ada/world/sim.py     the valley                              ada/world/agent.py  words → plans → actions (for every mind)
-ada/world/art.py     paintings, melodies, sculptures         ada/journey.py  Zen's milestones
-ada/hub.py           processes, schedule, voices, browser    ada/villagers.py  the villagers' voices and prompts
-ada/localllm.py      llama.cpp servers                       ada/oracle.py   the Oracle (built-in or Ollama)
-ada/tokenizer.py     fineweb32k / gpt2 / bytes               ada/fineweb.py  FineWeb streaming
+ada/academy.py       training, evaluation, publishing        ada/model.py      the brain (and the fused loss)
+ada/life.py          the World process: Zen's day            ada/companion.py  Wren's body and mind, conversations
+ada/world/sim.py     the homestead and its physics           ada/world/agent.py  words → plans → steps → deeds
+ada/world/art.py     paintings, melodies, sculptures         ada/journey.py    Zen's milestones
+ada/hub.py           processes, schedule, Wren's model       ada/wren.py       everything Wren's model is asked
+ada/localllm.py      llama.cpp servers                       ada/oracle.py     reaching the model (built-in or Ollama)
+ada/tokenizer.py     fineweb32k / gpt2 / bytes               ada/fineweb.py    FineWeb streaming
 web/                 the page: world3d.js (three.js), minds.js, art.js, app.js
 tests/               python -m pytest tests
 ```

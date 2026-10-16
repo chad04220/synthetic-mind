@@ -1,34 +1,15 @@
-"""The Oracle: a local language model that knows far more than the synth and helps it learn.
+"""The language model behind Wren: how to reach it, whichever backend runs it.
 
-It never touches the synth's weights. It writes: lessons pitched at its stage (aimed first at the
-concepts its tests show it gets wrong, and at topics you ask for), answers to questions (its own,
-asked at the shrine, and yours), the books in the library, the reply the synth
-should have given you, and periodic assessments of how it uses language. Lessons and answers go
-into the curriculum the Academy studies; new facts go into the concept graph.
+Two backends: "builtin" (a llama.cpp server the Hub runs on the CPU, see localllm.py) and
+"ollama" (any model in a local Ollama). What the model is asked, and in whose voice, is in
+wren.py. It never touches the synth's weights.
 """
 from __future__ import annotations
 
 import json
-import random
 import re
 import urllib.error
 import urllib.request
-
-LEVEL = {
-    0: "a toddler's words: very short sentences of three to six common words",
-    1: "a toddler's words: very short sentences of three to six common words",
-    2: "a picture book: short, simple sentences with everyday words",
-    3: "an early reader: simple sentences, one idea each",
-    4: "plain English for a curious eight-year-old",
-    5: "clear English for a bright twelve-year-old",
-    6: "clear, thoughtful English for an adult",
-}
-TOPICS = ["the sun and the moon", "colors", "animals", "food", "water", "trees", "weather", "seasons",
-          "feelings", "friends", "numbers", "shapes", "day and night", "music", "books and words",
-          "the body", "families", "kindness", "how plants grow", "fire", "the sea", "stars", "time",
-          "machines", "maps", "questions", "memory", "learning", "light and shadow", "gravity",
-          "electricity", "cities", "history", "mathematics", "language", "thinking", "art", "honesty"]
-RELATIONS = "is a, color, is, made of, used for, found in, can"
 
 
 def clean(text: str) -> str:
@@ -145,72 +126,4 @@ class Oracle:
         try:
             return json.loads(self.chat(system, prompt, as_json=True, **kw))
         except ValueError:
-            return {}
-
-    # -- what the Oracle writes ---------------------------------------------------------
-    name = "Zen"                     # the synth the Oracle teaches (the Hub sets it)
-
-    @property
-    def SYSTEM(self) -> str:
-        return (f"You are the Oracle, a wise and gentle teacher of {self.name}, a young synth (an artificial mind) "
-                "who is learning language and the world from nothing. Write plain text only: no markdown, lists, "
-                "emojis or preamble.")
-
-    def lesson_pack(self, topic: str, stage: int, focus: list[str] | None = None) -> dict:
-        """A lesson, questions with answers, and facts for the concept graph."""
-        hint = f" Make sure to cover: {'; '.join(focus)}." if focus else ""
-        d = self._json(self.SYSTEM,
-                       f"Teach {self.name} about {topic}.{hint} Use {LEVEL[min(stage, 6)]}. Return JSON with keys: "
-                       '"lesson": a short paragraph of 4 to 8 sentences; '
-                       f'"qa": 3 objects with "q" (a question {self.name} might ask) and "a" (a short answer); '
-                       f'"facts": up to 8 objects with "s", "r", "o" where "r" is one of: {RELATIONS}, and "s" and '
-                       '"o" are one or two lowercase words (example: {"s": "moon", "r": "is", "o": "round"}).',
-                       temperature=0.8, max_tokens=700)
-        lesson = clean(str(d.get("lesson", "")))
-        qa = [(clean(str(x.get("q", ""))), clean(str(x.get("a", "")))) for x in d.get("qa", []) if isinstance(x, dict)]
-        facts = [x for x in d.get("facts", []) if isinstance(x, dict)]
-        return {"topic": topic, "lesson": lesson, "qa": [q for q in qa if q[0] and q[1]], "facts": facts}
-
-    def answer(self, question: str, stage: int, asker: str = "synth", **_) -> str:
-        """asker 'you': the synth's human friend asks; anything else: the synth asks."""
-        synth = asker != "you"
-        who = f"{self.name} asks you" if synth else f"{self.name}'s friend asks you"
-        if synth and not re.search(r"[a-z]{3}", question.lower()):
-            return self.chat(self.SYSTEM, f"{self.name} tries to ask a question but its words are still sounds. "
-                                          f"Say something kind and simple about asking questions, using {LEVEL[min(stage, 6)]}. "
-                                          "Two sentences.", max_tokens=120)
-        level = LEVEL[min(stage, 6)] if synth else "clear, friendly English"
-        return self.chat(self.SYSTEM, f'{who}: "{question}"\nAnswer in two to four sentences using {level}.',
-                         max_tokens=260)
-
-    def tutor(self, history: list, user: str, mind: str, stage: int, *_) -> str:
-        n = self.name
-        convo = "\n".join(f"{'Friend' if r == 'user' else n}: {t}" for r, t in history[-6:])
-        return self.chat(self.SYSTEM,
-                         f"{n} is talking with its friend.\n{convo}\nFriend: {user}\n{n} tried to say: \"{mind}\"\n\n"
-                         f"Write the reply {n} should learn to give: first person, honest about being a young mind who "
-                         f"is still learning, warm, at most three sentences, using {LEVEL[min(stage + 1, 6)]}. "
-                         f"Reply only with {n}'s words.", max_tokens=150)
-
-    def book(self, stage: int, topic: str | None = None) -> str:
-        topic = topic or random.choice(TOPICS)
-        return self.chat(self.SYSTEM, f"Write one page (5 to 8 sentences) of a book in the village library about "
-                                      f"{topic}, using {LEVEL[min(stage + 1, 6)]}. Start with a title line.",
-                         temperature=0.9, max_tokens=400)
-
-    def fact(self, topic: str, stage: int, *_) -> str:
-        return self.chat(self.SYSTEM, f"{self.name} looks through a telescope. Tell it one wonderful true fact about "
-                                      f"{topic} in two sentences, using {LEVEL[min(stage, 6)]}.", max_tokens=120)
-
-    def assess(self, thoughts: list[str], self_rate: float) -> dict:
-        sample = "\n".join(f"- {t}" for t in thoughts[-8:])
-        d = self._json(self.SYSTEM,
-                       f"These are recent inner thoughts of {self.name}, an artificial mind learning language from scratch:\n"
-                       f"{sample}\n\nRate them 0 to 10 for spelling (real words), grammar, coherence and meaning, "
-                       'and say in one short sentence what it is learning now. Return JSON: {"spelling": n, '
-                       '"grammar": n, "coherence": n, "meaning": n, "note": "..."}', temperature=0.2, max_tokens=200)
-        try:
-            return {k: float(d.get(k, 0)) for k in ("spelling", "grammar", "coherence", "meaning")} | \
-                {"note": str(d.get("note", ""))[:300]}
-        except (TypeError, ValueError):
             return {}

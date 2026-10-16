@@ -1,9 +1,10 @@
-"""The World process: where the synth lives.
+"""The World process: where the synth lives, with its companion.
 
-It runs the simulation, keeps the synth's brain (the latest one the Academy published), and lets
-that brain decide what it does, think out loud and talk. Everything it lives through is written
-to its journal for the Academy to study. Nothing here trains; when night falls it goes to bed, its
-brain rests, and the Academy gets the GPU to itself.
+It runs the homestead, keeps the synth's brain (the latest one the Academy published) and lets that
+brain decide what the synth does, think out loud and talk. It also runs Wren's body and mind
+(companion.py), asking the Hub's language model for Wren's choices and words. Everything the synth
+lives through (what it sensed, what it did and how that turned out, what Wren said and did near
+it, its conversations, the stories at bedtime) is written to its journal for the Academy to study.
 """
 from __future__ import annotations
 
@@ -16,12 +17,12 @@ import time
 from collections import deque
 from pathlib import Path
 
-from .community import Community
+from .companion import Companion
 from .config import AdaConfig, cpu_threads
-from .ontology import KINDS, NPCS
+from .ontology import KINDS
 from .proc import Link, append_jsonl, pick_device, write_json
 from .world import agent as ag
-from .world.sim import World, where as where_words
+from .world.sim import World
 
 ROLE_TOKENS = ["<|endoftext|>", "<|thought|>", "<|user|>", "<|mind|>", "<|oracle|>", "<|world|>", "<|intent|>", "<|npc|>"]
 
@@ -42,13 +43,13 @@ def run(name: str, root: str, inbox, outbox):
 
 
 class Speaker:
-    """Runs Ada's brain on its own thread, so the world never waits for her words.
+    """Runs the synth's brain on its own thread, so the world never waits for its words.
 
-    Requests (load a new brain, a reply to you, something to say, an intention, a thought) are
+    Requests (load a new brain, a reply to you, a conversation turn, an intention, a thought) are
     queued by urgency and answered one at a time; the World collects the answers each loop. With
     threaded=False (tests) a request is answered on the spot."""
 
-    PRIORITY = {"load": 0, "chat": 1, "speech": 2, "intent": 3, "thought": 4}
+    PRIORITY = {"load": 0, "chat": 1, "speech": 2, "intent": 3, "create": 4, "thought": 5}
 
     def __init__(self, life: "Life", threaded: bool = True):
         self.life, self.threaded = life, threaded
@@ -78,7 +79,7 @@ class Speaker:
             self.busy[kind] -= 1
             callback(work())
             return
-        self.jobs.put((self.PRIORITY.get(kind, 5), next(self.seq), kind, work, callback, time.perf_counter()))
+        self.jobs.put((self.PRIORITY.get(kind, 6), next(self.seq), kind, work, callback, time.perf_counter()))
 
     def _run(self):
         perf = self.life.link.perf
@@ -107,7 +108,7 @@ class Speaker:
                 callback(result)
 
 
-class Life(Community):
+class Life:
     def __init__(self, folder: Path, link: Link, with_brain: bool = True, threaded: bool = True):
         from .tokenizer import make_tokenizer
 
@@ -122,24 +123,26 @@ class Life(Community):
         self.brain_version = 0
         self.brain_meta: dict = {}
         self.rng = random.Random()
-        self.world = World(name=self.cfg.name)
-        self.greeted: dict[str, float] = {}           # villager -> when they last greeted the synth
-        self.last_greet = 0.0
-        self.speech_queue: list[tuple[float, str, str]] = []   # (when, villager, line): banter, said in turn
+        self.world = World(name=self.cfg.name, companion=self.cfg.companion)
+        self.world.day_seconds = self.day_seconds
         self.plan: ag.Plan | None = None
-        self.decisions: deque = deque(maxlen=60)      # "self" | "needs" | "you"
+        self.decisions: deque = deque(maxlen=60)      # "self" | "needs" | "you" | "companion"
+        self.recent_goals: deque = deque(maxlen=8)
         self.memory: list[int] = []
         self.thoughts: deque = deque(maxlen=120)
         self.chat_log: list[dict] = []
         self.next_thought = time.time() + 3
         self.asked_at = 0.0
-        self.pending: dict[str, dict] = {}            # oracle requests in flight
+        self.pending: dict[str, dict] = {}            # language-model requests in flight
         self.last_intent: dict = {}
+        self.last_speech = ""                         # the synth's latest words out loud
         self.bedtime = False
-        self.intent_wait: tuple | None = None          # (request number, since, perception) while she finds words
+        self.voice_ready = False                      # the Hub says Wren's language model is up
+        self.intent_wait: tuple | None = None          # (request number, since, perception) while it finds words
         self.intent_seq = itertools.count()
         self.speaker = Speaker(self, threaded and with_brain)
-        self.init_community()
+        self.companion = Companion(self)
+        self.minds_cast = 0.0
         self.load()
 
     # ------------------------------------------------------------------ brain
@@ -150,6 +153,10 @@ class Life(Community):
     @property
     def night_seconds(self) -> float:
         return self.cfg.world.night_minutes * 60
+
+    def clock_now(self) -> float:
+        """The world's own clock (seconds): conversations keep time with the world, not the wall."""
+        return self.world.tick_n * self.cfg.world.tick
 
     def maybe_load_brain(self):
         meta_path = self.folder / "brain" / "latest.json"
@@ -164,7 +171,7 @@ class Life(Community):
         self.speaker.ask("load", lambda: self._load_brain(meta), self._use_brain)
 
     def use_cpu_threads(self):
-        """On the CPU her brain uses its share of the physical cores (see config.cpu_threads)."""
+        """On the CPU the synth's brain uses its share of the physical cores (see config.cpu_threads)."""
         if self.device is None or self.device.type != "cpu":
             return
         import torch
@@ -197,7 +204,7 @@ class Life(Community):
 
     def say_async(self, kind: str, parts, callback, prefix: str = "", max_new: int = 24, temperature: float = 0.8,
                   stop_text=None, ids: list[int] | None = None):
-        """Ask her brain for words after a prompt; callback(text, tokens, raw) runs later on this thread."""
+        """Ask the brain for words after a prompt; callback(text, tokens, raw) runs later on this thread."""
         from .tokenizer import encode_parts
 
         prompt = ids if ids is not None else encode_parts(self.tok, parts) + self.tok.encode(prefix)
@@ -215,7 +222,7 @@ class Life(Community):
 
         self.speaker.ask(kind, work, done)
 
-    # ------------------------------------------------------------------ journal
+    # ------------------------------------------------------------------ journal and the Hub
     def journal(self, kind: str, parts, weight: float = 1.0):
         parts = [[r, t] for r, t in parts if t]
         if parts:
@@ -223,11 +230,11 @@ class Life(Community):
                                                          "weight": round(weight, 3)})
 
     def oracle(self, purpose: str, **payload) -> str:
-        """Ask the Hub's Oracle something; the answer arrives later as an 'oracle_reply' command."""
+        """Ask the Hub's language model (Wren's mind) for something; the answer arrives as 'oracle_reply'."""
         rid = f"w{time.time_ns()}"
         self.pending[rid] = {"purpose": purpose, "rid": rid, **payload}
         self.link.send("oracle", rid=rid, purpose=purpose, payload=payload,
-                       stage=self.brain_meta.get("stage_name", "Static"))
+                       stage=int(self.brain_meta.get("stage", 0) or 0))
         return rid
 
     # ------------------------------------------------------------------ time of day
@@ -235,9 +242,10 @@ class Life(Community):
         w = self.world
         if w.phase == "day" and w.phase_t >= self.day_seconds and not self.bedtime:
             self.bedtime = True
-            w.note("The sun is setting. It is time to go to bed.")
-            self.set_plan(ag.Goal("sleep", "bed", text="I go to bed and sleep.", reason="It is getting dark. I am sleepy.",
-                                  source="needs"))
+            w.event("dusk", "The sun is setting. It is almost bedtime.")
+            if not w.ada.sleeping and not (self.plan and self.plan.goal.verb == "sleep"):
+                self.set_plan(ag.Goal("sleep", "bed", text="I go to bed and sleep.", reason="It is getting dark. I am sleepy.",
+                                      source="needs"))
         if self.bedtime and (w.ada.sleeping or w.phase_t >= self.day_seconds + 90):
             self.nightfall()
         if w.phase == "night" and w.phase_t >= self.night_seconds:
@@ -245,12 +253,17 @@ class Life(Community):
 
     def nightfall(self):
         w, a = self.world, self.world.ada
-        bed = w.nearest("bed", (a.x, a.y))
+        bed = w.nearest("bed", (a.x, a.y), where=lambda e: e.get("owner") == "synth")
         if bed and abs(bed["x"] - a.x) + abs(bed["y"] - a.y) > 1:
-            a.x, a.y = bed["x"] + 1, bed["y"]            # too far from bed: she's carried home asleep
+            spot = w.free_spot(bed["x"], bed["y"], 1) or (bed["x"] + 1, bed["y"])
+            a.x, a.y = spot                                # carried to bed, fast asleep
+            w.event("carried", f"{w.wren.name} carries {a.name} to bed.")
+        if self.companion.talk:
+            self.companion.end_talk()
         a.sleeping, self.plan, self.bedtime = True, None, False
         w.phase, w.phase_t = "night", 0.0
-        w.note(f"Night falls. {self.cfg.name} sleeps, and while it sleeps it studies.")
+        w.event("night", f"Night falls. {a.name} sleeps, and while it sleeps it studies.")
+        self.companion.bedtime_story()
         self.link.send("phase", phase="night", day=w.day)
         self.save()
 
@@ -260,26 +273,35 @@ class Life(Community):
         w.phase, w.phase_t = "day", 0.0
         w.ada.sleeping = False
         w.needs["rest"] = 100.0
-        w.note(f"Good morning! Day {w.day} begins.")
+        w.event("dawn", f"Good morning! Day {w.day} begins.")
         self.link.send("phase", phase="day", day=w.day)
         self.maybe_load_brain()
 
     # ------------------------------------------------------------------ deciding and doing
-    def set_plan(self, goal: ag.Goal) -> bool:
-        p, why = ag.plan(self.world, goal)
+    def independence(self) -> float:
+        return {2: 0.12, 1: 0.55, 0: 0.9}[self.companion.care()]
+
+    def set_plan(self, goal: ag.Goal, chain: list | None = None) -> bool:
+        p, why = ag.plan(self.world, goal, self.world.ada)
         if not p:
             self.world.note(why)
             return False
         p.perception = self.world.perceive(self.day_seconds)
         p.wellbeing_before = self.world.wellbeing()
+        p.then += chain or []
         self.plan = p
-        self.last_intent = {"text": p.goal.text or ag.say(p.goal), "source": p.goal.source,
+        self.recent_goals.append(goal)
+        self.last_intent = {"text": p.goal.text or ag.say(p.goal, self.cfg.companion), "source": p.goal.source,
                             "reason": p.goal.reason, "t": time.time()}
         self.link.send("event", kind="intent", **self.last_intent)
         return True
 
+    def names(self) -> dict[str, str]:
+        w = self.world
+        return {w.wren.name.lower(): w.wren.name, w.ada.name.lower(): w.ada.name}
+
     def decide(self):
-        """Ask her brain what she wants to do. While it finds words she waits; after 3 s her needs decide."""
+        """Ask the brain what it wants to do. While it finds words the synth waits; after 3 s its needs decide."""
         w = self.world
         if self.intent_wait:
             if time.time() - self.intent_wait[1] > 3.0:
@@ -297,30 +319,39 @@ class Life(Community):
 
     def on_intent(self, req: int, perception: str, own: str, toks):
         if not self.intent_wait or self.intent_wait[0] != req or self.plan or self.world.ada.sleeping:
-            return                     # too late: her needs already chose, or she fell asleep
+            return
         self.intent_wait = None
         self.choose(perception, own, toks)
 
     def choose(self, perception: str, own: str, toks):
         w = self.world
         own = own.strip() if self.brain is not None else ""
-        goal = ag.parse(own) if own else None
-        if goal and goal.verb != "wait":
+        goal = ag.parse(own, self.names()) if own else None
+        if goal and goal.verb not in ("rest",):
             goal.source, goal.text = "self", own.split(".")[0] + "."
             if self.set_plan(goal):
                 self.decisions.append("self")
                 return
-        g = ag.drives(w, self.rng, time.time() - self.asked_at < 300,
-                      any(e["kind"] == "book" and e["id"] not in w.read_books for e in w.entities.values()))
+        g = ag.drives(w, self.rng, w.ada, self.independence(), time.time() - self.asked_at < 240, w.wren,
+                      [f"{x.verb}:{x.obj}" for x in self.recent_goals])
         if own:
             self.link.send("event", kind="tried", text=own, tokens=toks)
         if self.set_plan(g):
             self.decisions.append("needs")
         else:
-            self.set_plan(ag.Goal("wait", text="I rest for a while.", source="needs"))
+            self.set_plan(ag.Goal("rest", text="I rest for a while.", source="needs"))
+
+    def companion_suggests(self, goal: ag.Goal):
+        """Wren tells the synth what to do; it does it (and learns the words that go with it)."""
+        w = self.world
+        if w.ada.sleeping or w.ada.engaged is not None or (self.plan and self.plan.goal.source == "you"):
+            return
+        goal.source = "companion"
+        goal.text = goal.text or ag.say(goal, self.cfg.companion)
+        if self.set_plan(goal):
+            self.decisions.append("companion")
 
     def walk(self):
-        """Follow the synth's plan one step, or act when there."""
         result = self.advance(self.world.ada, self.plan)
         if result is not None:
             self.finish(*result)
@@ -329,8 +360,10 @@ class Life(Community):
         """One step of any mind's plan. Returns (ok, narration, info) when it is done, else None."""
         w = self.world
         p.ticks += 1
+        if p.target is None:
+            return ag.act(w, p, a)
         tp = ag.target_pos(w, p)
-        if tp is None or p.ticks > 400:
+        if tp is None or p.ticks > 500:
             return False, "I could not get there.", {}
         tx, ty, adjacent = tp
         arrived = (abs(tx - a.x) + abs(ty - a.y) == 1) if adjacent else ((a.x, a.y) == (tx, ty))
@@ -347,11 +380,12 @@ class Life(Community):
         nx, ny = p.route[0]
         blocker = next((b for b in w.beings() if b is not a and (b.x, b.y) == (nx, ny)), None)
         if blocker is not None:
-            if blocker is w.visitor or blocker.engaged is not None or blocker is w.ada:
-                if p.ticks % 6 == 0:
-                    p.route = []                     # find a way around
-                return None
-            blocker.x, blocker.y = a.x, a.y          # a villager steps aside
+            if p.ticks % 6 == 0:
+                p.route = []                     # find a way around
+            if p.ticks % 20 == 0 and blocker is not w.visitor and blocker.engaged is None:
+                blocker.x, blocker.y, a.x, a.y = a.x, a.y, nx, ny     # squeeze past each other
+                p.route.pop(0) if p.route else None
+            return None
         p.route.pop(0)
         ag.face(w, nx, ny, a)
         a.x, a.y = nx, ny
@@ -359,12 +393,13 @@ class Life(Community):
             place = w.place_of(nx, ny)
             if place not in w.visited:
                 w.visited.add(place)
-                w.note(f"I arrive in the {place} for the first time.")
+                w.note(f"I come to {place if place.startswith('the') else 'the ' + place} for the first time.")
         return None
 
     def finish(self, ok: bool, narration: str, info: dict):
         w, p = self.world, self.plan
         self.plan = None
+        w.ada.activity = ""
         g = p.goal
         key = f"{g.verb}:{g.obj}"
         novelty = 0.0
@@ -374,101 +409,105 @@ class Life(Community):
         reward = (w.wellbeing() - p.wellbeing_before) * 10 + novelty + (0.2 if ok else -0.3)
         w.note(narration)
         self.link.send("event", kind="did", text=narration, ok=ok, source=g.source, reward=round(reward, 2))
-        weight = (2.0 if g.source in ("self", "you") else 1.0) + max(0.0, reward)
+        weight = (2.0 if g.source in ("self", "you", "companion") else 1.0) + max(0.0, reward)
         if not ok:
             weight = 0.3 if g.source == "self" else 0.0
         if weight > 0:
             self.journal("deed", [("<|world|>", p.perception), ("<|thought|>", g.reason),
-                                  ("<|intent|>", g.text or ag.say(g)), ("<|thought|>", narration)], weight)
+                                  ("<|intent|>", g.text or ag.say(g, self.cfg.companion)), ("<|thought|>", narration)], weight)
+        if self.companion.near_zen(6) and ok:
+            self.companion.note(ag.third(narration.split(". ")[0], w.ada.name))
         self.consequences(info, p.perception)
-
-    def npc_context(self, who: str) -> dict:
-        w = self.world
-        p = w.people.get(who)
-        q = next((q for q in w.quests if q["giver"] == who), None)
-        return {"time": w.time_of_day(self.day_seconds), "season": w.season, "weather": w.weather,
-                "where": where_words(w.place_of(p.x, p.y)) if p else "in the village",
-                "friendship": round(w.friends.get(who, 0)),
-                "quest": (KINDS[q["want"]]["noun"] if q["count"] == 1 else f"{q['count']} of {q['want']}") if q else ""}
-
-    def villager_reacts(self, who: str, kind: str, said: str = "", **ctx):
-        """A villager has something to say to the synth: it starts a conversation (or, if one of them is
-        busy, just says it)."""
-        topic = {"gift": f"thanking {self.cfg.name} for {ctx.get('gift', 'a present')}",
-                 "quest": f"thanking {self.cfg.name} for doing what they asked; they gave it {ctx.get('reward', 'some')} coins",
-                 "greet": "saying hello and asking how it is"}.get(kind, "")
-        if topic and self.start_talk(who, self.cfg.name, topic, turns=random.choice([2, 3])):
-            return
-        self.oracle("npc", npc=who, said=said, kind=kind, ctx=self.npc_context(who) | ctx)
+        if ok and p.then:
+            nxt = p.then.pop(0)
+            if not self.set_plan(nxt, p.then):
+                self.world.note(f"I could not {ag.say(nxt)[2:].rstrip('.').lower()}.")
 
     def consequences(self, info: dict, perception: str):
-        """Things that need words from the brain, a villager or the Oracle."""
+        """Things that need words: the synth's brain, or Wren."""
         w = self.world
-        if "quest_done" in info:
-            q = info["quest_done"]
-            self.link.send("event", kind="quest", text=f"Quest done for {q['giver']}: +{q['reward']} coins", quest=q)
-            self.villager_reacts(q["giver"], "quest", reward=q["reward"])
-        elif "gave" in info and info["gave"][1] in NPCS:
-            self.villager_reacts(info["gave"][1], "gift", gift=KINDS[info["gave"][0]]["noun"])
-        elif "talk" in info and info["talk"] in NPCS and self.start_talk(self.cfg.name, info["talk"]):
-            pass                                         # a conversation, turn by turn
-        elif "talk" in info:
+        c = self.companion
+        if "talk" in info:
             who = info["talk"]
-
-            def spoken(line, toks, _):
-                line = line.strip()
-                if line:
-                    w.ada.say(line)
-                if who == "friend":
-                    self.link.send("event", kind="ada_says", text=line, to="friend")
-                else:
-                    self.villager_reacts(who, "talk", said=line)
-
-            self.say_async("speech", [("<|world|>", perception), ("<|mind|>", "")], spoken, max_new=20,
-                           temperature=self.cfg.world.reply_temperature)
-        if "created" in info:
-            self.link.send("event", kind="created", creation=info["created"])
-            self.synth_creates(info["created"])
+            if who == w.wren.name:
+                if not c.start_talk(w.ada.name):
+                    self.say_out_loud(perception)
+            else:
+                self.say_out_loud(perception, to="friend")
+        if info.get("near") == w.wren.name:
+            c.zen_came(self.last_intent.get("reason", ""))
         if "ask" in info:
             self.asked_at = time.time()
-            self.oracle("answer", question=info["ask"])
-        if "learn" in info:
-            from .oracle import TOPICS
-
-            self.oracle("lesson", topic=self.rng.choice(TOPICS), ctx=self.npc_context("Sage"))
+            q = info["ask"]
+            self.last_speech = q
+            w.ada.say(q, 6)
+            if self.cfg.oracle.enabled and self.voice_ready:
+                self.oracle("wren_answer", question=q, situation=w.perceive(me=w.wren))
+            else:
+                c.speak(c.simple_answer(q), kind="answer")
+        if "created" in info:
+            self.link.send("event", kind="created", creation=info["created"])
+            self.synth_creates(info["created"], info)
         if "read" in info:
             book = info["read"]
             w.read_books.add(book["id"])
             if book.get("text"):
                 self.read_text(book)
-            else:
-                self.oracle("book", entity=book["id"], kind=book["kind"])
-        if "stars" in info:
-            self.oracle("fact", topic="the stars, the moon and the planets")
+            elif self.voice_ready:
+                self.oracle("wren_book", entity=book["id"], kind=book["kind"])
+        if "stars" in info and self.voice_ready:
+            self.oracle("wren_star")
+        if info.get("mirror"):
+            self.journal("self", [("<|thought|>", f"I look in the mirror. That is me. I am {w.ada.name}. "
+                                                  f"I am a synth. {w.wren.name} is my companion.")], 2.0)
+        if info.get("slept"):
+            w.ada.sleeping = True
 
-    def neighbours(self):
-        """Villagers who pass the synth like to stop and say hello."""
-        w, a, now = self.world, self.world.ada, time.time()
-        if a.sleeping or a.engaged is not None or now - self.last_greet < 30:
-            return
-        for name, p in w.people.items():
-            if p.sleeping or p.engaged is not None or abs(p.x - a.x) + abs(p.y - a.y) > 3 \
-                    or now - self.greeted.get(name, 0) < 300:
-                continue
-            self.greeted[name] = self.last_greet = now
-            self.villager_reacts(name, "greet")
-            break
+    def say_out_loud(self, perception: str, to: str = ""):
+        def spoken(line, toks, _):
+            line = line.strip()
+            if line:
+                self.world.ada.say(line)
+                self.last_speech = line
+                self.companion.notice_words(line)
+            self.link.send("event", kind="ada_says", text=line, to=to or self.cfg.companion)
 
-    def banter(self):
-        """Two villagers near each other start a conversation."""
+        self.say_async("speech", [("<|world|>", perception), ("<|mind|>", "")], spoken, max_new=20,
+                       temperature=self.cfg.world.reply_temperature)
+
+    def synth_turn(self, t):
+        """The synth's turn in a conversation with Wren: its own brain finds the words."""
         w = self.world
-        free = [(n, p) for n, p in w.people.items() if not p.sleeping and p.engaged is None]
-        pairs = [(a, b) for i, (a, pa) in enumerate(free) for b, pb in free[i + 1:]
-                 if abs(pa.x - pb.x) + abs(pa.y - pb.y) <= 6]
-        if not pairs:
-            return False
-        a, b = self.rng.choice(pairs)
-        return self.start_talk(a, b)
+        if self.brain is None:
+            self.companion.talk_line(t.id, "…")
+            return
+        parts = [("<|world|>", w.perceive(self.day_seconds))]
+        for who, line in t.history[-6:]:
+            parts.append(("<|mind|>", line) if who == w.ada.name else ("<|npc|>", f"{who}: {line}"))
+        parts.append(("<|mind|>", ""))
+        self.say_async("speech", parts, lambda text, toks, _: self.companion.talk_line(t.id, text.strip() or "…"),
+                       max_new=24, temperature=self.cfg.world.reply_temperature)
+
+    def synth_creates(self, c: dict, info: dict):
+        """The synth names what it made, in its own words (and writes its poems itself)."""
+        w = self.world
+        if info.get("write"):
+            def wrote(text, toks, _):
+                w.update_creation(c["id"], text=text.strip(), title=(text.strip().split(".")[0][:40] or "A poem"))
+                self.link.send("event", kind="created", creation=c)
+
+            self.say_async("create", [("<|world|>", w.perceive(self.day_seconds)), ("<|thought|>", "I write a poem:"),
+                                      ("<|mind|>", "")], wrote, max_new=40, temperature=0.95)
+            return
+
+        def named(text, toks, _):
+            title = text.strip().split(".")[0][:40]
+            if title:
+                w.update_creation(c["id"], title=title)
+                self.link.send("event", kind="created", creation=c)
+
+        self.say_async("create", [("<|thought|>", f"I made {ag.noun(KINDS.get(c['kind'], {}) and c['kind'] or c['kind'])}. "
+                                                  "I call it:"), ("<|mind|>", "")], named, max_new=8, temperature=0.9)
 
     def read_text(self, book: dict):
         text = book["text"]
@@ -498,7 +537,7 @@ class Life(Community):
         self.say_async("thought", None, thought, max_new=cfg.thought_tokens, temperature=cfg.thought_temperature, ids=ids)
 
     def chat(self, text: str, rid=None):
-        """Ada answers you. Returns the reply when it's ready at once; otherwise replies to `rid` later."""
+        """The synth answers you. Returns the reply when it's ready at once; otherwise replies to `rid` later."""
         w = self.world
         if w.ada.sleeping:
             return {"asleep": True, "text": ""}
@@ -513,12 +552,14 @@ class Life(Community):
         def replied(reply, toks, _):
             reply = reply.strip()
             w.ada.say(reply or "…")
+            self.last_speech = reply
+            self.companion.notice_words(reply)
             self.chat_log += [{"role": "user", "text": text, "t": time.time()},
                               {"role": "mind", "text": reply, "tokens": toks, "t": time.time(), "brain": self.brain_version}]
             self.chat_log = self.chat_log[-200:]
             self.journal("heard", [("<|user|>", text)], 1.5)
             w.needs["company"] = min(100, w.needs["company"] + 8)
-            if self.cfg.oracle.tutor_replies:
+            if self.cfg.oracle.tutor_replies and self.voice_ready:
                 self.oracle("tutor", history=[[m["role"], m["text"]] for m in self.chat_log[-8:-2]], user=text, mind=reply)
             answer.update(text=reply, tokens=toks, brain=self.brain_version)
             if rid is not None:
@@ -532,71 +573,60 @@ class Life(Community):
         req = self.pending.pop(rid, None)
         if req is None:
             return
-        if req["purpose"] in ("turn", "intent", "thought", "create"):
-            self.community_reply(req["purpose"], req, text, extra or {})
+        extra = extra or {}
+        w, purpose, c = self.world, req["purpose"], self.companion
+        if purpose == "wren_decide":
+            c.on_decision(rid, extra.get("decision") or {})
+            return
+        if purpose == "wren_turn":
+            c.talk_line(req["talk"], text)
             return
         if not text:
             return
-        w, purpose = self.world, req["purpose"]
-        a = w.ada
-        if purpose in ("npc", "visitor_npc", "lesson"):
-            name = req.get("npc", "Sage")
-            p = w.people.get(name)
-            if p:
-                p.say(text, 9)
-            near = p is not None and abs(p.x - a.x) + abs(p.y - a.y) <= 8
-            if near or purpose != "visitor_npc":
-                w.hear(name, text)
-            to = "you" if purpose == "visitor_npc" else self.cfg.name
-            self.link.send("event", kind="npc", name=name, text=text, said=req.get("said", ""), to=to,
-                           why=req.get("kind", purpose))
-            if purpose == "lesson":
-                self.journal("lesson", [("<|thought|>", "I am at school. Sage teaches me."), ("<|npc|>", f"Sage: {text}")], 2.5)
-            elif purpose == "visitor_npc":
-                if near:
-                    self.journal("overheard", [("<|user|>", req["said"]), ("<|npc|>", f"{name}: {text}")], 1.2)
-            else:
-                self.journal("conversation", [("<|mind|>", req.get("said", "")), ("<|npc|>", f"{name}: {text}")], 1.5)
-        elif purpose == "banter":
-            lines = [tuple(x) for x in (extra or {}).get("lines", []) if len(x) == 2]
-            now = time.time()
-            for i, (who, line) in enumerate(lines):
-                self.speech_queue.append((now + i * 4.5, who, line))
-                self.link.send("event", kind="npc", name=who, text=line, to=(lines[1 - i % 2][0] if len(lines) > 1 else ""),
-                               why="banter")
-            if lines and any(abs(w.people[x].x - a.x) + abs(w.people[x].y - a.y) <= 10 for x, _ in lines if x in w.people):
-                self.journal("overheard", [("<|npc|>", f"{who}: {line}") for who, line in lines], 1.3)
-        elif purpose == "answer":
-            w.hear("the Oracle", text)
-            w.note(f'The Oracle answers: "{text[:160]}"')
-            self.link.send("event", kind="oracle", question=req["question"], text=text, by=self.cfg.name)
-            self.journal("oracle", [("<|mind|>", req["question"]), ("<|oracle|>", text)], 3.0)
+        if purpose == "wren_answer":
+            c.speak(text, kind="answer")
+            self.link.send("event", kind="answer", question=req["question"], text=text, by=self.cfg.name)
+            self.journal("answer", [("<|world|>", w.perceive(self.day_seconds)), ("<|mind|>", req["question"]),
+                                    ("<|npc|>", f"{w.wren.name}: {text}")], 3.0)
+            c.note(f'{w.ada.name} asked me: "{req["question"]}"')
+        elif purpose == "wren_story":
+            c.tell_story(text)
+        elif purpose == "wren_star":
+            c.speak(text, kind="fact")
+            self.journal("observation", [("<|thought|>", "We look at the night sky."), ("<|npc|>", f"{w.wren.name}: {text}")], 2.0)
+        elif purpose == "wren_name":
+            work = req.get("work") or {}
+            w.update_creation(work.get("id", 0), title=text[:60])
+            cc = next((x for x in w.creations if x["id"] == work.get("id")), None)
+            if cc:
+                self.link.send("event", kind="created", creation=cc)
+        elif purpose == "wren_visitor":
+            c.speak(text, kind="visitor")
+            self.link.send("event", kind="npc", name=w.wren.name, text=text, said=req.get("said", ""), to="you")
+            if c.near_zen(8):
+                self.journal("overheard", [("<|user|>", req["said"]), ("<|npc|>", f"{w.wren.name}: {text}")], 1.2)
         elif purpose == "tutor":
             self.link.send("event", kind="tutor", user=req["user"], mind=req["mind"], text=text)
             parts = [("<|user|>" if r == "user" else "<|mind|>", t) for r, t in req.get("history", [])]
             self.journal("tutored", parts + [("<|user|>", req["user"]), ("<|mind|>", text)], 3.0)
-        elif purpose == "book":
-            e = w.entities.get(req["entity"]) or next((x for x in w.ada.carrying if x["id"] == req["entity"]), None)
+        elif purpose == "wren_book":
+            e = w.find(req["entity"])
             if e is not None:
                 e["text"] = text
                 w.touch(e)
                 self.read_text(e)
-        elif purpose == "fact":
-            w.note(text[:200])
-            self.link.send("event", kind="fact", text=text)
-            self.journal("observation", [("<|thought|>", "I look at the night sky."), ("<|oracle|>", text)], 2.0)
 
     # ------------------------------------------------------------------ you
     def visitor(self, action: str, kind: str = "", text: str = "", msg: dict | None = None):
-        """You, in the world: walk, carry, give, hug, talk to the synth and to the villagers."""
+        """You, at the homestead: walk, carry, give, hug, talk to the synth and to Wren."""
         w, msg = self.world, msg or {}
-        name = self.cfg.name
+        name, wren = self.cfg.name, w.wren
         if action == "join":
             w.join()
-            return f"You are in the valley. Walk with WASD and the mouse; {name} can see you."
+            return f"You are at the homestead. Walk with WASD and the mouse; {name} and {wren.name} can see you."
         if action == "leave":
             w.leave()
-            return "You left the valley."
+            return "You left the homestead."
         v = w.visitor
         if not v:
             return "Join the world first."
@@ -618,9 +648,8 @@ class Life(Community):
                 return f"You can only hold small things (not {kind})."
             if len(v.carrying) >= 6:
                 return "Your hands are full."
-            e = {"id": w.next_id, "kind": kind, "x": v.x, "y": v.y}
-            w.next_id += 1
-            if kind == "book" and text:
+            e = w.make(kind)
+            if kind in ("book", "picture book") and text:
                 e["text"] = text
                 self.journal("written", [("<|oracle|>", text)], 2.0)
             v.carrying.append(e)
@@ -631,40 +660,39 @@ class Life(Community):
                 e = w.entities.get(int(target.get("id", -1)))
                 if not e:
                     return "It's gone."
-                if e.get("text") and e["kind"] in ("sign", "book"):
-                    return f"{KINDS[e['kind']]['noun'].capitalize()} says: {e['text']}"
-                if KINDS[e["kind"]].get("portable"):
-                    if e["kind"] == "coin":
-                        w.remove(e)
-                        w.coins += 1
-                        return f"You drop the coin in {name}'s purse ({w.coins} coins)."
+                k = KINDS[e["kind"]]
+                if e.get("text") and e["kind"] in ("sign", "book", "picture book"):
+                    return f"{k['noun'].capitalize()} says: {e['text']}"
+                if e.get("items") and not k.get("portable"):
+                    return f"{w.describe_thing(e).capitalize()} holds: " + \
+                        (", ".join(KINDS[i["kind"]]["noun"] for i in e["items"]) or "nothing")
+                if k.get("portable"):
                     if len(v.carrying) >= 6:
                         return "Your hands are full."
                     w.remove(e)
                     v.carrying.append(e)
-                    return f"You pick up {KINDS[e['kind']]['noun']}."
-                if KINDS[e["kind"]].get("creature"):
-                    return f"You pet {KINDS[e['kind']]['noun']}. It says {KINDS[e['kind']].get('sound', 'nothing')}."
-                return f"{KINDS[e['kind']]['noun'].capitalize()}: {KINDS[e['kind']]['used_for']}."
+                    return f"You pick up {k['noun']}."
+                if k.get("creature"):
+                    return f"You pet {k['noun']}. It says {k.get('sound', 'nothing')}."
+                return f"{w.describe_thing(e).capitalize()}: {k['used_for']}."
             if target.get("kind") == "person":
                 return {"talk_to": target.get("name")}
             if target.get("kind") == "synth":
                 return {"talk_to": name}
             return ""
-        if action == "say":                      # you talk to a villager
-            who = msg.get("to") or ""
-            p = w.people.get(who)
-            if not p:
-                return "Nobody by that name is here."
-            if abs(p.x - v.x) + abs(p.y - v.y) > 4:
-                return f"Walk up to {who} first."
+        if action == "say":                      # you talk to Wren
+            if abs(wren.x - v.x) + abs(wren.y - v.y) > 4:
+                return f"Walk up to {wren.name} first."
             v.say(text)
-            if p.engaged is None:
-                p.say("…", 60)
-            if abs(p.x - a.x) + abs(p.y - a.y) <= 8:
+            if abs(wren.x - a.x) + abs(wren.y - a.y) <= 8:
                 w.hear("my friend", text)
-            self.oracle("visitor_npc", npc=who, said=text, ctx=self.npc_context(who))
-            return f"{who} is listening…"
+            if not self.voice_ready:
+                return f"{wren.name} smiles. (Wren's voice is still starting.)"
+            wren.say("…", 30)
+            self.oracle("wren_visitor", said=text, situation=w.perceive(me=wren),
+                        about=self.companion.synth_state() + f" Stage: {self.brain_meta.get('stage_name', 'Static')}. "
+                              f"Words heard so far: {', '.join(list(self.companion.zen_words)[:12]) or 'none yet'}.")
+            return f"{wren.name} is listening…"
         if action == "take":
             for e in w.at(v.x, v.y) + [x for d in ((0, 1), (1, 0), (0, -1), (-1, 0)) for x in w.at(v.x + d[0], v.y + d[1])]:
                 if KINDS[e["kind"]].get("portable") and len(v.carrying) < 6:
@@ -676,9 +704,7 @@ class Life(Community):
             if not v.carrying:
                 return "Your hands are empty."
             e = v.carrying.pop()
-            e["x"], e["y"] = v.x, v.y
-            w.entities[e["id"]] = e
-            w.touch(e)
+            w.put(e, v.x, v.y)
             return f"You put down {KINDS[e['kind']]['noun']}."
         if action == "give":
             if not v.carrying:
@@ -687,17 +713,14 @@ class Life(Community):
                 return f"Walk right up to {name} to give it something."
             e = v.carrying.pop()
             what = KINDS[e["kind"]]["noun"]
-            if e["kind"] == "coin":
-                w.coins += 1
-            elif len(a.carrying) < 6:
+            if len(a.carrying) < ag.HANDS:
                 a.carrying.append(e)
             else:
-                e["x"], e["y"] = a.x, a.y
-                w.entities[e["id"]] = e
-                w.touch(e)
+                w.put(e, a.x, a.y)
             w.needs["company"] = min(100, w.needs["company"] + 20)
             w.note(f"My friend gives me {what}!")
-            self.journal("gift", [("<|world|>", w.perceive(self.day_seconds)), ("<|thought|>", f"My friend gives me {what}. Thank you, friend!")], 2.0)
+            self.journal("gift", [("<|world|>", w.perceive(self.day_seconds)),
+                                  ("<|thought|>", f"My friend gives me {what}. Thank you, friend!")], 2.0)
             return f"You give {name} {what}."
         if action == "hug":
             if not near:
@@ -713,26 +736,29 @@ class Life(Community):
         w = self.world
         if kind == "erase":
             for e in w.at(x, y):
-                w.remove(e)
+                if KINDS[e["kind"]].get("portable") or KINDS[e["kind"]].get("creature"):
+                    w.remove(e)
             return "Erased."
         if kind not in KINDS:
             return f"Unknown thing: {kind}."
         if not w.walkable(x, y):
             return "That spot is blocked. Choose open ground."
-        extra = {"text": text} if text and kind in ("book", "sign") else {}
+        extra = {"text": text} if text and kind in ("book", "picture book", "sign") else {}
         w.add(kind, x, y, **extra)
         if text:
             self.journal("written", [("<|oracle|>", text)], 2.0)
         return f"Placed {KINDS[kind]['noun']}."
 
     def suggest(self, text: str) -> str:
-        """You tell Ada what to do. If she understands, she does it (and learns from it)."""
-        g = ag.parse(text if text.lower().startswith("i ") else "I " + text)
+        """You tell the synth what to do. If it understands, it does it (and learns from it)."""
+        g = ag.parse(text if text.lower().startswith("i ") else "I " + text, self.names())
         if not g:
-            return f"{self.cfg.name} doesn't understand that yet. Try something like 'go fishing' or 'eat an apple'."
-        g.source, g.text, g.reason = "you", ag.say(g), "My friend suggested it."
+            return f"{self.cfg.name} doesn't understand that yet. Try something like 'cook soup' or 'feed the cat'."
+        g.source, g.text, g.reason = "you", ag.say(g, self.cfg.companion), "My friend suggested it."
         if self.world.ada.sleeping:
             return f"{self.cfg.name} is asleep."
+        if self.companion.talk:
+            self.companion.end_talk()
         if not self.set_plan(g):
             return f"{self.cfg.name} can't do that right now: " + (self.world.log[-1] if self.world.log else "")
         self.decisions.append("you")
@@ -745,14 +771,15 @@ class Life(Community):
             if cmd == "chat":
                 result = self.chat(msg["text"], rid)
                 if result is None:
-                    return              # the reply follows when her brain has found the words
+                    return              # the reply follows when its brain has found the words
             elif cmd == "oracle_reply":
-                self.oracle_reply(msg["req"], msg.get("text", ""), {"lines": msg.get("lines", []), "work": msg.get("work")})
+                self.oracle_reply(msg["req"], msg.get("text", ""), {"decision": msg.get("decision")})
+                result = True
+            elif cmd == "voice":
+                self.voice_ready = bool(msg.get("ready"))
                 result = True
             elif cmd == "visitor":
                 result = self.visitor(msg["action"], msg.get("kind") or "", msg.get("text") or "", msg)
-            elif cmd == "banter":
-                result = self.banter()
             elif cmd == "place":
                 result = self.place(msg["kind"], int(msg["x"]), int(msg["y"]), msg.get("text") or "")
             elif cmd == "suggest":
@@ -771,8 +798,9 @@ class Life(Community):
             elif cmd == "config":
                 old = self.cfg.world.device
                 self.cfg = AdaConfig.from_dict(msg["config"])
+                self.world.day_seconds = self.day_seconds
                 if self.cfg.world.device != old and self.with_brain:
-                    self.device = pick_device(self.cfg.world.device)   # move her brain: reload it there
+                    self.device = pick_device(self.cfg.world.device)   # move its brain: reload it there
                     self.brain_version = 0
                     self.maybe_load_brain()
                 self.use_cpu_threads()
@@ -797,20 +825,26 @@ class Life(Community):
         snap["mind"] = {
             "awake": not w.ada.sleeping, "brain": self.brain_version, "brain_meta": self.brain_meta,
             "intent": self.last_intent, "plan": self.plan.goal.text if self.plan else "",
+            "steps_left": len(self.plan.then) if self.plan else 0,
             "self_rate": round(recent.count("self") / len(recent), 3) if recent else 0.0,
-            "decisions": len(recent),
+            "decisions": len(recent), "said": self.last_speech,
             "phase_left": max(0.0, (self.day_seconds if w.phase == "day" else self.night_seconds) - w.phase_t),
         }
         if full or time.time() - self.minds_cast >= 1.0:
             self.minds_cast = time.time()
-            snap["minds"] = self.minds_view()
+            snap["wren"] = self.companion.view()
+            if full:
+                snap["stories"] = self.companion.stories[-60:]
+        if w.events:
+            snap["happenings"] = w.events[:]
+            w.events.clear()
         self.link.send("world", snap=snap)
 
     # ------------------------------------------------------------------ persistence
     def save(self):
         write_json(self.folder / "world.json", {"world": self.world.state(), "memory": self.memory[-400:],
                                                 "thoughts": list(self.thoughts)[-60:],
-                                                "chat": self.chat_log[-100:], "community": self.community_state()})
+                                                "chat": self.chat_log[-100:], "companion": self.companion.state()})
 
     def load(self):
         path = self.folder / "world.json"
@@ -822,7 +856,7 @@ class Life(Community):
             self.memory = s.get("memory", [])
             self.thoughts.extend(s.get("thoughts", []))
             self.chat_log = s.get("chat", [])
-            self.load_community(s.get("community", {}))
+            self.companion.load(s.get("companion", {}))
         except (ValueError, KeyError, TypeError) as e:
             self.link.warn(f"could not restore the world ({e}); starting a fresh one")
 
@@ -830,19 +864,18 @@ class Life(Community):
     def step(self):
         cfg, w = self.cfg, self.world
         if cfg.schedule.mode == "academy":
-            return                                  # the world holds its breath while she only studies
+            return                                  # the world holds its breath while it only studies
         dt = cfg.world.tick
         w.advance(dt)
         self.clock(dt)
         w.update_needs(dt)
-        with self.link.perf.time("the villagers"):
-            self.community_step()
-        self.neighbours()
+        with self.link.perf.time("Wren"):
+            self.companion.step()
         if w.ada.engaged is not None:
-            return                                  # the synth is in a conversation: it waits its turn
+            return                                  # in a conversation: it waits its turn
         if w.ada.sleeping:
-            if w.phase == "day" and not self.bedtime and w.needs["rest"] > 90:
-                w.ada.sleeping = False             # a daytime nap ends when she's rested
+            if w.phase == "day" and not self.bedtime and w.needs["rest"] > 90 and w.time_of_day() != "evening":
+                w.ada.sleeping = False             # a daytime nap ends when it's rested
             return
         perf = self.link.perf
         if self.plan:
@@ -858,7 +891,7 @@ class Life(Community):
 
     def loop(self):
         self.maybe_load_brain()
-        while self.brain is None and self.speaker.pending("load"):   # her first brain, before she wakes
+        while self.brain is None and self.speaker.pending("load"):   # its first brain, before it wakes
             time.sleep(0.05)
             self.speaker.deliver()
         self.broadcast(full=True)
@@ -872,7 +905,7 @@ class Life(Community):
             for msg in self.link.commands():
                 with perf.time(f"request: {msg.get('cmd')}"):
                     self.handle(msg)
-            with perf.time("taking her brain's answers"):
+            with perf.time("taking its brain's answers"):
                 self.speaker.deliver()
             now = time.time()
             if now >= next_tick:

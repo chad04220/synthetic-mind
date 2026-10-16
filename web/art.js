@@ -1,5 +1,5 @@
 "use strict";
-// The valley's art, shown and played in the browser. Every work arrives as a small recipe (a scene, a
+// The homestead's art, shown and played in the browser. Every work arrives as a small recipe (a scene, a
 // palette and a seed; a melody; a stack of shapes) and is painted, played or drawn the same way every
 // time, so a work lasts exactly as its maker left it.
 

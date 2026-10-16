@@ -1,5 +1,5 @@
 """The web server, running inside the Hub process. Every handler is quick: requests to the Academy
-or World are forwarded and awaited without blocking, and the Oracle runs on worker threads."""
+or World are forwarded and awaited without blocking, and Wren's model runs on worker threads."""
 from __future__ import annotations
 
 import asyncio
@@ -112,12 +112,12 @@ def create_app(hub: Hub) -> FastAPI:
             if not topic:
                 raise HTTPException(400, "Name a topic to teach.")
             if not hub.oracle_ready():
-                raise HTTPException(409, hub.oracle.error or "The Oracle is off or has no model.")
+                raise HTTPException(409, hub.oracle.error or f"{hub.cfg.companion}'s mind is off or has no model.")
             hub.topics.append(topic)
-            return {"result": f"The Oracle will teach Ada about {topic}."}
+            return {"result": f"{hub.cfg.companion} will teach {hub.cfg.name} about {topic}."}
         if name == "oracle_learn":
             hub.learn_answer(str(b["question"]), str(b["answer"]))
-            return {"result": "Ada will study it."}
+            return {"result": f"{hub.cfg.name} will study it."}
         if name == "models":
             await thread(hub.oracle.refresh)
             return {"result": hub.oracle_info()}
@@ -131,7 +131,7 @@ def create_app(hub: Hub) -> FastAPI:
             await sock.send_text(dumps(init))
             eid, wseq, aseq = init["event_id"], init["world_seq"], -1
             settings = hub.settings()
-            local = [v.info() for v in hub.fleet.values()]
+            local = hub.local.info()
             while True:
                 await asyncio.sleep(0.25)
                 msg = {"type": "tick"}
@@ -149,8 +149,8 @@ def create_app(hub: Hub) -> FastAPI:
                         msg["oracle"] = hub.oracle_info()
                     if any(e["kind"] == "concepts" for e in evs):
                         msg["concepts"] = hub.concept_report
-                li = [v.info() for v in hub.fleet.values()]
-                if li != local:                                  # the built-in Oracle's setup progress
+                li = hub.local.info()
+                if li != local:                                  # Wren's model: setup progress
                     local = li
                     msg["oracle"] = hub.oracle_info()
                 s = hub.settings()

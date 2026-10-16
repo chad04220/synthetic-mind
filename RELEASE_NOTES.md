@@ -1,3 +1,88 @@
+# Synthetic Mind v3.0.0: Zen and Wren
+
+One synth, one companion, one small and deep world. The village of v2 is gone. Zen now lives in a
+little house in a quiet hollow with Wren, who raises it.
+
+## Wren
+
+- **One language model, one companion.** Wren is the only language model in the program
+  (llama.cpp on the CPU, Gemma 2 2B by default, or Ollama). It replaces the Oracle and the seven
+  villagers' voices, so it is lighter on the CPU.
+  - Wren has a body in the World with the same needs, verbs and planner as Zen.
+  - Each time Wren is free, the World lists what it could sensibly do right now, and the model
+    chooses one and says what Wren says out loud.
+  - If the model is busy or switched off, Wren picks the most pressing thing itself.
+- **Care that follows Zen's language.**
+  - **Caretaker:** at first Wren feeds Zen, brings it water, dries it, puts it to bed, takes it
+    along to its chores and talks it through them.
+  - **Guide:** as Zen's language grows, Wren tells it what it needs and lets it do it.
+  - **Friend:** later still, Wren helps when asked.
+  - You can also fix the level in Settings.
+- **Naming things.** Wren shows Zen what it can see and names it at Zen's level ("Look, Zen. This
+  is an egg. It is smooth and white. Can you say egg?").
+- **Conversations, one turn at a time.** When Zen babbles, Wren guesses kindly what it meant and
+  says it back properly.
+- **Questions.** Zen asks Wren questions, and Wren answers at Zen's level.
+- **Bedtime stories.** Every night Wren tells Zen a story about the day. They are kept on the new
+  **Stories** tab.
+- **Picture books, star facts and a diary.** Wren reads Zen picture books, tells it about the stars
+  through the telescope, and keeps a diary of their days.
+- **Lessons from your days together.** The Academy's lessons are now written by Wren, with
+  examples from what the two of them did.
+- **FineWeb stays.** Zen's brain still trains from scratch on web text streamed from FineWeb,
+  alongside Wren's lessons and its own life.
+
+## Everything Zen hears, it studies
+
+- Wren's words go into Zen's journal next to what Zen saw at that moment.
+- So do Wren's deeds, in words ("Wren puts the pot on the stove."), whenever Zen is close by.
+- So do their conversations, Wren's answers, the stories, and Wren's instructions followed by
+  what Zen then did.
+
+## A smaller, deeper world
+
+- **The homestead** (72 × 56):
+  - **The house:** a living room with the fireplace, a kitchen with the stove and oven, sink,
+    pantry and table, Zen's little bedroom, Wren's bedroom and a washroom.
+  - **Outbuildings:** the workshop with the quern and the woodpile, a glass greenhouse, the
+    vegetable garden and the chicken coop.
+  - **Further out:** an orchard with a swing, a pond with a jetty, a stream through the woods, a
+    meadow with the beehive, and a lookout for the stars.
+- **Physics:**
+  - Rooms have a temperature that the fire raises and the night lowers.
+  - Things warm and cool; soup cooks in the pot, the kettle boils and whistles, bread bakes in
+    the oven, and food left too long burns.
+  - Food goes stale and rots, more slowly in the cool pantry.
+  - Rain soaks what is outside and fills the water barrel. Wet logs won't burn. Fires use up their
+    wood and leave ash. Lamps and candles light the dark and burn down.
+- **Life:**
+  - The soil dries out. Plants grow through their stages if watered and warm, and die in a frost.
+  - Harvests give back seeds.
+  - Hens lay eggs in the morning, the rooster crows at dawn, and bees make honey while flowers
+    bloom.
+  - Moss the cat eats from its bowl and sleeps by the fire.
+  - Deer come at dusk; an owl and a hedgehog at night.
+- **Senses:** Zen hears things (the kettle, the rain on the roof, the piano), and can't see far in
+  the dark without a lamp.
+- **Big jobs unfold into steps,** each with its own sentence. For example, cooking soup means
+  filling the pot, putting a carrot in it, putting it on the stove, adding a log, lighting it and
+  waiting.
+- **A seventh need.** Zen now also needs to stay clean (a bath), and gets wet in the rain (a
+  towel).
+- **Moving house.** Minds from earlier versions keep their brain, day, firsts and art, and move
+  into the new house.
+
+## The page
+
+- **Home** shows Zen and Wren, the temperature in the house, what can be heard, and a feed of what
+  Wren says, Zen's words and what happens.
+- **Together** has Zen's journey, both minds in full, the words Wren has heard Zen say, how Wren is
+  caring for Zen, and Wren's diary.
+- **Stories** and **Keepsakes** (everything they made) are new tabs.
+- The **Wren** tab shows the model, Wren's lessons and thoughts, and lets you talk with Wren.
+
+---
+
 # Synthetic Mind v2.0.1
 
 Fixes from the first diagnostics report from v2.0.0.

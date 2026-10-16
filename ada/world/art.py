@@ -1,22 +1,22 @@
-"""Art: what the valley's minds make, and how it is described so the browser can show and play it.
+"""Art: what the synth and its companion make, and how it is described so the browser can show and play it.
 
-Every work is a small, exact recipe, kept for good in the valley's gallery: a painting is a scene,
+Every work is a small, exact recipe, kept for good among the homestead's keepsakes: a painting is a scene,
 a palette and a seed (the browser paints it the same way every time), a recording is a melody
 (notes and beats, played in the browser), a sculpture is a stack of shapes in its material, a
 building is what was built and where, a piece of writing is its text. Titles and words come from
-the mind that made it: a villager's own language model, or the synth's own brain.
+the mind that made it: Wren's language model, or the synth's own brain.
 """
 from __future__ import annotations
 
 import random
 
 SCENES = {
-    "lake": ["water", "hills", "sky", "boat"], "dock": ["water", "boat", "sky"], "river": ["water", "trees", "sky"],
-    "forest": ["trees", "trees", "mushrooms", "sky"], "orchard": ["trees", "apples", "hills", "sky"],
-    "meadow": ["flowers", "hills", "sky", "butterflies"], "mountains": ["peaks", "snow", "sky"],
-    "mine": ["crystals", "rock"], "village": ["houses", "sky", "people"], "market": ["houses", "stalls", "people"],
-    "park": ["trees", "pond", "flowers", "sky"], "farm": ["fields", "barn", "sky"], "home": ["window", "lamp", "cat"],
-    "observatory": ["stars", "moon", "peaks"], "shrine": ["glow", "hills", "stars"],
+    "pond": ["water", "hills", "sky", "boat"], "stream": ["water", "trees", "sky"],
+    "woods": ["trees", "trees", "mushrooms", "sky"], "orchard": ["trees", "apples", "hills", "sky"],
+    "meadow": ["flowers", "hills", "sky", "butterflies"], "lookout": ["stars", "moon", "peaks"],
+    "garden": ["fields", "flowers", "sky"], "yard": ["houses", "sky", "trees"], "porch": ["houses", "sky", "flowers"],
+    "living room": ["window", "lamp", "cat"], "kitchen": ["window", "lamp", "cat"],
+    "little bedroom": ["window", "lamp", "cat"], "coop": ["fields", "barn", "sky"], "greenhouse": ["flowers", "window"],
 }
 TIME_SKY = {"dawn": ["#ffb4a2", "#ffcdb2", "#6d6875"], "morning": ["#a8dadc", "#f1faee", "#457b9d"],
             "noon": ["#8ecae6", "#ffffff", "#219ebc"], "afternoon": ["#90e0ef", "#ffe8a3", "#0077b6"],
@@ -26,12 +26,12 @@ SEASON_LAND = {"spring": ["#80b918", "#ffafcc", "#55a630"], "summer": ["#2d6a4f"
 STYLES = ["calm", "bold", "dreamy", "bright", "stormy", "gentle", "playful"]
 
 
-SCENIC = ["lake", "mountains", "meadow", "forest", "orchard", "village", "river", "park", "farm", "observatory", "dock"]
+SCENIC = ["pond", "meadow", "woods", "orchard", "garden", "stream", "lookout", "yard", "porch"]
 
 
 def painting(rng: random.Random, place: str, season: str, time_of_day: str, weather: str, mood: str) -> dict:
     # Indoors, at an easel, a painter paints a place from memory (or imagination).
-    if place not in SCENES or place in ("studio", "home") and rng.random() < 0.8:
+    if place not in SCENES or place in ("workshop", "living room", "kitchen") and rng.random() < 0.8:
         place = rng.choice(SCENIC)
         time_of_day = rng.choice(["dawn", "morning", "noon", "afternoon", "evening", "night"])
     elements = list(SCENES.get(place, ["hills", "sky", "trees"]))
@@ -89,7 +89,7 @@ def default_title(kind: str, data: dict, rng: random.Random) -> str:
         return rng.choice(["", "The ", "My "]) + data["subject"].capitalize()
     if kind == "music":
         return rng.choice(["Song of", "Tune for", "Little piece for", "Melody of"]) + " " + \
-            rng.choice(["the morning", "the lake", "my friends", "the stars", "the rain", "the bakery", "spring"])
+            rng.choice(["the morning", "the pond", "Moss", "the stars", "the rain", "the kitchen", "spring", "the hens"])
     if kind == "sculpture":
         return rng.choice(["Standing", "Dreaming", "Balance", "Tower", "Little friend", "The wave"]) + \
             f" in {data['material']}"

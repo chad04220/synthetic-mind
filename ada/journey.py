@@ -57,6 +57,8 @@ class Journey:
                 out.append(m)
 
         n = self.name
+        if kind == "talk" and ev.get("name") == n:
+            kind = "ada_says"                         # its own line in a conversation
         if kind in ("thought", "chat", "ada_says"):
             text = ev.get("text", "") or ""
             words = [w for w in _WORD.findall(text.lower()) if w in COMMON and len(w) > 1]
@@ -71,7 +73,7 @@ class Journey:
                 mark("first_reply", f"{n} answered you in words", text[:160])
         elif kind == "intent" and ev.get("source") == "self":
             mark("first_own_action", f"{n} did something it chose in its own words", ev.get("text", ""))
-        elif kind == "talk" and n in ev.get("members", []):
+        if ev.get("kind") == "talk" and n in ev.get("members", []):
             mark("first_conversation", f"{n}'s first conversation", f"with {[m for m in ev['members'] if m != n][0]} about {ev.get('topic', '')}")
         elif kind == "created" and (ev.get("creation") or {}).get("author") == n:
             c = ev["creation"]

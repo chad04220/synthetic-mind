@@ -1,6 +1,6 @@
 """The built-in voices: llama.cpp servers with small models, running on the CPU.
 
-The Oracle has its own server, and so does every villager (see villagers.py).
+One server runs the companion's mind (Wren, see wren.py). The class can run several (one per role).
 
 Nothing to install by hand. On first use the Hub downloads llama.cpp's prebuilt server for this
 computer (from llama.cpp's GitHub releases) and the chosen model (a GGUF file from Hugging Face)
@@ -8,7 +8,7 @@ into the `oracle/` folder next to run.py, starts each `llama-server` on a free l
 share of the CPU threads, and keeps them running. The GPU is never touched: the CPU build
 of llama.cpp is used, so the GPU stays entirely with the Academy.
 
-Ollama remains available as the other Oracle backend (Settings).
+Ollama remains available as the other backend (Settings).
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def free_port() -> int:
 
 
 class LocalLLM:
-    """One llama-server: the Oracle's, or one villager's voice. Each runs as its own process on its
+    """One llama-server (Wren's mind). Each runs as its own process on its
     own port; the program and the model files are shared (downloaded once), and several servers
     loading the same model file share its memory, because llama.cpp maps it rather than copying it."""
 
@@ -117,9 +117,11 @@ class LocalLLM:
         return True
 
     # ------------------------------------------------------------------ setup
+    name = ""                        # who this model speaks for ("Wren's mind"); the Hub sets it
+
     @property
     def who(self) -> str:
-        return "the built-in Oracle" if self.role == "oracle" else f"{self.role}'s voice"
+        return self.name or ("the built-in Oracle" if self.role == "oracle" else f"{self.role}'s voice")
 
     def ensure(self, key: str, threads: int, ctx: int = 8192, slots: int = 2) -> None:
         """Download what is missing and (re)start the server. Runs on a background thread."""
@@ -160,7 +162,7 @@ class LocalLLM:
             raise RuntimeError(f"no prebuilt llama.cpp for {platform.system()} {platform.machine()}; use Ollama")
         tag, url = self._find_release(suffix)
         archive = self.folder / "downloads" / url.rsplit("/", 1)[1]
-        self._download(url, archive, f"llama.cpp {tag} (the Oracle's engine)")
+        self._download(url, archive, f"llama.cpp {tag} (the engine for Wren's mind)")
         dest = self.folder / "llama.cpp"
         tmp = self.folder / "llama.cpp.tmp"
         shutil.rmtree(tmp, ignore_errors=True)

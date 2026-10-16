@@ -178,7 +178,7 @@ def findings(perf: dict, gpu: list, client: dict | None, restarts: dict) -> list
             "throttling, or short of memory.")
     if studying and hg.get("ollama_gpu_mb", 0) > 500:
         add("warn", "gpu", f"Ollama is holding {hg['ollama_gpu_mb']:.0f} MB of GPU memory while the Academy studies. "
-            "Settings → Oracle runs on: 'CPU while studying' frees it.")
+            "Settings → Ollama runs on: 'CPU' frees it.")
     if gpu and gpu[0].get("mem_total_mb") and gpu[0]["mem_used_mb"] / gpu[0]["mem_total_mb"] > 0.92:
         add("warn", "gpu", "GPU memory is over 92% full; Windows may start swapping it, which is very slow. Use a smaller "
             "batch or brain, or close other GPU programs (Ollama models also live in GPU memory).")
@@ -215,7 +215,7 @@ def findings(perf: dict, gpu: list, client: dict | None, restarts: dict) -> list
                 f"{client.get('window_s', 0):.0f} s (longest {client.get('longtask_max_ms', 0):.0f} ms). "
                 "Check that hardware acceleration is on in the browser.")
         if client.get("draw_avg_ms", 0) > 12:
-            add("info", "browser", f"Drawing the map takes {client['draw_avg_ms']:.0f} ms; 'Whole valley' view or a smaller "
+            add("info", "browser", f"Drawing the map takes {client['draw_avg_ms']:.0f} ms; 'The whole hollow' view or a smaller "
                 "window is cheaper.")
     for proc, n in restarts.items():
         if n:

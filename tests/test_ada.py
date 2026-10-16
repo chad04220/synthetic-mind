@@ -120,52 +120,146 @@ def test_oracle_facts_are_validated_and_shared_through_the_file(tmp_path):
 
 
 # ------------------------------------------------------------------ words -> deeds
-@pytest.mark.parametrize("text,verb,obj", [
-    ("I eat the apple.", "eat", "apple"), ("I go and bake bread", "bake", "bread"),
-    ("I water the sprout", "water", "sprout"), ("I drink water", "drink", "water"),
-    ("I talk to mira", "talk", "Mira"), ("I look at the stars", "look", "telescope"),
-    ("I go to the library.", "go", "library"), ("I give the apple to my friend", "give", "apple"),
+NAMES = {"wren": "Wren", "zen": "Zen"}
+
+
+@pytest.mark.parametrize("text,verb,obj,extra", [
+    ("I eat the apple.", "eat", "apple", ""), ("I go and bake bread", "bake", "bread", ""),
+    ("I water the plants", "water", "plant", ""), ("I drink water", "drink", "water", ""),
+    ("I talk to wren", "talk", "Wren", ""), ("I look at the stars", "look", "telescope", ""),
+    ("I go to the kitchen.", "go", "kitchen", ""), ("I give the apple to my friend", "give", "apple", "friend"),
+    ("I put the log in the fireplace.", "put", "log", "fireplace"), ("I take an egg from the nest box", "take", "egg", "nest box"),
+    ("I feed the cat.", "feed", "cat", ""), ("I make a cup of tea", "brew", "tea", ""), ("I cook soup", "cook", "soup", ""),
 ])
-def test_intentions_parse(text, verb, obj):
-    g = ag.parse(text)
+def test_intentions_parse(text, verb, obj, extra):
+    g = ag.parse(text, NAMES)
     assert (g.verb, g.obj) == (verb, obj)
-    assert ag.parse(ag.say(g)).verb == verb          # what she learns to say, she can do
+    if extra:
+        assert g.extra == extra
+    again = ag.parse(ag.say(g), NAMES)                  # what it learns to say, it can do
+    assert (again.verb, again.obj) == (g.verb, g.obj)
 
 
 def test_gibberish_is_not_an_intention():
     assert ag.parse("IIIII 0x9f zz") is None
 
 
-def test_her_needs_alone_keep_her_alive_and_busy():
-    w = World(seed=4)
-    done, ok = [], 0
-    rng = random.Random(4)
-    plan = None
-    for _ in range(4000):
+def _live(w, me, goal, ticks=3000):
+    """Carry out one goal and everything it needs first, the way the World does. Returns the steps."""
+    p, why = ag.plan(w, goal, me)
+    assert p, why
+    steps = []
+    for _ in range(ticks):
         w.advance(0.25)
         w.update_needs(0.25)
-        if plan is None:
-            g = ag.drives(w, rng, False, True)
-            plan, _ = ag.plan(w, g)
+        p.ticks += 1
+        tp = ag.target_pos(w, p)
+        if p.target is not None and tp is None:
+            steps.append((False, "gone"))
+            return steps
+        if tp is not None:
+            tx, ty, adj = tp
+            there = (abs(tx - me.x) + abs(ty - me.y) == 1) if adj else (me.x, me.y) == (tx, ty)
+            if not (there or adj and (me.x, me.y) == (tx, ty)):
+                if not p.route:
+                    p.route = w.path((me.x, me.y), (tx, ty), me=me, adjacent=adj) or \
+                        w.path((me.x, me.y), (tx, ty), me=me, adjacent=adj, avoid=False) or []
+                    if not p.route:
+                        steps.append((False, "no way"))
+                        return steps
+                me.x, me.y = p.route.pop(0)
+                continue
+        r = ag.act(w, p, me)
+        if r is None:
             continue
-        tx, ty, adj = ag.target_pos(w, plan) or (w.ada.x, w.ada.y, False)
-        a = w.ada
-        there = (abs(tx - a.x) + abs(ty - a.y) == 1) if adj else (a.x, a.y) == (tx, ty)
-        if there or (adj and (a.x, a.y) == (tx, ty)):
-            success, _, _ = ag.act(w, plan)
-            ok += success
-            done.append(plan.goal.verb)
-            plan = None
-            continue
-        route = w.path((a.x, a.y), (tx, ty), me=a, adjacent=adj) or w.path((a.x, a.y), (tx, ty), me=a, adjacent=adj, avoid=False)
-        if not route:
-            plan = None
-            continue
-        a.x, a.y = route[0]
-    assert len(set(done)) >= 6 and ok >= 0.8 * len(done)
+        ok, narration, _ = r
+        steps.append((ok, narration))
+        if not ok or not p.then:
+            return steps
+        nxt, rest = p.then[0], p.then[1:]
+        p, why = ag.plan(w, nxt, me)
+        assert p, why
+        p.then += rest
+    return steps
+
+
+def test_its_needs_alone_keep_it_alive_and_busy():
+    w = World(seed=4)
+    done, rng = [], random.Random(4)
+    for _ in range(40):
+        g = ag.drives(w, rng, w.ada, independence=1.0, companion=w.wren)
+        steps = _live(w, w.ada, g, ticks=1200)
+        done.append((g.verb, all(ok for ok, _ in steps)))
+    assert len({v for v, _ in done}) >= 5 and sum(ok for _, ok in done) >= 0.8 * len(done)
     assert min(w.needs["energy"], w.needs["water"]) > 10
 
 
+def test_soup_unfolds_into_steps_and_cooks_on_the_stove():
+    w = World(seed=2)
+    steps = _live(w, w.wren, ag.Goal("cook", "soup"), ticks=4000)
+    said = [n for _, n in steps]
+    assert all(ok for ok, _ in steps), said
+    assert any("fill the cooking pot" in n for n in said) and any("light the stove" in n for n in said)
+    assert said[-1].startswith("The soup is ready")
+    pot = ag._on_stove(w, "pot")
+    assert any(i["kind"] == "soup" for i in pot["items"])
+    steps = _live(w, w.ada, ag.Goal("eat", "soup"))
+    assert steps[-1][0] and "soup" in steps[-1][1]
+
+
+def test_the_homestead_is_physical():
+    w = World(seed=3)
+    fire, stove = w.nearest("fireplace", (13, 23)), w.nearest("stove", (28, 22))
+    # a fire warms the house; when its wood is gone it goes out and leaves ash
+    w.indoor["house"] = 10.0
+    fire["fuel"], fire["lit"] = 300.0, True
+    for _ in range(4 * 290):
+        w.advance(0.25)
+    assert w.indoor["house"] > 16
+    for _ in range(4 * 30):
+        w.advance(0.25)
+    assert not fire["lit"] and fire["ash"] >= 1
+    # wet logs won't burn
+    log = w.make("log", wet=0.8)
+    ok, said, _ = ag._put_in(w, w.wren, log, fire, lambda e: None)
+    assert not ok and "wet" in said
+    # dough bakes into bread in the oven of a lit stove
+    oven = w.nearest("oven", (27, 22))
+    oven["items"] = [w.make("dough")]
+    stove["fuel"], stove["lit"] = 1000.0, True
+    for _ in range(4 * 150):
+        w.advance(0.25)
+    assert [i["kind"] for i in oven["items"]] == ["bread"]
+    # food left out in the summer goes bad; in the cool pantry it keeps longer
+    w.day = 4
+    out, pantry = w.add("plum", 24, 29), w.nearest("pantry", (23, 22))
+    kept = w.make("plum")
+    pantry["items"].append(kept)
+    for _ in range(4 * 1300):
+        w.advance(0.25)
+    assert out["id"] not in w.entities and any(e["kind"] == "rotten food" for e in w.entities.values())
+    assert kept in pantry["items"]
+    # rain wets what is outside and fills the barrel
+    barrel = w.nearest("water barrel", (14, 31))
+    barrel["water"] = before = 10.0
+    w.weather, w.weather_left = "rain", 1e9
+    ball = w.add("ball", 24, 29)
+    for _ in range(4 * 60):
+        w.advance(0.25)
+    assert ball["wet"] > 0.5 and barrel["water"] > before
+    # a watered plant grows; a thirsty one does not
+    w.weather = "clear"
+    a, b = w.add("plant", 15, 36, crop="carrot", stage=0.0, health=1.0), w.add("plant", 28, 39, crop="carrot", stage=0.0, health=1.0)
+    w.moisture[(15, 36)], w.moisture[(28, 39)] = 1.0, 0.0
+    w.phase, w.phase_t = "day", 100
+    for _ in range(4 * 200):
+        w.advance(0.25)
+        w.moisture[(15, 36)] = 1.0
+        w.moisture[(28, 39)] = 0.0
+    assert a["stage"] > b["stage"] + 0.5
+
+
+# ------------------------------------------------------------------ the Academy
 # ------------------------------------------------------------------ the Academy
 def test_academy_learns_publishes_and_resumes(mind):
     append_jsonl(mind / "curriculum.jsonl", {"kind": "lesson", "parts": [["<|oracle|>", "The sun is hot. Snow is cold."]]})
@@ -216,10 +310,10 @@ def test_life_with_a_brain(mind):
     a = academy(mind)
     a.publish("test")
     life = Life(mind, FakeLink(), threaded=False)
-    life.cfg.oracle.enabled = False             # no language models here: the villagers use their scripted lines
+    life.cfg.oracle.enabled = False             # no language model here: Wren lives by its own rules
     life.maybe_load_brain()
     assert life.brain_version == 1
-    for _ in range(3000):                       # the valley is big: walk until the first deed is done
+    for _ in range(3000):                       # walk until the first deed is done
         life.step()
         if "did" in life.link.kinds():
             break
@@ -227,10 +321,10 @@ def test_life_with_a_brain(mind):
     assert "intent" in kinds and "did" in kinds
     r = life.chat("Hello Ada")
     assert "text" in r and life.chat_log[-1]["role"] == "mind"
-    assert "T will" in life.suggest("go to the library")
-    assert "Placed" in life.place("apple", 100, 46)
-    assert "blocked" in life.place("apple", 100, 80)           # the lake
-    assert "in the valley" in life.visitor("join")
+    assert "T will" in life.suggest("go to the kitchen")
+    assert "Placed" in life.place("apple", 24, 29)
+    assert "blocked" in life.place("apple", 52, 45)            # the pond
+    assert "at the homestead" in life.visitor("join")
     assert "holding" in life.visitor("hold", "apple")
     lines = (mind / "journal.jsonl").read_text().splitlines()
     assert any(json.loads(x)["kind"] == "deed" for x in lines)
@@ -257,11 +351,14 @@ def test_world_state_survives_a_restart(mind):
     life = Life(mind, FakeLink(), with_brain=False)
     for _ in range(300):
         life.step()
-    life.place("ball", 100, 46)
+    life.place("ball", 24, 29)
+    life.companion.note("A day to remember.")
     life.save()
     again = Life(mind, FakeLink(), with_brain=False)
     assert (again.world.ada.x, again.world.ada.y) == (life.world.ada.x, life.world.ada.y)
-    assert any(e["kind"] == "ball" and (e["x"], e["y"]) == (100, 46) for e in again.world.entities.values())
+    assert any(e["kind"] == "ball" and (e["x"], e["y"]) == (24, 29) for e in again.world.entities.values())
+    assert again.companion.diary[-1]["text"] == "A day to remember."
+    assert again.world.indoor["house"] == pytest.approx(life.world.indoor["house"])
 
 
 # ------------------------------------------------------------------ the Hub
@@ -439,7 +536,7 @@ def test_a_slow_brain_never_stalls_the_world(mind):
 
     life.brain.generate = slow
     life.next_thought = 0
-    assert life.chat("Hello Ada", rid="r1") is None            # the reply comes later
+    assert life.chat("Hello Zen", rid="r1") is None            # the reply comes later
     worst = 0.0
     end = _t.time() + 5
     while _t.time() < end:
@@ -574,7 +671,7 @@ def test_old_minds_move_to_the_cpu_defaults(tmp_path):
     old["world"]["device"], old["oracle"]["placement"], old["schedule"]["mode"] = "auto", "gpu", "day_night"
     p.write_text(json.dumps(old), encoding="utf-8")
     cfg = AdaConfig.load(p)
-    assert cfg.version == 2 and cfg.world.device == "cpu" and cfg.oracle.placement == "gpu"
+    assert cfg.version == 3 and cfg.world.device == "cpu" and cfg.oracle.placement == "gpu"
     assert cfg.oracle.backend == "builtin" and cfg.schedule.mode == "together"
     t = cpu_threads(cfg)
     assert t["world"] >= 1 and t["oracle"] >= 1 and t["world"] + t["oracle"] <= max(2, t["cores"])
@@ -612,12 +709,14 @@ def test_builtin_oracle_talks_to_a_llama_server(tmp_path):
     local.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         assert o.ready and o.active == "Gemma 2 2B Instruct (built-in)"
-        pack = o.lesson_pack("owls", 2)
+        from ada.wren import WrenVoice
+
+        pack = WrenVoice(o).lesson_pack("owls", 2, memories=["I baked bread."])
         assert pack["lesson"] == "Owls hunt at night."
         path, body = seen[-1]
         assert path == "/v1/chat/completions" and body["response_format"] == {"type": "json_object"}
         assert [m["role"] for m in body["messages"]] == ["user"]          # no system role for Gemma
-        assert body["messages"][0]["content"].startswith("You are the Oracle")
+        assert body["messages"][0]["content"].startswith("You are Wren") and "I baked bread." in body["messages"][0]["content"]
     finally:
         local.proc.kill()
         srv.shutdown()
@@ -652,144 +751,125 @@ def test_builtin_oracle_skips_releases_still_uploading(tmp_path, monkeypatch):
         srv.shutdown()
 
 
-# ------------------------------------------------------------------ the bigger valley
-def _do(life, verb, obj="", extra="", ticks=3000):
-    """Have the synth carry out one goal (walking there) and return what happened."""
-    goal = ag.Goal(verb, obj, extra, text=ag.say(ag.Goal(verb, obj, extra)), source="you")
-    assert life.set_plan(goal), (verb, obj, life.world.log[-1:])
-    for _ in range(ticks):
-        if not life.plan:
-            break
-        life.walk()
-    did = [d for t, d in life.link.sent if d.get("kind") == "did"]
-    return did[-1] if did else {}
-
-
-def _hold(w, *kinds):
-    for k in kinds:
-        w.ada.carrying.append({"id": w.next_id, "kind": k, "x": 0, "y": 0})
-        w.next_id += 1
-
-
-def test_valley_activities_fish_mine_craft_trade_cook(mind):
-    life = Life(mind, FakeLink(), with_brain=False)
-    w = life.world
-    w.rng.seed(1)
-    assert w.anchors["mine"] and w.anchors["dock"] and w.anchors["market"]
-    _hold(w, "wood", "wood")
-    assert "fishing rod" in _do(life, "make", "fishing rod")["text"]
-    assert any(e["kind"] == "fishing rod" for e in w.ada.carrying)
-    for _ in range(6):                                            # fish until something bites
-        _do(life, "fish")
-        if any(e["kind"] == "raw fish" for e in w.ada.carrying):
-            break
-    assert any(e["kind"] == "raw fish" for e in w.ada.carrying)
-    assert "grilled fish" in _do(life, "cook", "raw fish")["text"]
-    coins = w.coins
-    assert "Juniper buys" in _do(life, "sell", "grilled fish")["text"] and w.coins > coins
-    _do(life, "take", "pickaxe")
-    assert "Clang" in _do(life, "mine", "ore")["text"]
-    assert any(e["kind"] == "ore" for e in w.ada.carrying)
-    w.coins = 20
-    assert "kite" in _do(life, "buy", "kite")["text"] and w.coins == 12
-
-
-def _run_talks(life, replies, steps=80):
-    """Drive conversations: answer each 'turn' request in order, skipping the waits."""
-    answered, said = set(), []
+# ------------------------------------------------------------------ Wren and Zen
+def _wren_life(mind, steps=0, voice=False):
+    life = Life(mind, FakeLink(), with_brain=False, threaded=False)
+    life.voice_ready = voice
     for _ in range(steps):
-        life.talk_step()
-        for t, d in list(life.link.sent):
-            if t == "oracle" and d["purpose"] == "turn" and d["rid"] not in answered:
-                answered.add(d["rid"])
-                line = replies.pop(0) if replies else "Goodbye!"
-                said.append((d["payload"]["speaker"], line))
-                life.oracle_reply(d["rid"], line)
-        for talk in life.talks.values():
-            if talk.state == "speaking":
-                talk.until = 0
-        if not life.talks:
+        life.step()
+    return life
+
+
+def test_wren_looks_after_zen_and_names_things(mind):
+    life = _wren_life(mind)
+    w, c = life.world, life.companion
+    assert c.care() == 2                                 # a new synth: Wren is its caretaker
+    w.ada.needs["energy"] = 15.0
+    fed = False
+    for _ in range(4000):
+        life.step()
+        w.ada.needs["energy"] = min(w.ada.needs["energy"], 15.0) if not fed else w.ada.needs["energy"]
+        if any(d.get("kind") == "wren_did" and "and Zen eats it" in d.get("text", "").replace(w.ada.name, "Zen")
+               for _, d in life.link.sent):
+            fed = True
             break
-    return said
+    assert fed
+    c.name_thing("egg")
+    journal = [json.loads(x) for x in (mind / "journal.jsonl").read_text().splitlines()]
+    kinds = {j["kind"] for j in journal}
+    assert {"cared", "named"} <= kinds or {"heard", "named"} <= kinds
+    named = next(j for j in journal if j["kind"] == "named")
+    assert named["parts"][0][0] == "<|world|>" and "egg" in named["parts"][1][1]
 
 
-def test_quests_friendship_and_a_conversation(mind):
-    life = Life(mind, FakeLink(), with_brain=False)
-    w = life.world
-    w.quests.append({"id": 99, "giver": "Mira", "want": "wheat", "count": 1, "got": 0, "reward": 5,
-                     "text": "Mira needs some wheat.", "day": 1})
-    before, coins = w.friends["Mira"], w.coins
-    _hold(w, "wheat")
-    assert "Quest done" in _do(life, "give", "wheat", "Mira")["text"]
-    assert w.coins == coins + 5 and w.friends["Mira"] > before and not w.quests
-    assert w.people["Mira"].friends["T"] > 10                    # friendship grows both ways
-    # Mira has something to say: she starts a conversation, and the synth waits for her line
-    talk = next(iter(life.talks.values()))
-    assert talk.members == ["Mira", "T"] and w.ada.engaged == talk.id and w.people["Mira"].engaged == talk.id
-    said = _run_talks(life, ["Thank you, little one! Here are your coins."])
-    assert said[0] == ("Mira", "Thank you, little one! Here are your coins.")
-    assert w.ada.engaged is None and w.people["Mira"].engaged is None
-    lines = [json.loads(x) for x in (mind / "journal.jsonl").read_text().splitlines()]
-    assert any(any(r == "<|npc|>" and t.startswith("Mira: Thank you") for r, t in x["parts"]) for x in lines)
-
-
-def test_villagers_talk_in_turns_and_you_can_walk_freely(mind):
-    life = Life(mind, FakeLink(), with_brain=False)
-    w = life.world
-    m, th = w.people["Mira"], w.people["Theo"]
-    th.x, th.y = m.x + 3, m.y
-    w.ada.x, w.ada.y = m.x, m.y + 2
-    assert life.start_talk("Mira", "Theo", "the weather", turns=2)
-    talk = next(iter(life.talks.values()))
-    for _ in range(10):                                         # Mira walks up to Theo first
-        life.talk_step()
-        if talk.state == "waiting":
+def test_a_conversation_goes_one_turn_at_a_time(mind):
+    life = _wren_life(mind)
+    w, c = life.world, life.companion
+    w.wren.x, w.wren.y = w.ada.x + 1, w.ada.y
+    assert c.start_talk(c.name, "the weather", turns=4)
+    assert w.ada.engaged is not None and w.wren.engaged is not None
+    for _ in range(400):
+        life.step()
+        if c.talk is None:
             break
-    assert abs(m.x - th.x) + abs(m.y - th.y) <= 1
-    assert m.said == "…"                                        # composing: Theo waits
-    turns = [d for t, d in life.link.sent if t == "oracle" and d["purpose"] == "turn"]
-    assert len(turns) == 1 and turns[0]["payload"]["speaker"] == "Mira" and turns[0]["payload"]["opening"]
-    said = _run_talks(life, ["Lovely day, Theo!", "Perfect for reading. Goodbye!"])
-    assert said == [("Mira", "Lovely day, Theo!"), ("Theo", "Perfect for reading. Goodbye!")]
-    second = [d for t, d in life.link.sent if t == "oracle" and d["purpose"] == "turn"][1]["payload"]
-    assert second["history"] == [["Mira", "Lovely day, Theo!"]] or second["history"] == [("Mira", "Lovely day, Theo!")]
-    lines = [json.loads(x) for x in (mind / "journal.jsonl").read_text().splitlines()]
-    assert any(x["kind"] == "overheard" for x in lines)          # the synth was close enough to hear
-    # villagers are minds too: they decide, act and keep a diary
-    for _ in range(200):
-        life.community_step()
-    assert any(st.diary for st in life.vminds.values())
-    view = {m["name"]: m for m in life.minds_view()}
-    assert set(view) == {"T", *w.people} and "needs" in view["Mira"] and "doing" in view["Mira"]
-    life.visitor("join")
-    v = w.visitor
-    life.visitor("pos", msg={"fx": v.x + 0.6, "fy": v.y, "facing": "east"})
-    assert v.facing == "east"
-    x0 = v.x
-    life.visitor("pos", msg={"fx": 100, "fy": 80})                   # the middle of the lake: you can't walk on water
-    assert v.x == x0
-    assert life.visitor("interact", msg={"target": {"kind": "person", "name": "Mira"}}) == {"talk_to": "Mira"}
+    lines = [d for k, d in life.link.sent if k == "event" and d.get("kind") == "talk"]
+    assert [d["name"] for d in lines] == [c.name, w.ada.name, c.name, w.ada.name]
+    assert w.ada.engaged is None and w.wren.engaged is None
+    journal = [json.loads(x) for x in (mind / "journal.jsonl").read_text().splitlines()]
+    talk = next(j for j in journal if j["kind"] == "conversation")
+    assert [r for r, _ in talk["parts"][1:]] == ["<|npc|>", "<|mind|>", "<|npc|>", "<|mind|>"]
 
 
-def test_minds_make_lasting_art(mind):
+def test_wren_tells_a_bedtime_story(mind):
+    life = _wren_life(mind)
+    life.companion.note("We baked bread.")
+    life.nightfall()
+    stories = [d for k, d in life.link.sent if k == "event" and d.get("kind") == "story"]
+    assert stories and life.companion.stories
+    journal = [json.loads(x) for x in (mind / "journal.jsonl").read_text().splitlines()]
+    assert any(j["kind"] == "story" for j in journal)
+    # with the model up, the story comes from the model, once a night
+    life2 = _wren_life(mind, voice=True)
+    life2.companion.story_day = 0
+    life2.nightfall()
+    asks = [d for k, d in life2.link.sent if k == "oracle" and d["purpose"] == "wren_story"]
+    assert len(asks) == 1
+    life2.oracle_reply(asks[0]["rid"], "The Bread Moon\nOnce upon a time, Zen and Wren baked bread.")
+    assert life2.companion.stories[-1]["title"] == "The Bread Moon"
+
+
+def test_wren_asks_its_model_and_follows_the_choice(mind):
+    life = _wren_life(mind, voice=True)
+    c = life.companion
+    c.decide()
+    ask = next(d for k, d in life.link.sent if k == "oracle" and d["purpose"] == "wren_decide")
+    opts = ask["payload"]["options"]
+    pick = next((i for i, o in enumerate(opts) if not o.startswith("Talk")), 0)
+    life.handle({"cmd": "oracle_reply", "req": ask["rid"], "text": "", "decision": {"choice": pick, "say": "Look, Zen!",
+                                                                                     "thought": "A fine morning."}})
+    assert c.plan is not None and c.intent["text"] == opts[pick].replace(" (needed now)", "")
+    assert c.thoughts[-1]["text"] == "A fine morning."
+
+
+def test_wren_voice_prompts_and_parsing():
+    from ada.wren import WrenVoice, _line
+
+    class FakeModel:
+        def __init__(self, reply):
+            self.reply, self.seen = reply, []
+
+        def chat(self, system, prompt, **kw):
+            self.seen.append((system, prompt))
+            return self.reply
+
+    m = FakeModel('Sure! {"choice": 2, "say": "Wren: Look, Zen, an egg! (smiles)", "thought": "Eggs!"}')
+    d = WrenVoice(m, "Wren", "Zen").decide("in the kitchen", "Zen is here.", [], ["Cook soup", "Collect the eggs"], 1, True)
+    assert d == {"choice": 1, "say": "Look, Zen, an egg!", "thought": "Eggs!"}
+    assert "never \"he\" or \"she\"" in m.seen[0][0] and "2. Collect the eggs" in m.seen[0][1]
+    assert _line("**Hello** there 🌟") == "Hello there"
+    assert WrenVoice(FakeModel("nonsense"), "Wren", "Zen").decide("", "", [], ["A"], 0, False)["choice"] == -1
+
+
+def test_a_v2_world_moves_to_the_homestead(mind):
+    old = {"world": {"version": 2, "W": 128, "H": 96, "day": 7, "firsts": ["eat:apple"],
+                     "creations": [{"id": 1, "kind": "painting", "author": "T", "title": "Lake", "data": {}, "day": 3}]},
+           "memory": [], "thoughts": [], "chat": []}
+    (mind / "world.json").write_text(json.dumps(old), encoding="utf-8")
     life = Life(mind, FakeLink(), with_brain=False)
     w = life.world
-    assert "paint" in _do(life, "paint", "easel")["text"]
-    _hold(w, "chisel", "stone")
-    assert "sculpture" in _do(life, "sculpt", "stone")["text"]
-    _hold(w, "hammer", "wood", "wood")
-    assert "bench" in _do(life, "build", "bench")["text"]
-    assert "melody" in _do(life, "compose", "piano")["text"]
-    kinds = [c["kind"] for c in w.creations]
-    assert kinds == ["painting", "sculpture", "building", "music"]
-    music = w.creations[-1]["data"]
-    assert music["notes"] and all(len(n) == 2 for n in music["notes"])
-    statue = next(e for e in w.entities.values() if e["kind"] == "sculpture")
-    assert statue["work"] == w.creations[1]["id"]
+    assert w.day == 7 and "eat:apple" in w.firsts and w.creations[0]["title"] == "Lake"
+    assert any("new home" in t for t in w.log)
+
+
+def test_art_lasts(mind):
+    life = _wren_life(mind)
+    steps = _live(life.world, life.world.ada, ag.Goal("paint", "easel"))
+    assert steps[-1][0]
+    c = life.world.creations[-1]
+    assert c["kind"] == "painting" and c["author"] == life.world.ada.name
     life.save()
-    again = Life(mind, FakeLink(), with_brain=False)               # the gallery lasts
-    assert [c["kind"] for c in again.world.creations] == kinds
-    assert any(e["kind"] == "bench" and e.get("built_by") == "T" for e in again.world.entities.values())
+    again = Life(mind, FakeLink(), with_brain=False)
+    assert again.world.creations[-1]["id"] == c["id"]
 
 
 def test_fineweb32k_tokenizer_round_trips():

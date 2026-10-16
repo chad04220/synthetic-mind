@@ -1,5 +1,5 @@
 "use strict";
-// Ada's dashboard. One WebSocket brings an initial picture and then small updates 4 times a second;
+// The dashboard. One WebSocket brings an initial picture and then small updates 4 times a second;
 // only the visible view is redrawn, and only the parts that changed.
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -77,6 +77,8 @@ function init(m) {
   S.settings = m.settings; S.academy = m.academy || {}; S.metrics = m.metrics || []; S.assessments = m.assessments || [];
   S.concepts = m.concepts || {}; S.oracle = m.oracle || {}; S.feeds = m.feeds || {};
   setText($("#name"), m.name); document.title = `${m.name} · Synthetic Mind`; S.name = m.name;
+  S.companion = m.oracle?.companion || "Wren";
+  $$(".wrenname").forEach((el) => el.textContent = S.companion);
   setTalkTarget(null);
   $("#chatText").placeholder = `Say something to ${m.name}…`;
   S.journey = m.journey || [];
@@ -84,8 +86,10 @@ function init(m) {
   try { if (!localStorage.getItem("welcomed")) { $("#welcome").showModal(); localStorage.setItem("welcomed", "1"); } } catch { /* private window */ }
   MapView.setWorld(m.world);
   worldIn(m.world, true);
-  for (const k of ["npc", "ada_says", "vthought", "vdid", "talk"]) for (const e of S.feeds[k] || []) Community.st.feed.push(e);
+  for (const k of ["npc", "ada_says", "wren_says", "wren_did", "wren_thought", "talk", "happening", "story", "answer"])
+    for (const e of S.feeds[k] || []) Community.st.feed.push(e);
   Community.st.feed.sort((a, b) => a.t - b.t);
+  Community.addStories(m.stories || []);
   $("#chat").innerHTML = ""; $("#thoughts").innerHTML = ""; $("#diary").innerHTML = ""; $("#village").innerHTML = "";
   $("#lessons").innerHTML = ""; $("#qa").innerHTML = "";
   for (const c of S.feeds.chat || []) {
@@ -95,21 +99,40 @@ function init(m) {
   }
   for (const e of S.feeds.thought || []) addThought(e);
   for (const e of S.feeds.deed || []) addDeed(e);
-  for (const e of [...(S.feeds.npc || []), ...(S.feeds.oracle || [])].sort((a, b) => a.t - b.t)) addVillage(e);
+  for (const e of [...(S.feeds.wren_says || []), ...(S.feeds.wren_did || []), ...(S.feeds.answer || [])].sort((a, b) => a.t - b.t)) addVillage(e);
   for (const e of S.feeds.lesson || []) addLesson(e);
-  for (const e of S.feeds.oracle || []) addQA(e);
+  for (const e of S.feeds.answer || []) addQA(e);
+  for (const e of S.feeds.wren_thought || []) addWrenThought(e);
   for (const e of m.events || []) if (e.kind === "error") banner(e.text);
   syncSettings(); renderAll(); drawCharts();
 }
 
 function worldIn(w, full) {
   if (!w) return;
-  if (w.minds) Community.setMinds(w.minds);
   if (w.creations) Community.addWorks(w.creations);
+  if (w.stories) Community.addStories(w.stories);
   if (w.kinds) Community.st.kinds = w.kinds;
-  for (const v of S.oracle?.villagers || []) Community.st.voices[v.name] = { status: v.voice?.status, model: v.voice?.model };
+  Community.setMinds(buildMinds(MapView.st.world || w));
   if (W3.api) { try { full ? W3.api.full(w) : W3.api.delta(w); } catch (e) { console.error(e); report("error", "3D: " + e.message); } }
 }
+
+// The two minds as the overlay and the Together tab show them, from the latest world picture.
+function buildMinds(w) {
+  if (!w?.ada) return Community.st.minds;
+  const a = w.ada, m = w.mind || {}, c = w.companion || {}, wr = w.wren || {};
+  const lastThought = (S.lastThought || {}).text || "";
+  const zen = { name: a.name, kind: "synth", color: "#9fb4ff", glyph: "✨", needs: a.needs, feelings: a.feelings, sleeping: a.sleeping,
+    talking: a.talking, place: placeWords(a.place), activity: a.activity, wet: a.wet, carrying: a.carrying,
+    doing: m.plan || m.intent?.text || "", why: m.intent?.reason, source: m.intent?.source, companion: c.name, steps: m.steps_left,
+    said: m.said, thought: lastThought.trim().slice(0, 140), own_words: m.self_rate, brain: m.brain, bond: w.bond,
+    stage: S.academy.stage_name };
+  const wren = c.name ? { name: c.name, kind: "companion", color: "#7fb3a6", glyph: "🧑‍🌾", needs: c.needs, feelings: c.feelings,
+    sleeping: c.sleeping, talking: c.talking, place: placeWords(c.place), activity: c.activity, wet: c.wet, carrying: c.carrying,
+    doing: wr.plan || wr.intent?.text || "", thought: (wr.thoughts || []).at(-1)?.text, own_words: wr.model_share, care: wr.care,
+    bond: w.bond, diary: (wr.diary || []).map((d) => `${d.time}: ${d.text}`) } : null;
+  return wren ? [zen, wren] : [zen];
+}
+function placeWords(p) { return !p ? "" : /bedroom|room|kitchen|washroom/.test(p) ? `in the ${p}` : `${["porch", "lookout"].includes(p) ? "on the" : "in the"} ${p}`.replace("in the pond", "by the pond").replace("in the stream", "by the stream"); }
 
 function tick(m) {
   if (m.world) { m.world.full ? MapView.setWorld(m.world) : MapView.applyDelta(m.world); worldIn(m.world, !!m.world.full); }
@@ -123,20 +146,23 @@ function tick(m) {
 
 function onEvent(e) {
   switch (e.kind) {
-    case "thought": addThought(e); break;
+    case "thought": addThought(e); S.lastThought = e; break;
     case "intent": case "did": addDeed(e); break;
     case "tried": S.tried = e; break;
     case "chat": if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; }
       chatLine({ role: "user", text: e.user }); chatLine({ role: "mind", text: e.text, tokens: e.tokens, asleep: e.asleep }); break;
     case "tutor": tutorLine(e); break;
-    case "npc": addVillage(e); Community.addFeed(e);
-      if (e.to === "you") chatLine({ role: "mind", who: e.name, text: e.text }); break;
-    case "ada_says": case "vthought": case "vdid": case "talk": Community.addFeed(e); break;
+    case "npc": if (e.to === "you") chatLine({ role: "mind", who: e.name, text: e.text }); break;
+    case "wren_says": addVillage(e); Community.addFeed(e); break;
+    case "wren_did": addVillage(e); Community.addFeed(e); break;
+    case "wren_thought": addWrenThought(e); Community.addFeed(e); break;
+    case "ada_says": case "talk": case "happening": Community.addFeed(e);
+      if (e.kind === "happening" && e.what === "rainbow") toast("🌈 A rainbow!"); break;
+    case "story": Community.addStories([e]); Community.addFeed(e); toast(`📖 ${S.companion} tells ${SYNTH()} a bedtime story: “${e.title}”`, 6000); break;
+    case "answer": addQA(e); Community.addFeed(e); break;
     case "created": Community.addFeed(e); if (e.creation) Community.addWorks([e.creation]); break;
-    case "quest": Community.addFeed(e); toast(`🏅 ${e.text}`); break;
-    case "milestone": S.journey = [...(S.journey || []), e]; toast(`🌱 ${e.title}`, 6000); break;
-    case "oracle": addVillage(e); addQA(e); break;
-    case "read": case "fact": addVillage(e); break;
+    case "milestone": S.journey = [...(S.journey || []), e]; Community.addFeed(e); toast(`🌱 ${e.title}`, 6000); break;
+    case "read": addVillage(e); break;
     case "lesson": addLesson(e); break;
     case "metric": S.metrics.push(e.point); if (S.metrics.length > 20000) S.metrics.shift(); chartsDue(); break;
     case "assessment": S.assessments.push(e); chartsDue(); break;
@@ -185,6 +211,7 @@ function renderAll() {
   renderHeader();
   if (S.view === "world") renderWorld();
   else if (S.view === "minds") renderMinds();
+  else if (S.view === "stories") Community.stories($("#stories"));
   else if (S.view === "gallery") renderGallery();
   else if (S.view === "academy") renderAcademy();
   else if (S.view === "concepts") renderConcepts();
@@ -233,7 +260,7 @@ function renderHealth(h) {
 }
 
 // ================================================================== world view
-const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", company: "Company", fun: "Fun" };
+const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", company: "Company", fun: "Fun", clean: "Clean" };
 const SYNTH = () => S.name || "Zen";
 const W3 = { api: null, ready: false };          // the 3D valley (world3d.js), when WebGL is available
 
@@ -241,23 +268,27 @@ function renderWorld() {
   const w = MapView.st.world; if (!w || !w.ada) return;   // before the World's first snapshot
   const a = w.ada, m = w.mind || {}, n = SYNTH();
   // the overlay
-  const sky = { clear: "☀️", cloudy: "☁️", rain: "🌧️", snow: "❄️", windy: "🌬️", fog: "🌫️" }[w.weather] || "";
-  setText($("#ovClock"), `Day ${w.day} · ${w.season} · ${w.time} · ${sky} ${Math.round(w.temperature)}°C`);
+  const sky = { clear: "☀️", cloudy: "☁️", rain: "🌧️", storm: "⛈️", snow: "❄️", windy: "🌬️", fog: "🌫️" }[w.weather] || "";
+  const house = w.env?.rooms?.house;
+  setText($("#ovClock"), `Day ${w.day} · ${w.season} · ${w.time} · ${sky} ${Math.round(w.temperature)}°C${house != null ? ` · 🏠 ${Math.round(house)}°C` : ""}`);
   const sel = Community.st.byName[Community.st.selected];
-  setText($("#ovPlace"), sel ? `${sel.name}: ${sel.place}` : `${n}: ${a.place}`);
+  setText($("#ovPlace"), sel ? `${sel.name}: ${sel.place}` : `${n}: ${placeWords(a.place)}${a.dark ? " · dark" : ""}`);
+  const sounds = w.env?.sounds || [];
+  $("#ovHear").hidden = !sounds.length; setText($("#ovHear"), sounds.length ? "🔊 " + sounds.slice(0, 3).join(" · ") : "");
   Community.strip($("#mindStrip"));
   setHTML($("#mindCard"), sel ? Community.card(sel, false) : "");
-  Community.feed($("#liveFeed"), ["npc", "ada_says", "vthought", "created", "quest"]);
+  Community.feed($("#liveFeed"), ["wren_says", "ada_says", "talk", "answer", "created", "happening", "story", "milestone"], 40);
   renderHotbar(w);
   // the synth's own card below
   setText($("#adaTitle"), n);
-  setText($("#adaWhere"), a.sleeping ? "asleep" : `${a.place === "home" ? "at home" : "in the " + a.place}${a.carrying?.length ? " · carrying " + a.carrying.join(", ") : ""}${a.coins != null ? " · 🪙 " + a.coins : ""}`);
+  setText($("#adaWhere"), a.sleeping ? "asleep" : `${placeWords(a.place)}${a.carrying?.length ? " · carrying " + a.carrying.join(", ") : ""}${a.wet > 0.4 ? " · wet" : ""}`);
   setHTML($("#needs"), Object.entries(a.needs || {}).map(([k, v]) => {
     const c = v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
     return `<div class="need"><span>${NEED_LABEL[k] || k}</span><div><i style="width:${Math.round(v)}%;background:${c}"></i></div><b>${Math.round(v)}</b></div>`;
   }).join(""));
   const it = m.intent || {};
-  const badge = { self: '<span class="badge self">its own words</span>', needs: '<span class="badge needs">its needs</span>', you: '<span class="badge you">your idea</span>' }[it.source] || "";
+  const badge = { self: '<span class="badge self">its own words</span>', needs: '<span class="badge needs">its needs</span>', you: '<span class="badge you">your idea</span>',
+    companion: `<span class="badge you">${esc(S.companion)}'s words</span>` }[it.source] || "";
   setHTML($("#intent"), a.engaged || a.talking ? "💬 Talking" : a.sleeping ? "💤 Sleeping" : (m.plan ? badge + esc(m.plan) : esc(it.text || "…")));
   setText($("#intentWhy"), !a.sleeping && it.reason ? "Why: " + it.reason : "");
   setText($("#tried"), S.tried && it.source !== "self" && !a.sleeping ? `It tried to say: “${S.tried.text}”` : "");
@@ -269,6 +300,15 @@ function renderWorld() {
 function renderMinds() {
   Community.grid($("#mindsGrid"));
   Community.feed($("#communityFeed"));
+  const wr = MapView.st.world?.wren || {};
+  const words = wr.words_heard || [];
+  setHTML($("#zenWords"), words.length ? words.map(([wd, n]) => `<span class="chip" title="${n}×">${esc(wd)}</span>`).join("")
+    : `<span class="muted">None yet. ${esc(S.companion)} listens for real words in everything ${esc(SYNTH())} says.</span>`);
+  setText($("#careNow"), { caretaker: `As a caretaker: ${S.companion} feeds ${SYNTH()}, brings water, dries it, puts it to bed, and talks it through everything.`,
+    guide: `As a guide: ${S.companion} tells ${SYNTH()} what it needs and lets it do it ("You look thirsty. The sink is in the kitchen.").`,
+    friend: `As a friend: ${SYNTH()} looks after itself; ${S.companion} helps when asked.` }[wr.care] || "");
+  setHTML($("#wrenDiary"), (wr.diary || []).slice().reverse().map((d) => `<div class="item"><b class="t">Day ${d.day} · ${esc(d.time)}</b>${esc(d.text)}</div>`).join("")
+    || '<div class="muted">Nothing yet.</div>');
   setText($("#jName"), SYNTH());
   const done = S.journey || [];
   const next = ["first word", "first phrase", "first sentence", "acts in its own words", "first conversation", "first painting", "first song"]
@@ -307,12 +347,14 @@ function addDeed(e) {
   } else prepend($("#diary"), `${e.ok ? "✅" : "⚠️"} ${esc(e.text)}<div class="meta">${e.reward != null ? "reward " + e.reward : ""}</div>`);
 }
 function addVillage(e) {
-  if (e.kind === "npc" && e.text === "…") return;
-  const html = e.kind === "npc" ? `<b class="t">${esc(e.name)}${e.to ? ` → ${esc(e.to)}` : ""}</b>${esc(e.text)}`
-    : e.kind === "oracle" ? `<b class="t">🔮 The Oracle${e.by === "you" ? " (asked by you)" : ""}</b><i>${esc(e.question)}</i>\n${esc(e.text)}`
-    : e.kind === "read" ? `<b class="t">📘 ${esc(SYNTH())} read</b>${esc(e.text)}` : `<b class="t">🔭 ${esc(SYNTH())} learned</b>${esc(e.text)}`;
-  prepend($("#village"), html, 80);
+  if (!e.text || e.text === "…") return;
+  const html = e.kind === "wren_says" ? `<b class="t">🗨️ ${esc(S.companion || "Wren")}${e.heard ? ` <span class="muted">(${esc(SYNTH())} heard)</span>` : ""}</b>${esc(e.text)}`
+    : e.kind === "wren_did" ? `<span class="muted">${e.ok === false ? "⚠️ " : ""}${esc(e.text)}</span>`
+    : e.kind === "answer" ? `<b class="t">❓ ${e.by === "you" ? "You asked" : esc(SYNTH()) + " asked"}</b><i>${esc(e.question)}</i>\n${esc(e.text)}`
+    : e.kind === "read" ? `<b class="t">📘 ${esc(SYNTH())} read</b>${esc(e.text)}` : esc(e.text);
+  prepend($("#village"), html, 120);
 }
+function addWrenThought(e) { prepend($("#wrenThoughts"), `💭 ${esc(e.text)}<div class="meta">${new Date(e.t * 1000).toLocaleTimeString()}</div>`, 60); }
 function chatLine(c) {
   const d = document.createElement("div");
   d.className = `msg ${c.role === "user" ? "user" : "mind"}`;
@@ -324,7 +366,7 @@ function chatLine(c) {
 function tutorLine(e) {
   const last = [...$$(".msg.mind", $("#chat"))].reverse().find((m) => !m.querySelector(".tutor"));
   if (!last) return;
-  const t = document.createElement("div"); t.className = "tutor"; t.innerHTML = `<b>The Oracle suggests:</b> ${esc(e.text)}`;
+  const t = document.createElement("div"); t.className = "tutor"; t.innerHTML = `<b>${esc(S.companion)} suggests:</b> ${esc(e.text)}`;
   last.append(t); $("#chat").scrollTop = $("#chat").scrollHeight;
 }
 $$("#adaTabs button").forEach((b) => b.onclick = () => {
@@ -400,7 +442,7 @@ for (const k of PORTABLE) {
   const b = document.createElement("button"); b.textContent = GLYPH[k]; b.title = `Take a new ${k}`;
   b.onclick = async () => {
     if (!MapView.st.world?.visitor) await api("visitor", { action: "join" });
-    const text = k === "book" ? (prompt(`Write the book's words (${SYNTH()} will read and study them):`) || "") : "";
+    const text = k === "book" || k === "picture book" ? (prompt(`Write the book's words (${SYNTH()} will read and study them):`) || "") : "";
     try { toast(await api("visitor", { action: "hold", kind: k, text })); } catch (e) { toast(e.message); }
   };
   $("#holdPalette").append(b);
@@ -409,7 +451,7 @@ MapView.st.onClick = async ({ x, y }) => {
   if (S.mode === "add" && S.tool) {
     let text = "";
     if (S.tool === "sign") { text = prompt("What should the sign say?") || ""; if (!text) return; }
-    if (S.tool === "book") text = prompt("Write the book's words (empty: the Oracle writes one when it is read):") || "";
+    if (S.tool === "book" || S.tool === "picture book") text = prompt(`Write the book's words (empty: ${S.companion} writes one when it is read):`) || "";
     try { toast(await api("place", { kind: S.tool, x, y, text })); } catch (e) { toast(e.message); }
     return;
   }
@@ -417,7 +459,8 @@ MapView.st.onClick = async ({ x, y }) => {
   const who = [w.ada, ...(w.people || [])].find((b) => b && Math.abs(b.x - x) + Math.abs(b.y - y) <= 1);
   if (who) { Community.st.selected = who.name; Community.st.onSelect(who.name); renderAll(); return; }
   if (W3.api && S.mode === "watch") W3.api.focusOn("overview");
-  const here = MapView.entitiesAt(x, y).map((e) => GLYPH[e.kind] + " " + e.kind + (e.kind === "sprout" ? ` (${Math.round(e.growth || 0)}% grown)` : ""));
+  const here = MapView.entitiesAt(x, y).map((e) => GLYPH[e.kind] + " " + (e.kind === "plant" ? `${e.crop} plant (${["seed", "sprout", "young", "flowering", "ripe"][Math.min(4, Math.floor(e.stage || 0))]})` : e.kind)
+    + (e.contents?.length ? `: ${e.contents.join(", ")}` : "") + (e.lit ? " (lit)" : ""));
   const names = w.region_names || [], place = names[w.regions?.[y]?.[x]] ?? w.regions?.[y]?.[x];
   toast([place && `The ${place}`, ...here].filter(Boolean).join(" · ") || "Nothing here.");
 };
@@ -465,7 +508,9 @@ window.addEventListener("world3d", (ev) => {
       Community.st.selected = name; renderAll();
     } else if (info.kind === "entity") {
       const e = MapView.st.ents.get(info.id);
-      if (e?.work) Community.showWork(e.work); else if (e) toast(`${GLYPH[e.kind] || ""} ${e.kind}${e.text ? ": " + e.text : ""}`);
+      if (e?.work) Community.showWork(e.work);
+      else if (e) toast(`${GLYPH[e.kind] || ""} ${e.kind === "plant" ? e.crop + " plant" : e.kind}${e.lit ? " (lit)" : ""}${e.temp != null && e.temp > 35 ? ` · ${Math.round(e.temp)}°C` : ""}`
+        + `${e.contents?.length ? ": " + e.contents.join(", ") : ""}${e.text ? ": " + e.text : ""}`, 4200);
     }
   };
   document.addEventListener("visibilitychange", () => api3.pause(document.hidden || S.view !== "world"));
@@ -489,7 +534,7 @@ function renderAcademy() {
     ["Published", a.last_publish ? `brain v${a.version}, ${ago(a.last_publish)}` : `brain v${a.version}`],
     ["Stability", a.skipped ? `${a.skipped} unstable steps skipped` : "no unstable steps"],
   ]));
-  const mix = a.mix || {}, names = { fineweb: "Web text", lessons: "Oracle lessons", journal: "Her journal", concepts: "Concept drills" };
+  const mix = a.mix || {}, names = { fineweb: "Web text (FineWeb)", lessons: `${S.companion}'s lessons`, journal: "Its life (journal)", concepts: "Concept drills" };
   setHTML($("#mix"), Object.keys(names).map((k) => `<div class="bar"><span>${names[k]}</span><div><i style="width:${Math.round((mix[k] || 0) * 100)}%"></i></div><b>${pct(mix[k] || 0)}</b></div>`).join("")
     + `<div class="muted" style="margin-top:4px">${big(a.pools?.lessons_added)} lessons and ${big(a.pools?.journal_added)} journal entries received · ${a.pools?.facts ?? "–"} facts known to the graph</div>`);
   const f = a.fineweb || {};
@@ -497,7 +542,7 @@ function renderAcademy() {
     ["Reading", `<span class="muted">${esc(f.source || "–")}</span>`], ["Documents", big(f.docs)], ["Bytes per token", f.bytes_per_token ?? "–"]]));
 }
 $$("[data-ac]").forEach((b) => b.onclick = async () => {
-  if (b.dataset.ac === "grow" && !confirm("Add a layer to Ada's brain? What she knows is kept; she gains room to learn more.")) return;
+  if (b.dataset.ac === "grow" && !confirm(`Add a layer to ${SYNTH()}'s brain? What it knows is kept; it gains room to learn more.`)) return;
   try { await api(b.dataset.ac); toast("Done."); } catch (e) { toast(e.message); }
 });
 $("#probeForm").onsubmit = async (ev) => {
@@ -522,7 +567,7 @@ function chart(cv, lines, opt = {}) {
   const dpr = devicePixelRatio || 1, W = cv.clientWidth * dpr, H = cv.clientHeight * dpr; if (!W) return;
   cv.width = W; cv.height = H; const g = cv.getContext("2d"), pts = lines.flatMap((l) => l.data);
   g.font = `${10 * dpr}px system-ui`; g.fillStyle = css("--muted");
-  if (pts.length < 2) { g.fillText("waiting for Ada to study…", 8 * dpr, H / 2); return; }
+  if (pts.length < 2) { g.fillText(`waiting for ${SYNTH()} to study…`, 8 * dpr, H / 2); return; }
   let x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
   let y0 = opt.min ?? Math.min(...pts.map((p) => p[1])), y1 = opt.max ?? Math.max(...pts.map((p) => p[1]));
   if (y1 - y0 < 1e-9) { y1 += 1; if (opt.min == null) y0 -= 1; }
@@ -549,7 +594,7 @@ function drawCharts() {
   const as = S.assessments;
   chart(c("assess"), ["spelling", "grammar", "coherence", "meaning"].map((k, i) => ({ data: as.map((a) => [a.step, a[k]]), color: [A, B, G, P][i], dots: true })), { min: 0, max: 10, fmt: (v) => v.toFixed(0) });
   const last = as[as.length - 1];
-  setText($("#assessNote"), last?.note ? `Oracle (spelling · grammar · coherence · meaning): “${last.note}”` : "");
+  setText($("#assessNote"), last?.note ? `${S.companion} (spelling · grammar · coherence · meaning): “${last.note}”` : "");
 }
 addEventListener("resize", () => drawCharts());
 
@@ -559,9 +604,9 @@ function renderConcepts() {
   const c = S.concepts || {};
   const bars = (obj, label) => Object.entries(obj || {}).map(([k, v]) => `<div class="bar"><span>${esc(label(k))}</span><div><i style="width:${Math.round(v * 100)}%;background:${v > .5 ? "var(--good)" : v > .3 ? "var(--accent)" : "var(--warn)"}"></i></div><b>${pct(v)}</b></div>`).join("");
   setHTML($("#byRel"), bars(c.by_relation, (k) => REL[k] || k) || '<div class="muted">Not tested yet.</div>');
-  setHTML($("#bySrc"), bars(c.by_source, (k) => k === "built-in" ? "Built-in facts" : "Taught by the Oracle"));
+  setHTML($("#bySrc"), bars(c.by_source, (k) => k === "built-in" ? "Facts of the homestead" : `Taught by ${S.companion}`));
   const q = S.oracle.queued || [];
-  setText($("#teachQueue"), q.length ? `Waiting to be taught: ${q.join(", ")}` : S.oracle.teaching ? "The Oracle is writing a lesson…" : "");
+  setText($("#teachQueue"), q.length ? `Waiting to be taught: ${q.join(", ")}` : S.oracle.teaching ? `${S.companion} is writing a lesson…` : "");
   const filter = $("#factFilter").value, term = $("#factSearch").value.toLowerCase();
   const rows = (c.results || []).filter((r) => (filter === "all" || (filter === "wrong" && !r.ok) || (filter === "right" && r.ok) || (filter === "oracle" && r.src === "oracle"))
     && (!term || `${r.s} ${r.r} ${r.o}`.includes(term)));
@@ -581,11 +626,12 @@ function renderOracle() {
   $("#orMeter").hidden = !setup; $("#orBar").style.width = `${Math.round((b.progress || 0) * 100)}%`;
   const ok = o.enabled && !!o.active;
   st.className = "status " + (ok ? "on" : "off");
-  setText(st, !o.enabled ? "The Oracle is switched off (Settings)."
-    : setup ? `${b.detail || "Getting the built-in Oracle ready"}…`
+  const W = S.companion;
+  setText(st, !o.enabled ? `${W}'s language model is switched off (Settings); ${W} lives by simple rules.`
+    : setup ? `${b.detail || `Getting ${W}'s mind ready`}…`
     : o.error ? o.error
     : ok ? `${o.active} · ${o.lessons} lesson${o.lessons === 1 ? "" : "s"} written this session${o.teaching ? " · writing one now" : ""}`
-    : builtin ? "The built-in Oracle is getting ready…" : "No Ollama model chosen.");
+    : builtin ? `${W}'s mind is getting ready…` : "No Ollama model chosen.");
   const sel = $("#orModel"), sig = (o.models || []).map((m) => m.name).join("|") + o.model;
   if (sel._sig !== sig && document.activeElement !== sel) {
     sel._sig = sig;
@@ -597,10 +643,10 @@ $("#orModel").onchange = (e) => api("set", { key: "oracle.model", value: e.targe
 $("#btnModels").onclick = async () => { try { S.oracle = await api("models"); renderOracle(); } catch (e) { toast(e.message); } };
 $("#askForm").onsubmit = async (ev) => {
   ev.preventDefault(); const q = $("#askText").value.trim(); if (!q) return;
-  setHTML($("#askOut"), '<div class="item muted">The Oracle is thinking…</div>');
+  setHTML($("#askOut"), `<div class="item muted">${esc(S.companion)} is thinking…</div>`);
   try {
     const a = await api("oracle_ask", { question: q });
-    setHTML($("#askOut"), `<div class="item">${esc(a)}<div class="row" style="margin-top:6px"><button id="learnIt">🎓 Let Ada study this</button></div></div>`);
+    setHTML($("#askOut"), `<div class="item">${esc(a)}<div class="row" style="margin-top:6px"><button id="learnIt">🎓 Let ${esc(SYNTH())} study this</button></div></div>`);
     $("#learnIt").onclick = async () => { toast(await api("oracle_learn", { question: q, answer: a })); $("#learnIt").disabled = true; };
   } catch (e) { setHTML($("#askOut"), `<div class="item">${esc(e.message)}</div>`); }
 };
@@ -609,7 +655,7 @@ function addLesson(e) {
   const facts = (e.facts || []).length ? `<div class="meta">facts: ${e.facts.map((f) => esc(`${f.s} ${f.r} ${f.o}`)).join(" · ")}${e.new_facts ? ` (${e.new_facts} new)` : ""}</div>` : "";
   prepend($("#lessons"), `<b class="t">${e.priority ? "⭐ " : ""}${esc(e.topic)}</b>${esc(e.text)}${qa}${facts}`, 60);
 }
-function addQA(e) { prepend($("#qa"), `<b class="t">${e.by === "you" ? "You asked" : "Ada asked"}</b><i>${esc(e.question)}</i>\n${esc(e.text)}`, 60); }
+function addQA(e) { prepend($("#qa"), `<b class="t">${e.by === "you" ? "You asked" : esc(SYNTH()) + " asked"}</b><i>${esc(e.question)}</i>\n${esc(e.text)}`, 60); }
 
 // ================================================================== settings
 function syncSettings() {

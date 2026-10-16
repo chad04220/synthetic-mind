@@ -3,7 +3,7 @@
 It trains her brain on a mixture of four kinds of text:
 
     FineWeb       the open web, streamed
-    lessons       written by the Oracle: lessons, dialogues, answers to her questions, topics you asked for
+    lessons       written by Wren (the companion's language model): lessons, answers, topics you asked for
     journal       Ada's own life in the World: what she sensed, decided, did, heard and read
     concepts      drills stating the facts in the concept graph
 
@@ -87,7 +87,7 @@ class Academy:
 
             torch.set_num_threads(max(1, (os.cpu_count() or 4) - 2))   # two cores stay with the World and the Hub
         else:
-            torch.set_num_threads(2)   # on the GPU it needs little CPU; the cores stay with Ada and the Oracle
+            torch.set_num_threads(2)   # on the GPU it needs little CPU; the cores stay with the synth and Wren
         if self.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True

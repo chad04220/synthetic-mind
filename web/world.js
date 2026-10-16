@@ -1,17 +1,33 @@
 "use strict";
-// The map of Ada's valley. Drawn only when something changes or moves (and ~3 times a second for
-// blinking and weather), because the GPU the browser uses is busy teaching Ada.
+// The minimap of the homestead. Drawn only when something changes or moves (and ~3 times a second for
+// blinking and weather), because the GPU the browser uses is busy teaching the synth.
 
-const GLYPH = {
-  apple: "🍎", berry: "🫐", mushroom: "🍄", "cooked mushroom": "🍲", wheat: "🌾", bread: "🍞", bucket: "🪣",
-  "water bucket": "💧", wood: "🪵", stone: "🪨", axe: "🪓", seed: "🌰", coin: "🪙", book: "📘", ball: "⚽",
-  flower: "🌷", lamp: "💡", "music box": "🎵", telescope: "🔭", bed: "🛏️", "fire pit": "🔥", oven: "♨️",
-  well: "⛲", workbench: "🛠️", shrine: "🔮", sign: "🪧", chest: "🧰", sprout: "🌱", cat: "🐈", dog: "🐕",
-  bird: "🐦", fish: "🐟",
+const GLYPH = {   // filled in from the World's kinds table too
+  "apple": "🍎", "pear": "🍐", "plum": "🟣", "berries": "🫐", "mushroom": "🍄", "carrot": "🥕", "potato": "🥔",
+  "tomato": "🍅", "pumpkin": "🎃", "beans": "🫛", "wheat": "🌾", "mint": "🌿", "flower": "🌼", "egg": "🥚", "honey": "🍯",
+  "raw fish": "🐟", "flour": "🥡", "dough": "🫓", "bread": "🍞", "apple pie": "🥧", "baked apple": "🍎",
+  "roast potato": "🥔", "baked fish": "🍢", "boiled egg": "🥚", "soup": "🍲", "jam": "🫙", "tea": "🍵",
+  "cup of water": "🥛", "burnt food": "⬛", "rotten food": "🤢", "carrot seed": "🌰", "seed potato": "🥔",
+  "tomato seed": "🌰", "pumpkin seed": "🌰", "bean seed": "🌰", "wheat seed": "🌰", "mint seed": "🌰", "plant": "🌱",
+  "apple tree": "🌳", "pear tree": "🌳", "plum tree": "🌳", "berry bush": "🌿", "pot": "🥘", "kettle": "🫖", "cup": "☕",
+  "bowl": "🥣", "bucket": "🪣", "watering can": "🚿", "basket": "🧺", "jar": "🫙", "pantry": "🗄️", "toy chest": "🧰",
+  "bookshelf": "📚", "nest box": "🪺", "seed tin": "🥫", "fireplace": "🔥", "stove": "♨️", "oven": "🍞", "lamp": "🪔",
+  "candle": "🕯️", "matches": "🧯", "log": "🪵", "stick": "🥢", "ash": "🩶", "woodpile": "🪵", "chopping block": "🪓",
+  "bed": "🛏️", "sink": "🚰", "table": "🪑", "sofa": "🛋️", "piano": "🎹", "music box": "🎶", "mirror": "🪞",
+  "bathtub": "🛁", "towel": "🧣", "desk": "🗒️", "clock": "🕰️", "rug": "🟫", "window": "🪟", "cat bowl": "🥣",
+  "quern": "🪨", "workbench": "🛠️", "easel": "🖼️", "water barrel": "🛢️", "compost bin": "🗑️", "scarecrow": "🧑‍🌾",
+  "beehive": "🐝", "bird feeder": "🏠", "swing": "🪢", "bench": "🪑", "telescope": "🔭", "sign": "🪧",
+  "stepping stone": "⚪", "ball": "⚽", "blocks": "🧱", "teddy": "🧸", "kite": "🪁", "book": "📕", "picture book": "📗",
+  "paper": "📄", "pencil": "✏️", "axe": "🪓", "hammer": "🔨", "chisel": "🪛", "fishing rod": "🎣", "clay": "🟤",
+  "stone": "🪨", "feather": "🪶", "leaf": "🍂", "pinecone": "🌰", "bouquet": "💐", "snowman": "⛄", "painting": "🖼️",
+  "recording": "📼", "sculpture": "🗿", "poem": "📜", "birdhouse": "🏠", "cat": "🐈", "hen": "🐔", "rooster": "🐓",
+  "bee": "🐝", "duck": "🦆", "frog": "🐸", "fish": "🐟", "deer": "🦌", "robin": "🐦", "owl": "🦉", "butterfly": "🦋",
+  "hedgehog": "🦔",
 };
 const PEOPLE = {};      // name -> [glyph, colour], from the World
-const PORTABLE = ["apple", "berry", "mushroom", "bread", "wheat", "wood", "stone", "seed", "coin", "book", "ball", "flower", "bucket", "axe"];
-const PLACEABLE = [...PORTABLE, "lamp", "sign", "music box", "cat", "dog", "bird"];
+const PORTABLE = ["apple", "pear", "carrot", "potato", "bread", "honey", "egg", "berries", "mint", "flower", "log", "clay",
+                  "carrot seed", "bean seed", "book", "picture book", "ball", "blocks", "teddy", "kite", "candle", "towel"];
+const PLACEABLE = [...PORTABLE, "lamp", "sign", "music box", "hen", "robin", "butterfly", "hedgehog"];
 const BLOCKED = new Set([1, 3, 4, 8, 13, 15, 18]);
 const EMOJI_FONT = `"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
 
@@ -133,7 +149,7 @@ const MapView = (() => {
       g.fillText(GLYPH[e.kind] || "❔", cx, cy + ts * .04);
     }
     g.globalAlpha = 1;
-    // villagers
+    // the companion
     for (const p of w.people || []) {
       const [glyph, color] = [p.glyph || PEOPLE[p.name]?.[0] || "🙂", p.color || PEOPLE[p.name]?.[1] || "#ccc"];
       const q = glide("p" + p.name, p.x, p.y), cx = q[0] * ts + ts / 2, cy = q[1] * ts + ts / 2;

@@ -1,4 +1,4 @@
-"""Settings for Ada, the Academy, the World, the Oracle and the schedule that ties them together.
+"""Settings for the synth, the Academy, the World, Wren (the companion) and the schedule that ties them together.
 
 Plain dataclasses saved as minds/<name>/config.json. Only `LIVE` settings can change while
 running; the rest (network shape, tokenizer) are fixed when a mind is created.
@@ -61,7 +61,7 @@ class AcademyConfig:
     fineweb: bool = True
     # Share of each batch from each source (renormalised over the sources that have data).
     mix_fineweb: float = 0.70
-    mix_lessons: float = 0.15        # Oracle lessons and dialogues
+    mix_lessons: float = 0.15        # Wren's lessons
     mix_journal: float = 0.10        # Ada's own lived experience
     mix_concepts: float = 0.05       # concept drills generated from the concept graph
 
@@ -86,6 +86,7 @@ class WorldConfig:
 
 @dataclass
 class OracleConfig:
+    """Wren's mind: the one language model (the section keeps its old name, 'oracle')."""
     # "builtin": a small model the program downloads and runs itself with llama.cpp, on the CPU.
     # "ollama": any model in your local Ollama (url, model and placement below).
     backend: str = "builtin"
@@ -94,24 +95,21 @@ class OracleConfig:
     model: str = ""
     enabled: bool = True
     background_teaching: bool = True   # keep the lesson queue topped up while the Academy studies
-    lesson_seconds: float = 30.0       # pause between background lessons (Ollama shares the GPU)
-    npc_voices: bool = True            # villagers speak with the Oracle's words
-    tutor_replies: bool = True         # suggest the reply Ada should have given you
+    lesson_seconds: float = 120.0      # pause between background lessons (they share the model with Wren's life)
+    tutor_replies: bool = True         # suggest the reply the synth should have given you
     assess_minutes: float = 10.0
-    # Where Ollama runs the Oracle. "cpu" (default): always on the CPU, so the GPU is kept for
+    # Where Ollama runs the model. "cpu" (default): always on the CPU, so the GPU is kept for
     # training. "auto": on the CPU while the Academy studies and on the GPU otherwise. "gpu": always.
     placement: str = "cpu"
-    cpu_threads: int = 0             # the Oracle's threads on the CPU; 0 = the physical cores the synth's brain leaves free
-    # Every villager has its own voice: a llama.cpp server of its own, on the CPU.
-    villager_voices: bool = True
-    village_model: str = "qwen2.5-1.5b"
-    villager_threads: int = 2
-    banter: bool = True                # villagers chat with each other (the synth overhears and learns)
-    banter_seconds: float = 75.0
-    villager_thought_seconds: float = 60.0   # how often each villager thinks out loud
+    cpu_threads: int = 0             # Wren's threads on the CPU; 0 = the physical cores the synth's brain leaves free
+    # The companion. care: how much it does for the synth. "auto" follows the synth's stage
+    # (caretaker -> guide -> friend); or fix it at one of those.
+    care: str = "auto"
+    talkative: float = 0.6             # 0..1: how often it talks the synth through what it does
+    stories: bool = True               # a bedtime story about the day, every night
 
 
-CONFIG_VERSION = 2   # 2: Ada's brain and the Oracle default to the CPU; the schedule to "together"
+CONFIG_VERSION = 3   # 2: the brain and the Oracle default to the CPU, the schedule to "together". 3: the companion
 
 
 @dataclass
@@ -132,6 +130,7 @@ TOKENIZER_VOCAB = {"fineweb32k": 32768, "gpt2": 50304, "bytes": 320}
 class AdaConfig:
     version: int = CONFIG_VERSION
     name: str = "Zen"
+    companion: str = "Wren"
     tokenizer: str = "fineweb32k"
     preset: str = "small"
     brain: BrainConfig = field(default_factory=BrainConfig)
@@ -176,6 +175,8 @@ class AdaConfig:
                                            ("schedule", "mode", "day_night", "together")):
                 if d.get(section, {}).get(key) == was:
                     d[section][key] = now
+        if d.get("version", 1) < 3 and d.get("oracle", {}).get("lesson_seconds") == 30.0:
+            d["oracle"]["lesson_seconds"] = 120.0     # one model now lives Wren's life too
         d["version"] = CONFIG_VERSION
         return cls.from_dict(d)
 
@@ -198,7 +199,7 @@ CHOICES = {
     "oracle.placement": ("cpu", "auto", "gpu"),
     "oracle.backend": ("builtin", "ollama"),
     "oracle.builtin_model": ("gemma-2-2b", "qwen2.5-1.5b", "qwen2.5-0.5b", "llama-3.2-3b"),
-    "oracle.village_model": ("gemma-2-2b", "qwen2.5-1.5b", "qwen2.5-0.5b", "llama-3.2-3b"),
+    "oracle.care": ("auto", "caretaker", "guide", "friend"),
 }
 
 LIVE = {
@@ -210,9 +211,10 @@ LIVE = {
     "world.device": str, "world.cpu_threads": int, "oracle.cpu_threads": int, "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
     "world.thought_tokens": int, "world.thought_temperature": float, "world.thoughts_grounded": bool,
     "world.intent_temperature": float, "world.reply_tokens": int, "world.reply_temperature": float,
-    "oracle.backend": str, "oracle.builtin_model": str, "oracle.villager_voices": bool, "oracle.village_model": str,
-    "oracle.villager_threads": int, "oracle.banter": bool, "oracle.banter_seconds": float, "oracle.villager_thought_seconds": float, "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,
-    "oracle.npc_voices": bool, "oracle.placement": str, "oracle.tutor_replies": bool, "oracle.lesson_seconds": float,
+    "oracle.backend": str, "oracle.builtin_model": str, "oracle.care": str, "oracle.talkative": float,
+    "oracle.stories": bool, "oracle.url": str, "oracle.model": str, "oracle.enabled": bool,
+    "oracle.background_teaching": bool, "oracle.placement": str, "oracle.tutor_replies": bool,
+    "oracle.lesson_seconds": float,
 }
 
 
@@ -245,7 +247,7 @@ def physical_cores() -> int:
 
 def cpu_threads(cfg: AdaConfig) -> dict:
     """How the CPU's physical cores are shared: Ada's brain gets half (it thinks in short bursts,
-    and one-token-at-a-time generation gains little beyond that), the Oracle gets the rest, so the
+    and one-token-at-a-time generation gains little beyond that), Wren's model gets the rest, so the
     two never fight over the same cores. The Academy, on the GPU, needs almost no CPU."""
     cores = physical_cores()
     world = cfg.world.cpu_threads or max(1, cores // 2)

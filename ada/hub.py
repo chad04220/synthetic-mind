@@ -2,9 +2,11 @@
 it serves stays responsive whatever the Academy and the World are doing.
 
 It starts both worker processes (and restarts either if it crashes), carries messages between
-them and the browser, runs the schedule (by default the Academy studies while Ada sleeps and
-rests while she is awake), and runs the Oracle: background lessons aimed at what Ada gets wrong,
-topics you ask it to teach, answers to questions, villagers' words and assessments.
+them and the browser, runs the schedule, and runs the one language model: Wren's mind. Wren
+chooses what to do and what to say in the World, talks with the synth, answers its questions and
+tells it bedtime stories; here the same model also writes the Academy's lessons from the days the
+two of them spent together, suggests the replies the synth should have given you, and assesses
+how the synth uses language.
 """
 from __future__ import annotations
 
@@ -23,11 +25,10 @@ from .concepts import ConceptGraph
 from .config import AdaConfig, cpu_threads, get_live, set_live
 from .diag import Perf, findings, gpu_readings, setup_logging, system_info
 from .localllm import LocalLLM
-from .ontology import NPCS
-from .oracle import TOPICS, Oracle
-from .proc import append_jsonl
-from .villagers import Villagers
 from .journey import Journey
+from .oracle import Oracle
+from .proc import append_jsonl
+from .wren import TOPICS, WrenVoice
 
 CHILDREN = {"academy": academy.run, "world": life.run}
 
@@ -70,27 +71,27 @@ class Hub:
         self.metrics: deque = deque(maxlen=20000)
         self.assessments: deque = deque(maxlen=500)
         self.feeds = {k: deque(maxlen=n) for k, n in
-                      (("thought", 80), ("chat", 200), ("oracle", 60), ("lesson", 60), ("npc", 120), ("deed", 80),
-                       ("talk", 60), ("vthought", 120), ("vdid", 160), ("ada_says", 60))}
-        self.gallery: dict[int, dict] = {}            # every work made in the valley, by id
+                      (("thought", 80), ("chat", 200), ("answer", 60), ("lesson", 60), ("npc", 60), ("deed", 80),
+                       ("talk", 120), ("wren_says", 160), ("wren_did", 160), ("wren_thought", 80), ("ada_says", 60),
+                       ("happening", 120), ("story", 60))}
+        self.gallery: dict[int, dict] = {}            # every work made at the homestead, by id
+        self.stories: dict[float, dict] = {}          # Wren's bedtime stories, by time
         self.journey = Journey(self.folder, cfg.name)
         self.concept_report: dict = {}
         self._load_history()
 
-        # the Oracle and the villagers' voices: one llama.cpp server each
+        # Wren's mind: one language model (a llama.cpp server on the CPU, or Ollama)
         voices = Path(__file__).resolve().parent.parent / "oracle"
-        self.fleet: dict[str, LocalLLM] = {"oracle": LocalLLM(voices, self._local_log, "oracle")}
-        for n in NPCS:
-            self.fleet[n] = LocalLLM(voices, self._local_log, n)
-        self.local = self.fleet["oracle"]
-        self.villagers = Villagers(self, self.folder)
-        self.last_banter = time.time()
+        self.local = LocalLLM(voices, self._local_log, "wren")
+        self.local.name = f"{cfg.companion}'s mind"
         self.oracle = Oracle(cfg.oracle.url, cfg.oracle.model, self.local)
         self.oracle.backend = cfg.oracle.backend
         self.oracle.name = cfg.name
         self.oracle.cpu_threads = cpu_threads(cfg)["oracle"]
-        self.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="oracle")
-        self.voice_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="voice")   # the gate limits the work
+        self.wren = WrenVoice(self.oracle, cfg.companion, cfg.name)
+        self.voice_was_ready = None
+        self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lessons")   # lessons and assessments
+        self.voice_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wren")   # Wren in the World
         self.teaching = False
         self.last_teach = 0.0
         self.last_assess = time.time()
@@ -136,15 +137,9 @@ class Hub:
                 p.terminate()
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.voice_pool.shutdown(wait=False, cancel_futures=True)
-        closers = [threading.Thread(target=server.close, daemon=True) for server in self.fleet.values()]
-        for t in closers:
-            t.start()
-        for t in closers:
-            t.join(20)
-        try:
-            self.villagers.save()
-        except OSError:
-            pass
+        closer = threading.Thread(target=self.local.close, daemon=True)
+        closer.start()
+        closer.join(20)
 
     def _supervise(self):
         while not self.stopping:
@@ -256,6 +251,8 @@ class Hub:
             self.apply_schedule()
         elif t == "event":
             kind = m["kind"]
+            if kind == "story":
+                self.stories[m.get("t", time.time())] = {k: v for k, v in m.items() if k not in ("src", "type", "kind")}
             self.event(kind, **{k: v for k, v in m.items() if k not in ("src", "type", "t", "kind")})
             also = {"did": "deed", "intent": "deed", "tutor": "chat"}.get(kind)   # feeds shown on load
             if also:
@@ -267,14 +264,17 @@ class Hub:
             for c in m.get("chat", []):
                 self.feeds["chat"].append({"id": 0, "kind": "chatline", **c})
         elif t == "oracle":
-            villagers = m["purpose"] in ("npc", "visitor_npc", "banter", "lesson", "intent", "thought", "turn", "create")
-            (self.voice_pool if villagers else self.pool).submit(self._world_oracle, m)
+            self.voice_pool.submit(self._world_oracle, m)
         elif t == "perf":
             self.perf_latest[m["src"]] = m["perf"]
             self.perf_history.append((m["t"], m["src"], m["perf"]))
 
     def _merge_world(self, snap: dict):
         works = snap.pop("creations", None)
+        for h in snap.pop("happenings", None) or []:
+            self.event("happening", **{k: v for k, v in h.items() if k not in ("t", "kind")}, what=h.get("kind"))
+        for st in snap.pop("stories", None) or []:
+            self.stories[st["t"]] = st
         with self.lock:
             for c in works or []:
                 self.gallery[c["id"]] = c
@@ -492,35 +492,25 @@ class Hub:
         return int(self.academy_status.get("stage", 0) or 0)
 
     def _local_tick(self):
-        """Keep the llama.cpp servers that are wanted running (one starting at a time), stop the rest."""
+        """Keep Wren's language model running (or stopped), and tell the World whether it is up."""
         o = self.cfg.oracle
-        want: dict[str, tuple] = {}
         if o.enabled and o.backend == "builtin":
-            want["oracle"] = (o.builtin_model, cpu_threads(self.cfg)["oracle"], 6144, 2)
+            threads = cpu_threads(self.cfg)["oracle"]
+            if not self.local.busy and self.local.wants(o.builtin_model, threads):
+                threading.Thread(target=self.local.ensure, args=(o.builtin_model, threads, 6144, 2),
+                                 name="voice-setup-wren", daemon=True).start()
             if not getattr(self, "_ollama_released", False):
                 self._ollama_released = True
                 self.pool.submit(self._release_ollama)
         else:
             self._ollama_released = False
-        oracle_settled = "oracle" not in want or self.local.ready or self.local.status == "error"
-        if o.enabled and o.villager_voices and oracle_settled:
-            for n in NPCS:
-                want[n] = (o.village_model, max(1, o.villager_threads), 2048, 1)
-        starting = any(s.busy for s in self.fleet.values())
-        for role, (model, threads, ctx, slots) in want.items():
-            server = self.fleet[role]
-            if not starting and server.wants(model, threads):
-                threading.Thread(target=server.ensure, args=(model, threads, ctx, slots),
-                                 name=f"voice-setup-{role}", daemon=True).start()
-                starting = True
-        for role, server in self.fleet.items():
-            if role not in want and server.proc is not None and not server.busy:
-                server.stop()
-                self._local_log(f"stopped {server.who} (not in use)")
-        if (o.enabled and o.banter and time.time() - self.last_banter > o.banter_seconds
-                and self.world_state.get("phase") == "day"):
-            self.last_banter = time.time()
-            self.send("world", "banter")
+            if self.local.proc is not None and not self.local.busy:
+                self.local.stop()
+                self._local_log(f"stopped {self.local.who} (not in use)")
+        ready = self.oracle_ready()
+        if ready != self.voice_was_ready:
+            self.voice_was_ready = ready
+            self.send("world", "voice", ready=ready)
 
     def _release_ollama(self):
         """With the built-in Oracle in use, free the memory an Ollama model we used still holds."""
@@ -557,9 +547,13 @@ class Hub:
                                                         "parts": [[r, t] for r, t in parts if t],
                                                         "weight": weight, "priority": priority})
 
+    def memories(self) -> list[str]:
+        """What Wren and the synth did lately (Wren's deeds, in its words)."""
+        return [e["text"] for e in list(self.feeds["wren_did"])[-12:] if e.get("ok") and e.get("text")]
+
     def teach(self, topic: str, priority: bool = False, focus: list[str] | None = None) -> dict:
-        """Ask the Oracle for a lesson pack and hand it to the Academy. Returns the pack."""
-        pack = self.oracle.lesson_pack(topic, self.stage, focus)
+        """Ask Wren for a lesson pack and hand it to the Academy. Returns the pack."""
+        pack = self.wren.lesson_pack(topic, self.stage, focus, self.memories())
         if pack["lesson"]:
             self._curriculum("lesson", [("<|oracle|>", pack["lesson"])], 1.0, priority, topic)
         for q, a in pack["qa"]:
@@ -613,7 +607,7 @@ class Hub:
         rate = (self.world_state.get("mind") or {}).get("self_rate", 0)
 
         def job():
-            a = self.oracle.assess(thoughts, rate)
+            a = self.wren.assess(thoughts, rate)
             if a:
                 a.update(step=self.academy_status.get("step", 0), t=time.time(), self_rate=rate)
                 self.assessments.append(a)
@@ -623,72 +617,46 @@ class Hub:
         self.pool.submit(job)
 
     def _world_oracle(self, m: dict):
-        """The World needs words from the Oracle or a villager: answer when they arrive (or a fallback)."""
-        purpose, p, st = m["purpose"], m["payload"], self.stage
+        """The World needs Wren's words or choices: ask the model and send the answer back."""
+        purpose, p, st = m["purpose"], m["payload"], int(m.get("stage", self.stage) or 0)
         text, extra = "", {}
-        ctx = dict(p.get("ctx") or {}, stage=st)
-        community = purpose in ("intent", "thought", "turn", "create")
+        t0 = time.perf_counter()
         try:
-            if community and not self.cfg.oracle.enabled:
-                pass
-            elif purpose == "intent":
-                text = self.villagers.intent(p["npc"], p["perception"], ctx)
-            elif purpose == "thought":
-                text = self.villagers.thought(p["npc"], p["perception"], ctx)
-            elif purpose == "turn":
-                text = self.villagers.turn(p["speaker"], p["listener"], p["history"], p.get("topic", ""),
-                                           p.get("opening", False), p.get("closing", False), ctx)
-            elif purpose == "create":
-                extra["work"] = self.villagers.create(p["npc"], p["creation"], ctx)
-                text = extra["work"].get("title", "")
-            elif purpose == "npc":
-                if self.cfg.oracle.enabled and self.cfg.oracle.npc_voices:
-                    text = self.villagers.to_synth(p["npc"], p.get("said", ""), ctx, p.get("kind", "talk"))
-                else:
-                    text = random.choice(NPCS[p["npc"]]["lines"])
-            elif purpose == "visitor_npc":
-                text = self.villagers.to_visitor(p["npc"], p["said"], ctx) if self.cfg.oracle.enabled else \
-                    random.choice(NPCS[p["npc"]]["lines"])
-            elif purpose == "lesson":
-                topic = p.get("topic") or random.choice(TOPICS)
-                ctx["topic"] = topic
-                text = self.villagers.to_synth("Sage", "", ctx, "lesson") if self.cfg.oracle.enabled else ""
-                if text:
-                    self._curriculum("lesson", [("<|npc|>", f"Sage: {text}")], 2.0, True, topic)
-                    self.event("lesson", topic=f"Sage's lesson: {topic}", text=text, qa=[], facts=[], new_facts=0,
-                               priority=True)
-                if self.oracle_ready() and len(self.topics) < 3:
-                    self.topics.append(topic)          # and the Oracle writes a full lesson for the Academy
-            elif purpose == "banter":
-                if self.cfg.oracle.enabled:
-                    extra["lines"] = self.villagers.banter(p["a"], p["b"], ctx)
-                    text = " ".join(t for _, t in extra["lines"])
-            elif self.oracle_ready():
-                if purpose == "answer":
-                    text = self.oracle.answer(p["question"], st, asker=self.cfg.name)
+            if self.oracle_ready():
+                if purpose == "wren_decide":
+                    extra["decision"] = self.wren.decide(p["situation"], p["synth"], p.get("memory", []), p["options"],
+                                                         st, p.get("near", False))
+                elif purpose == "wren_turn":
+                    text = self.wren.turn(p["history"], p.get("topic", ""), st, p.get("opening", False),
+                                          p.get("closing", False), p.get("situation", ""))
+                elif purpose == "wren_answer":
+                    text = self.wren.answer(p["question"], st, p.get("situation", ""))
+                elif purpose == "wren_story":
+                    text = self.wren.story(p["day"], p.get("diary", []), st)
+                elif purpose == "wren_book":
+                    text = self.wren.book(st)
+                elif purpose == "wren_star":
+                    text = self.wren.star_fact(st)
+                elif purpose == "wren_name":
+                    text = self.wren.name_work(p.get("work") or {}, (p.get("work") or {}).get("author", ""))
+                elif purpose == "wren_visitor":
+                    text = self.wren.to_visitor(p["said"], p.get("situation", ""), p.get("about", ""))
                 elif purpose == "tutor" and self.cfg.oracle.tutor_replies:
-                    text = self.oracle.tutor(p["history"], p["user"], p["mind"], st, self.cfg.name)
-                elif purpose == "book":
-                    text = self.oracle.book(st)
-                elif purpose == "fact":
-                    text = self.oracle.fact(p["topic"], st, self.cfg.name)
+                    text = self.wren.tutor(p["history"], p["user"], p["mind"], st)
         except Exception as e:
-            self.event("error", text=f"{'A villager' if purpose in ('npc', 'visitor_npc', 'banter') else 'The Oracle'} "
-                                     f"({purpose}): {type(e).__name__}: {e}")
-        if not text and purpose in ("npc", "visitor_npc"):
-            text = random.choice(NPCS[p["npc"]]["lines"])
-        if not text and purpose == "book":
+            self.event("error", text=f"{self.cfg.companion}'s mind ({purpose}): {type(e).__name__}: {e}")
+        self.perf.add(f"{self.cfg.companion}: {purpose.replace('wren_', '')}", time.perf_counter() - t0)
+        if not text and purpose == "wren_book":
             facts = self.graph.drill(random.Random())
             text = " ".join(t for _, t in facts)
-        if text or community:
-            self.send("world", "oracle_reply", req=m["rid"], text=text, **extra)
-        if purpose in ("npc", "visitor_npc", "banter", "turn") and random.random() < 0.2:
-            self.voice_pool.submit(self.villagers.save)
+        self.send("world", "oracle_reply", req=m["rid"], text=text, **extra)
 
     def ask(self, question: str) -> str:
-        """You ask the Oracle something."""
-        answer = self.oracle.answer(question, 6, asker="you", name=self.cfg.name)
-        self.event("oracle", question=question, text=answer, by="you")
+        """You ask Wren something (on the Wren tab)."""
+        ws = self.world_state
+        about = f"{self.cfg.name}'s language stage: {self.academy_status.get('stage_name', 'Static')}."
+        answer = self.wren.to_visitor(question, f"It is day {ws.get('day', 1)}, {ws.get('time', '')}.", about)
+        self.event("answer", question=question, text=answer, by="you")
         return answer
 
     def learn_answer(self, question: str, answer: str):
@@ -727,6 +695,7 @@ class Hub:
                 "academy": self.academy_status, "world": self.world_full(), "world_seq": self.world_seq,
                 "metrics": list(self.metrics)[-4000:], "assessments": list(self.assessments),
                 "feeds": {k: list(v) for k, v in self.feeds.items()}, "journey": self.journey.items,
+                "stories": sorted(self.stories.values(), key=lambda x: x.get("t", 0))[-80:],
                 "concepts": self.concept_report, "event_id": self.event_id,
                 "oracle": self.oracle_info(), "events": [e for e in self.events if e["kind"] in ("error", "log")][-20:],
             }
@@ -738,4 +707,4 @@ class Hub:
                 "models": self.oracle.models, "model": self.oracle.model,
                 "error": (self.local.error if builtin else self.oracle.error),
                 "teaching": self.teaching, "lessons": self.lessons_written, "queued": list(self.topics),
-                "enabled": self.cfg.oracle.enabled, "villagers": self.villagers.status()}
+                "enabled": self.cfg.oracle.enabled, "companion": self.cfg.companion}
