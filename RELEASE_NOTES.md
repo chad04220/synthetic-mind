@@ -1,3 +1,36 @@
+# Synthetic Mind v3.2.0
+
+**Keepsakes that grow into real art.** Zen and Wren can now make richer, more crafted pieces, and
+both get better with practice.
+
+- **Paintings** are now composed scenes instead of a few shapes:
+  - layered land (hills, forest, water, fields, snow or a room), a sky for the hour, weather and light;
+  - the things the painter chose (the moon, hens, an apple tree, fireflies…);
+  - a palette from the season and the mood;
+  - seven styles: naive, watercolour, impressionist, oil, pastel, ink and pointillist.
+- **Songs** have a key, a mode, a tempo, chords, a melody grown from a motif, a bass line and a form
+  such as AABA. They are played with real instruments (piano, flute, strings, music box, bell,
+  guitar, voice) and a little reverb.
+- **Sculptures** are built from parts, so a sleeping owl or a sitting cat looks like one. They come in
+  clay, wood or stone, with a rough, smooth or polished finish and sometimes a glaze. Turn them in 3D
+  on the Keepsakes tab.
+- **Skill.** Each of them has a skill for every medium, shown on the Together tab.
+  - Every piece is practice, and so is Wren's feedback, looking at a piece and working side by side.
+  - Zen's growing language helps too. Its first paintings are lopsided and naive; later ones have
+    composition, harmony and light.
+  - Wren starts as a fair amateur and gets better.
+- **Zen paints what it says.** "I paint the moon over the pond" becomes a night painting of the moon
+  and the pond.
+- **Wren plans its pieces with its language model:** title, subject, style, colours, mode, tempo and
+  form. The World then makes the piece from that plan.
+- **Wren looks at Zen's work** and says something kind and useful about it. Its words are kept
+  with the piece.
+- **Ask Wren to make something** on the Keepsakes tab, for example "a song about the hens at dusk".
+- **Art in the house.** Paintings hang on the walls in frames. Sculptures stand on plinths in the
+  yard. Either of them can stop to look at a piece.
+
+---
+
 # Synthetic Mind v3.1.0
 
 - **60 frames a second, whatever the screen.** The 3D view drew at most 60 frames a second before,

@@ -90,10 +90,25 @@ python run.py --no-fineweb --no-oracle     offline (Wren lives by simple rules)
   - Wren's diary.
 - **📖 Stories** collects Wren's bedtime stories, one per night.
 - **🖼️ Keepsakes** holds everything either of them made:
-  - paintings from the easel;
-  - songs played on the piano, which you can play back;
-  - clay and wood sculptures;
+  - paintings from the easel: layered landscapes and rooms in one of seven styles (naive, watercolour,
+    impressionist, oil, pastel, ink, pointillist), with light, weather and the things they chose to paint;
+  - songs with chords, a melody and a form (AABA and the like), which you can play back;
+  - clay, wood and stone sculptures you can turn in 3D;
   - poems and birdhouses.
+
+  Each piece shows who made it, how skilled they were, what it is and what Wren said about it.
+  **Ask Wren to make something** gives Wren a commission ("a song about the hens at dusk").
+
+**How their art grows.** Every piece is practice, and so are Wren's words about Zen's work, looking
+at a piece, and making things side by side.
+- **Zen** starts with lopsided naive pictures and one-line hums. As it practises, and as its language
+  grows, its pictures gain composition, harmony and light, its songs gain chords and form, and its
+  sculptures gain detail and a glaze. What Zen says it will paint ("I paint the moon over the pond")
+  is what it paints.
+- **Wren** starts as a fair amateur. Its language model plans each piece (title, subject, style,
+  colours, mode, tempo, form), and the World turns that plan into the real thing.
+- Paintings hang on the walls of the house; sculptures stand on plinths outside.
+- The Together tab shows each mind's skill in every medium.
 - **🎓 Academy**, **🧠 Concepts**, **🪶 Wren**, **⚙️ Settings** and **🩺 Health** show:
   - the training;
   - what Zen understands;
@@ -195,7 +210,7 @@ run.py               starts the Hub, which starts the Academy and the World
 ada/academy.py       training, evaluation, publishing        ada/model.py      the brain (and the fused loss)
 ada/life.py          the World process: Zen's day            ada/companion.py  Wren's body and mind, conversations
 ada/world/sim.py     the homestead and its physics           ada/world/agent.py  words → plans → steps → deeds
-ada/world/art.py     paintings, melodies, sculptures         ada/journey.py    Zen's milestones
+ada/world/art.py     art: plans, composers, skill            ada/journey.py    Zen's milestones
 ada/hub.py           processes, schedule, Wren's model       ada/wren.py       everything Wren's model is asked
 ada/localllm.py      llama.cpp servers                       ada/oracle.py     reaching the model (built-in or Ollama)
 ada/tokenizer.py     fineweb32k / gpt2 / bytes               ada/fineweb.py    FineWeb streaming
