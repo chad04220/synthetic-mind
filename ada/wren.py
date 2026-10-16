@@ -168,9 +168,9 @@ class WrenVoice:
         poem = f' The words are: "{text}".' if text else ""
         tip = ("Say what you love about it." if skill < 0.25 else
                "Say what you love about it and give one small, concrete idea to try next time.")
-        return _line(self.o.chat(self.system, f"{self.synth} just made {work}" + (f', called "{title}"' if title else "")
+        return _unquote(self.o.chat(self.system, f"{self.synth} just made {work}" + (f', called "{title}"' if title else "")
                                  + f".{poem} Speak to {self.synth} about it in two short sentences, using "
-                                 f"{self._level(stage)}. {tip}", temperature=0.85, max_tokens=90), 300)
+                                 f"{self._level(stage)}. {tip}", temperature=0.85, max_tokens=90))
 
     def poem(self, stage: int, about: str) -> str:
         return clean(self.o.chat(self.system, f"Write a tiny poem (4 lines) about {about}, using {self._level(stage, 1)}.",
@@ -225,6 +225,12 @@ class WrenVoice:
                 {"note": str(d.get("note", ""))[:300]}
         except (TypeError, ValueError):
             return {}
+
+
+def _unquote(text: str) -> str:
+    """One spoken line: no quotation marks the model wrapped around (or scattered through) it."""
+    t = re.sub(r'["“”]\s*["“”]', " ", text or "")
+    return _line(re.sub(r'["“”]', "", t), 300)
 
 
 def _line(text, limit: int = 260) -> str:

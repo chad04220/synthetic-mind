@@ -37,6 +37,9 @@ both get better with practice.
 - **Wren finishes what it starts.** If Zen comes to it or starts a conversation mid-piece, Wren
   goes back to the piece afterwards. A commission stays open until it is made, and if Wren's
   model is too slow to plan it, Wren still makes it about what you asked for.
+- **One look for every tab.** Each tab opens with the same header (an icon, its name, what it is
+  for, and its main buttons), then evenly spaced cards with titled sections, in a warmer theme in
+  both light and dark mode. Labels in Settings no longer break apart around a name.
 
 ---
 
