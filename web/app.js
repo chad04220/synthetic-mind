@@ -79,6 +79,7 @@ function onEvent(e, replay = false) {
     case "growth": feed("#teacherFeed", "Brain grew", `Now ${e.layers} layers, ${big(e.params)} parameters (${e.why}).`); if (!replay) flash(`The brain grew to ${e.layers} layers.`); break;
     case "speak": break;
     case "saved": if (!replay) flash("Saved.", 1500); break;
+    case "mode": if (!replay) toast(e.mode === "awake" ? "🌱 Awake: it thinks, talks and lives in the world." : "📚 Studying: all of the GPU goes to learning."); break;
     case "error": flash(`Engine error: ${e.text}`, 8000); break;
   }
 }
@@ -163,9 +164,13 @@ $("#chatForm").onsubmit = async (ev) => {
     await api("teach", { text });
     return;
   }
+  if (S.snap && S.snap.mode !== "awake") {
+    if (!confirm("It is studying right now. Wake it up to talk? (Learning pauses while it is awake.)")) { inp.value = text; return; }
+    await setMindMode("awake");
+  }
   addUserMsg(text);
   S.pendingChat = addUserMsg("…", "mind pending");
-  try { await api("chat", { text }); } catch (err) { flash(err.message); }
+  try { await api("chat", { text }); } catch (err) { flash(err.message); if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; } }
 };
 
 // ---------------------------------------------------------------- header + panels
@@ -186,17 +191,16 @@ function render(s) {
   $("#kTokens").textContent = big(s.tokens);
   $("#kBrain").textContent = `${big(s.params)} · ${s.layers}L`;
   $("#kBpb").textContent = s.bpb ? s.bpb.toFixed(3) : "–";
-  const learning = s.train_status === "learning";
-  $("#kTps").textContent = !s.settings.training ? "paused" : learning ? `${big(Math.round(s.tps))} tok/s` : "not learning";
+  const learning = s.train_status === "learning", awake = s.mode === "awake";
+  setText($("#kTps"), awake ? "awake" : learning ? `${big(Math.round(s.tps))} tok/s` : "not learning");
   const st = $("#trainStatus");
-  st.className = "status " + (learning || !s.settings.training ? "ok" : "warn");
+  st.className = "status " + (learning || awake ? "ok" : "warn");
+  renderMode(s);
   setHTML(st, `Training: ${esc(s.train_status || "")} · step ${fmt(s.step)}` +
     (s.skipped_steps ? ` · ${fmt(s.skipped_steps)} unstable steps skipped` : "") +
     (s.hitch ? `<span class="err">Pause of ${s.hitch.seconds}s ${dur((Date.now() / 1000) - s.hitch.t)} ago: ${esc(s.hitch.why)}</span>` : "") +
     (s.last_error ? `<span class="err">Last error: ${esc(s.last_error)} (details in minds/${esc(s.name)}/engine.log)</span>` : ""));
   $("#kVocab").textContent = fmt(s.vocab);
-  $("#btnTrain").textContent = s.settings.training ? "Pause learning" : "Resume learning";
-  $("#btnTrain").classList.toggle("primary", !s.settings.training);
   syncSettings(s.settings);
   renderBody(s);
   if (tabOn("brain")) renderBrain(s);
@@ -231,7 +235,20 @@ for (const el of $$("[data-setting]")) {
   el.addEventListener("input", () => { const o = el.parentElement.querySelector("output"); if (o) o.textContent = el.value; el.dataset.busy = 1; });
 }
 
-$("#btnTrain").onclick = () => api("set", { key: "training", value: !S.snap.settings.training });
+function renderMode(s) {
+  const awake = s.mode === "awake";
+  $$("#modeSwitch button").forEach((b) => b.classList.toggle("on", b.dataset.mode === s.mode));
+  setText($("#modeLeft"), s.mode_left != null ? `${awake ? "studies" : "wakes"} in ${dur(s.mode_left)}` : "");
+  $("#thoughtsNote").hidden = awake;
+  $("#btnThink").disabled = !awake;
+  $("#chatText").placeholder = awake ? "Say something to the mind…" : "It is studying. Send a message to wake it up and talk…";
+  $$("#mode-guide button").forEach((b) => b.disabled = !awake);
+}
+async function setMindMode(mode) {
+  try { await api("set", { key: "mode", value: mode }); } catch (e) { flash(e.message); }
+}
+$$("#modeSwitch button").forEach((b) => b.onclick = () => setMindMode(b.dataset.mode));
+$$("[data-wake]").forEach((b) => b.onclick = () => setMindMode("awake"));
 $("#btnThink").onclick = () => api("think");
 $("#btnGrow").onclick = () => { if (confirm("Add a new layer to the network? What it knows is kept; it gains capacity to learn more.")) api("grow"); };
 $("#btnSave").onclick = () => api("save");
@@ -617,6 +634,13 @@ function drawWorld(now) {
   if (b.said) bubble(b.said, bx, by, r, ts, dpr, "rgba(255,255,255,.95)");
   if (v && v.said) bubble(v.said, vx, vy, ts * .34, ts, dpr, "rgba(255,226,180,.97)");
   wg.setTransform(1, 0, 0, 1, 0, 0);
+  if (s.mode !== "awake") {   // the body rests while it studies
+    wg.fillStyle = "rgba(10,14,30,.45)"; wg.fillRect(0, 0, wc.width, wc.height);
+    wg.fillStyle = "#fff"; wg.font = `600 ${Math.max(13 * dpr, ts * .55)}px system-ui`; wg.textAlign = "center";
+    wg.fillText("📚 Studying: its body is resting", wc.width / 2, wc.height / 2);
+    wg.font = `${Math.max(11 * dpr, ts * .38)}px system-ui`;
+    wg.fillText("You can still add things and walk around", wc.width / 2, wc.height / 2 + ts * .8);
+  }
 }
 
 function bubble(said, bx, by, r, ts, dpr, color) {

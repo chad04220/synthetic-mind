@@ -106,10 +106,16 @@ class MindConfig:
     teacher_assesses: bool = True
 
     autosave_minutes: float = 10.0
-    training: bool = True
-    # Share of time the GPU spends training. Below 1.0 the engine rests briefly after each step,
-    # which keeps the browser and the rest of the desktop smooth while it trains.
-    gpu_share: float = 0.9
+    # "study": every bit of compute goes to learning; thoughts, chat and the body are paused.
+    # "awake": it thinks, talks and lives in the world; no training (what it lives through is kept
+    # and studied in the next study session).
+    mode: str = "study"
+    cycle: bool = False             # alternate study and awake automatically, like sleep and waking
+    study_minutes: float = 30.0
+    awake_minutes: float = 10.0
+    # Share of time the GPU spends training while studying. Below 1.0 the engine rests briefly after
+    # each step, which keeps the browser and the rest of the desktop smooth.
+    gpu_share: float = 1.0
 
     def apply_preset(self, preset: str) -> None:
         d, n, h, t = MODEL_PRESETS[preset]
@@ -153,8 +159,13 @@ def _fill(obj, d: dict) -> None:
 
 
 # Settings the UI may change on a live mind (dotted paths into MindConfig).
+MODES = ("study", "awake")
+
 LIVE_SETTINGS = {
-    "training": bool,
+    "mode": str,
+    "cycle": bool,
+    "study_minutes": float,
+    "awake_minutes": float,
     "gpu_share": float,
     "thought_interval": float,
     "thought_tokens": int,
@@ -191,6 +202,8 @@ def set_live(cfg: MindConfig, key: str, value) -> None:
     if typ is bool and isinstance(value, str):
         value = value.lower() in ("1", "true", "yes", "on")
     value = typ(value)
+    if key == "mode" and value not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
     target = cfg
     parts = key.split(".")
     for p in parts[:-1]:

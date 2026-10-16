@@ -89,6 +89,10 @@ def test_engine_thread_answers_commands(tmp_path):
     m.experience_pool.add("hello world " * 20)
     m.start()
     try:
+        import pytest
+        with pytest.raises(ValueError, match="Awake"):
+            m.call("chat", "hi").result(timeout=60)    # studying: no talking
+        m.call("set", "mode", "awake").result(timeout=30)
         assert m.call("chat", "hi").result(timeout=60)["role"] == "mind"
         m.call("set", "thought_interval", 0.5).result(timeout=30)
         m.call("act", "east").result(timeout=30)
@@ -205,3 +209,36 @@ def test_long_pauses_are_detected_and_explained(tmp_path):
     m._tick()
     assert m.last_hitch["seconds"] >= 1.2 and "saving" in m.last_hitch["why"]
     assert "pause of" in (m.dir / "engine.log").read_text()
+
+
+def test_study_and_awake_are_exclusive(tmp_path):
+    cfg = tiny_cfg("M")
+    cfg.thought_interval, cfg.world_tick = 0.0, 0.0
+    m = Mind(cfg, tmp_path, torch.device("cpu"))
+    m.experience_pool.add("study hard and play well. " * 5)
+    for _ in range(5):
+        m._tick()
+    assert m.step == 5 and not m.thoughts and m.world.body.steps == 0   # studying only
+
+    m.set_mode("awake")
+    step = m.step
+    for _ in range(5):
+        m._tick()
+    assert m.step == step and m.thoughts and m.world.body.steps > 0    # living only
+    assert m.rl_buf                                                     # experience kept for later
+
+    m.set_mode("study")
+    m._tick()
+    assert m.step == step + 1 and len(m.rl_buf) < 6                     # ...and studied
+
+
+def test_cycle_alternates(tmp_path):
+    cfg = tiny_cfg("Y")
+    cfg.cycle, cfg.study_minutes, cfg.awake_minutes = True, 0.0, 0.0
+    m = Mind(cfg, tmp_path, torch.device("cpu"))
+    m.experience_pool.add("tick tock. " * 10)
+    m._tick()
+    assert cfg.mode == "awake"
+    m._tick()
+    assert cfg.mode == "study"
+    assert [e["mode"] for e in m.events if e["kind"] == "mode"] == ["awake", "study"]

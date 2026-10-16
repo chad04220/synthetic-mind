@@ -1,13 +1,13 @@
-"""The Mind: one network, one engine thread, many activities.
+"""The Mind: one network, one engine thread, two modes.
 
-A single thread owns the network and interleaves everything it does, so the GPU is
-never contended and training never stops for long:
+A single thread owns the network. It is either
 
-    commands from you (chat, probes, world edits)  ->  answered first
-    a body step every world tick                  ->  policy head picks an action
-    a thought every few seconds                   ->  free-running inner monologue
-    otherwise                                     ->  a training step on the data mix
+    studying  ->  nothing but training steps on the data mix, so all of the GPU goes to learning
+    awake     ->  a body step every world tick, a thought every few seconds, replies to you;
+                  no training. What it lives through is kept and studied in the next session.
 
+Your commands (chat, probes) are answered between steps; world edits never wait for the engine.
+Optionally the two modes alternate on a timer, like sleep and waking.
 The web server only reads snapshots and the event stream and posts commands.
 """
 from __future__ import annotations
@@ -125,6 +125,9 @@ class Mind:
         self.train_status = "starting"
         self.skipped_steps = 0
         self.last_hitch: dict = {}
+        self.mode_since = time.time()
+        self._next = {"thought": time.time() + 1.0, "body": time.time(), "snap": 0.0,
+                      "save": time.time(), "last": time.time()}
         self._parts: dict[str, float] = {}
         self.internals_v = 0
         self.skipped_in_row = 0
@@ -439,6 +442,8 @@ class Mind:
             self.experience_pool.add(info["learn"], 2.0, "sign")
 
         self.rl_buf.append((ids, a, reward, demo))
+        if len(self.rl_buf) > 4096:   # awake for a long time: keep the most recent experience to study
+            del self.rl_buf[:len(self.rl_buf) - 4096]
         self.narration.append(narr)
         if len(self.narration) >= 6:
             self.experience_pool.add_ids(self.encode_turns([("<|world|>", obs),
@@ -599,8 +604,7 @@ class Mind:
 
     # ------------------------------------------------------------------ engine
     def _engine(self):
-        self._next = {"thought": time.time() + 1.0, "body": time.time(), "snap": 0.0,
-                      "save": time.time(), "last": time.time()}
+        self._next["last"] = time.time()
         while not self._stop.is_set():
             try:
                 if not self._tick():
@@ -630,17 +634,23 @@ class Mind:
         self._parts = {}
         t0 = time.perf_counter()
         self._timed("your requests", self._drain_commands)
+        if cfg.cycle:
+            limit = (cfg.study_minutes if cfg.mode == "study" else cfg.awake_minutes) * 60
+            if now - self.mode_since >= limit:
+                self.set_mode("awake" if cfg.mode == "study" else "study", "time to " +
+                              ("wake up" if cfg.mode == "study" else "study"))
         did = False
-        if cfg.world_enabled and now >= nx["body"]:
-            nx["body"] = now + cfg.world_tick
-            self._timed("moving its body", self.body_step)
-            did = True
-        if now >= nx["thought"]:
-            nx["thought"] = time.time() + cfg.thought_interval
-            self._timed("thinking", self.think)
-            did = True
-        if cfg.training and self._timed("training", self.train_step):
-            did = True
+        if cfg.mode == "study":
+            did = bool(self._timed("training", self.train_step))
+        else:
+            if cfg.world_enabled and now >= nx["body"]:
+                nx["body"] = now + cfg.world_tick
+                self._timed("moving its body", self.body_step)
+                did = True
+            if now >= nx["thought"]:
+                nx["thought"] = time.time() + cfg.thought_interval
+                self._timed("thinking", self.think)
+                did = True
         if now >= nx["snap"]:
             nx["snap"] = now + 0.25
             self._snap()
@@ -653,9 +663,26 @@ class Mind:
             self._hitch(took, f"the engine was busy {worst}", self._parts)
         # Leave the GPU some idle time so the browser and desktop stay smooth.
         share = min(max(cfg.gpu_share, 0.2), 1.0)
-        if did and share < 1.0 and self.device.type == "cuda":
+        if did and share < 1.0 and cfg.mode == "study" and self.device.type == "cuda":
             time.sleep(min(0.25, took * (1 - share) / share))
         return did
+
+    def set_mode(self, mode: str, why: str = "you chose it"):
+        if mode not in ("study", "awake"):
+            raise ValueError("mode must be study or awake")
+        if mode != self.cfg.mode:
+            self.cfg.mode = mode
+            self.event("mode", {"mode": mode, "why": why})
+            self.log(f"now {'studying' if mode == 'study' else 'awake'} ({why})")
+        self.mode_since = time.time()
+        self._next["thought"] = time.time()
+        self._next["body"] = time.time()
+        if mode == "awake":
+            self.train_status = "awake: thinking and living instead of training"
+
+    def _need_awake(self, what: str):
+        if self.cfg.mode != "awake":
+            raise ValueError(f"It is studying right now. Switch it to Awake to {what}.")
 
     def _hitch(self, seconds: float, why: str, parts: dict | None = None):
         detail = ", ".join(f"{k} {v:.2f}s" for k, v in sorted((parts or {}).items(), key=lambda kv: -kv[1]))
@@ -688,6 +715,7 @@ class Mind:
     def _command(self, name: str, *args):
         w = self.world
         if name == "chat":
+            self._need_awake("talk with it")
             return self.chat(args[0])
         if name == "probe":
             return self.probe(args[0])
@@ -695,6 +723,12 @@ class Mind:
             return self.teach(args[0])
         if name == "feedback":
             return self.feedback(*args)
+        if name == "set" and args[0] == "mode":
+            return self.set_mode(str(args[1]))
+        if name == "set" and args[0] == "cycle":
+            set_live(self.cfg, "cycle", args[1])
+            self.mode_since = time.time()
+            return True
         if name == "set":
             set_live(self.cfg, args[0], args[1])
             if args[0] == "data.fineweb_enabled":
@@ -707,8 +741,10 @@ class Mind:
         if name == "save":
             return self.save()
         if name == "think":
+            self._need_awake("hear it think")
             return self.think()
         if name == "act":
+            self._need_awake("guide its body")
             if args[0] in ACTIONS:
                 self.demo_actions.append(args[0])
             return True
@@ -774,7 +810,10 @@ class Mind:
             "seq_len": self.cfg.model.seq_len, "tokenizer": self.tok.kind, "growths": self.growths,
             "loss": self.loss_ema, "val": self.val_loss, "bpb": self.bpb(), "tps": self.tok_per_sec,
             "lr": self.last_lr, "gnorm": self.last_gnorm,
-            "train_status": self.train_status if self.cfg.training else "paused",
+            "train_status": self.train_status,
+            "mode": self.cfg.mode,
+            "mode_left": (max(0.0, (self.cfg.study_minutes if self.cfg.mode == "study" else self.cfg.awake_minutes) * 60
+                              - (time.time() - self.mode_since)) if self.cfg.cycle else None),
             "skipped_steps": self.skipped_steps, "last_error": self.last_error,
             "hitch": self.last_hitch if self.last_hitch and time.time() - self.last_hitch["t"] < 300 else None,
             "internals_v": self.internals_v,

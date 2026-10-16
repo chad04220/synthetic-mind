@@ -9,6 +9,17 @@ Everything it knows it learns itself, by gradient descent on its own predictions
 never touches its weights: the teacher only writes text, which goes into the training mix
 like any other experience.
 
+It is always in one of two modes, so it never has to learn and live at the same time:
+
+- **📚 Study**: every bit of compute goes to learning from web text, the teacher's lessons and
+  what it has lived through. Its thoughts, conversation and body are paused.
+- **🌱 Awake**: it thinks, talks with you and lives in its world, and does no training. What it
+  experiences (your conversations, gifts, books, its body's adventures) is kept and studied in the
+  next study session.
+
+Switch with the buttons in the header, or let it alternate on a timer like sleep and waking
+(Settings → *Alternate automatically*).
+
 ```
                 ┌──────────────── one engine thread owns the network ────────────────┐
  FineWeb ──►    │  training step  ◄── data mix: web text · teacher lessons · lived   │
@@ -72,8 +83,8 @@ everything: weights, optimizer, monologue, conversations, memories and the world
 
 **Header.** Its developmental stage (Static → Babbling → First words → Phrases →
 Sentences → Conversational → Articulate, judged from held-out bits per byte), age, tokens
-read, brain size, speed and how many real words it has used. *Pause learning*, *Think*,
-*Grow* and *Save*.
+read, brain size, speed and how many real words it has used. *📚 Study / 🌱 Awake*,
+*Think*, *Grow* and *Save*. Sending a chat message while it studies offers to wake it.
 
 **World.** A garden with a pond, trees, a bed, a lamp, a mirror, a music box, books, balls,
 blocks, seeds, berries, apples and a cat. The body gets hungry and bored; eating, playing,

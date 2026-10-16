@@ -31,7 +31,11 @@
   </div>
 
   <div class="actions">
-    <button id="btnTrain" class="primary" title="Pause or resume learning">Pause learning</button>
+    <div class="seg mode-switch" id="modeSwitch" title="Study: all of the GPU goes to learning. Awake: it thinks, talks and lives in the world.">
+      <button data-mode="study">📚 Study</button>
+      <button data-mode="awake">🌱 Awake</button>
+    </div>
+    <span class="mode-left" id="modeLeft"></span>
     <button id="btnThink" title="Have a thought right now">Think</button>
     <button id="btnGrow" title="Add a layer of depth to the network without losing what it knows">Grow</button>
     <button id="btnSave" title="Save to disk (also autosaves)">Save</button>
@@ -124,6 +128,8 @@
     </div>
     <div class="legend"><span class="tk c0">unsure</span><span class="tk c2">→</span><span class="tk c4">sure</span>
       <span class="muted">· <u>underlined</u> = real word</span></div>
+    <div class="asleep-note" id="thoughtsNote" hidden>📚 It is studying, so its thoughts are paused and all of the GPU goes to learning.
+      <button class="link" data-wake>Wake it up</button> to hear it think.</div>
     <div class="thoughts" id="thoughts"></div>
 
     <div class="panel-head chat-head">
@@ -213,6 +219,13 @@
     </div>
 
     <div class="tab" id="tab-settings">
+      <h3>Study and awake</h3>
+      <label class="switch"><input type="checkbox" data-setting="cycle"><span></span>Alternate automatically, like sleep and waking</label>
+      <div class="sliders">
+        <label>Minutes studying <input type="range" min="1" max="240" step="1" data-setting="study_minutes"><output></output></label>
+        <label>Minutes awake <input type="range" min="1" max="120" step="1" data-setting="awake_minutes"><output></output></label>
+      </div>
+      <h3>Everything else</h3>
       <div class="sliders">
         <label title="Below 100% the engine rests a moment after each step so your browser and desktop stay smooth">GPU time for training <input type="range" min="0.5" max="1" step="0.05" data-setting="gpu_share"><output></output></label>
         <label>Seconds between thoughts <input type="range" min="0.5" max="30" step="0.5" data-setting="thought_interval"><output></output></label>

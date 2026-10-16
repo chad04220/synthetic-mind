@@ -1,3 +1,26 @@
+# Synthetic Mind v0.2.0
+
+## Study or be awake, never both at once
+
+Training and running the mind at the same time made them fight over the GPU, which caused freezes
+and a sluggish browser. The mind now has two modes, switched with the buttons in the header:
+
+- **📚 Study**: all of the GPU goes to learning. No thoughts, no conversation, no body steps.
+  (You can still add things to the world and walk around in it.)
+- **🌱 Awake**: it thinks, talks and lives in its world, with no training. Everything it lives
+  through (your conversations, gifts and hugs, books it reads, its body's experiences) is kept and
+  studied in the next study session, including what its body learned about looking after itself.
+
+Also:
+- **Alternate automatically** (Settings → *Study and awake*): study for N minutes, then wake for M
+  minutes, like sleep and waking. The header shows how long until the next switch.
+- Sending a message while it studies asks whether to wake it up.
+- *GPU time for training* now defaults to 100%, because studying no longer has to share the GPU
+  with anything. (If you saved a mind with v0.1.4, set it back to 100% in Settings.)
+- New minds start in Study mode.
+
+---
+
 # Synthetic Mind v0.1.4
 
 ## Smoother browser, and pauses that explain themselves
