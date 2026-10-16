@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from .ontology import KINDS, SOUP_THINGS
 from .world import agent as ag
+from .world import art
 from .world.sim import _and, where
 
 CARE = {"caretaker": 2, "guide": 1, "friend": 0}
@@ -68,7 +69,8 @@ class Companion:
         self.life = life
         self.suggestion = None
         self.commission: dict | None = None            # something our friend asked Wren to make
-        self.art_rid = None
+        self.art_rid, self.art_kind = None, ""
+        self.last_art = self.w.tick_n                      # Wren longs to make something after a while
         self.recent_labels: deque = deque(maxlen=6)
         self.failed: dict[str, float] = {}            # option label -> when it last failed
         self.current_label = ""
@@ -310,6 +312,12 @@ class Companion:
         if not (self.life.voice_ready and self.life.cfg.oracle.enabled):
             if order:
                 b.art_plan = {"subject": order["about"], "about": order["about"], "elements": [], "mood": "joyful"}
+                if kind == "painting":
+                    b.art_plan.update({k: v for k, v in art.words_to_plan(order["about"]).items()
+                                       if k in ("elements", "layers", "colors") and v})
+            if kind == "poem":
+                b.art_plan = {**art.small_poem(self.rng, self.w.season, self.w.time_of_day(),
+                                               order["about"] if order else "", self.zen.name), **(b.art_plan or {})}
             return
         w = self.w
         ctx = {"place": w.place_of(b.x, b.y), "time": w.time_of_day(), "season": w.season, "weather": w.weather,
@@ -317,6 +325,7 @@ class Companion:
                "zen_near": self.near_zen(6), "request": order["about"] if order else "",
                "material": goal.obj if goal.verb == "sculpt" else ""}
         self.art_rid = self.life.oracle("wren_create", kind=kind, ctx=ctx)
+        self.art_kind = kind
         b.art_wait = True
 
     def on_art_plan(self, rid: str, plan: dict):
@@ -326,6 +335,9 @@ class Companion:
         b = self.b
         b.art_plan = plan or {}
         b.art_wait = False
+        if self.art_kind == "poem" and not b.art_plan.get("text"):
+            b.art_plan = {**art.small_poem(self.rng, self.w.season, self.w.time_of_day(), b.art_plan.get("about", ""),
+                                           self.zen.name), **{k: v for k, v in b.art_plan.items() if v}}
         if plan.get("subject") and self.near_zen(6) and self.care() >= 1:
             self.speak(f"I'm going to make {plan['subject'] if plan['subject'].startswith(('a ', 'an ', 'the ')) else 'something about ' + plan['subject']}.",
                        kind="say")
@@ -350,8 +362,14 @@ class Companion:
                              title=c.get("title", ""), text=c.get("text", "")[:400], skill=c["data"].get("skill", 0),
                              cid=c["id"])
         else:
-            self.on_critique({"cid": c["id"], "kind": c["kind"]}, self.rng.choice([
-                f"Oh, {z.name}! I love it. Look at those colours.", f"You made that, {z.name}? It's wonderful.",
+            special = {"painting": [f"Oh, {z.name}! I love it. Look at those colours.",
+                                    f"What a picture, {z.name}. Shall we hang it on the wall?"],
+                       "music": [f"That tune is lovely, {z.name}. Play it again?", f"I could dance to that, {z.name}!"],
+                       "sculpture": [f"Look at its shape, {z.name}! Your hands are getting clever.",
+                                     f"I'd like to keep that one by the door, {z.name}."],
+                       "poem": [f"Read it to me again, {z.name}. I love your words."]}.get(c["kind"], [])
+            self.on_critique({"cid": c["id"], "kind": c["kind"]}, self.rng.choice(special + [
+                f"You made that, {z.name}? It's wonderful.",
                 f"That is lovely, {z.name}. Shall we make another one together?"]))
 
     def on_critique(self, req: dict, text: str):
@@ -447,6 +465,7 @@ class Companion:
             self.life.journal("hug", [("<|thought|>", f"{self.name} hugs me. I feel safe.")], 1.4)
         if "created" in info:
             c = info["created"]
+            self.last_art = self.w.tick_n
             self.life.link.send("event", kind="created", creation=c)
             if not c.get("title") and self.life.voice_ready:
                 self.life.oracle("wren_name", work=c)
@@ -703,10 +722,15 @@ class Companion:
             add(f"Paint together with {zname}", G("paint", "easel"), 3.0, "teach", f"Let's paint together, {zname}!",
                 G("paint", "easel", text="I paint a picture.", reason=f"{self.name} and I paint together."))
         if not night:
-            add("Paint a picture at the easel", G("paint", "easel"), 1.4, "play")
-            add("Make a clay sculpture in the workshop", G("sculpt", "clay"), 1.1, "play")
-            add("Write a poem at the desk", G("write", "desk"), 1.1, "play")
-            add("Play a song on the piano", G("compose", "piano"), 1.6 + (1.2 if self.near_zen(8) else 0), "play")
+            cw = self.life.cfg.world
+            days = (w.tick_n - self.last_art) * cw.tick / max(1.0, (cw.day_minutes + cw.night_minutes) * 60)
+            urge = min(3.0, 2.4 * days)                    # an artist: a day without making anything feels long
+            add("Paint a picture at the easel", G("paint", "easel"), 1.4 + urge, "play")
+            add("Make a clay sculpture in the workshop", G("sculpt", "clay"), 1.1 + urge * 0.8, "play")
+            add("Carve a little wooden sculpture", G("sculpt", "log"), 0.9 + urge * 0.6, "play")
+            add("Write a poem at the desk", G("write", "desk"), 1.1 + urge * 0.8, "play")
+            add("Play a song on the piano", G("compose", "piano"), 1.6 + urge * 0.9 + (1.2 if self.near_zen(8) else 0),
+                "play")
             add("Pick fruit in the orchard", G("take", self.rng.choice(["apple", "pear", "plum"])), 1.3)
             add("Go fishing at the pond", G("fish", "pond"), 1.0, "play")
             if n["rest"] < 70:

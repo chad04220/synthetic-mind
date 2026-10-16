@@ -1032,6 +1032,11 @@ class World:
                 ("clay", "pond", 3, 0.05, True), ("feather", "coop", 2, 0.04, True)):
             if ok and counts.get(kind, 0) < cap and r.random() < chance:
                 self.spawn_near(kind, region, on=SAND if kind in ("stone", "clay") else None)
+        desk = next((e for e in self.entities.values() if e["kind"] == "desk"), None)
+        if desk and counts.get("paper", 0) < 2 and r.random() < 0.04:   # Wren keeps a little paper in the drawer
+            spot = self.free_spot(desk["x"], desk["y"], 1)
+            if spot:
+                self.add("paper", *spot)
         for e in [e for e in self.entities.values() if e.get("fruit") and e["kind"].endswith("tree")]:
             if r.random() < 0.02:                     # ripe fruit drops to the ground
                 spot = self.free_spot(e["x"], e["y"], 1)

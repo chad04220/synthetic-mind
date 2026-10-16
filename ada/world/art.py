@@ -244,7 +244,7 @@ def compose_painting(rng: random.Random, plan: dict, skill: float) -> dict:
         objects.append(o)
     objects.sort(key=lambda o: o["y"])                      # back to front
     glow = {"dawn": 0.5, "evening": 0.7, "night": 0.3}.get(time, 0.15)
-    return {"v": 2, "subject": plan.get("subject") or f"{place} in the {time}", "place": place, "style": style,
+    return {"v": 2, "subject": plan.get("subject") or _scene_words(place, time), "place": place, "style": style,
             "canvas": canvas, "palette": palette, "mood": mood, "weather": weather, "season": season,
             "light": {"time": time, "glow": glow},
             "sky": {"top": top, "bottom": bottom, "clouds": round(rng.uniform(0.1, 0.6) if weather != "clear" else
@@ -252,6 +252,15 @@ def compose_painting(rng: random.Random, plan: dict, skill: float) -> dict:
                     "stars": 0.8 if time == "night" else 0.0},
             "horizon": round(horizon, 3), "layers": layers, "objects": objects, "skill": round(s, 3),
             "seed": rng.randrange(1 << 30)}
+
+
+WHEN = {"dawn": "at dawn", "morning": "in the morning", "noon": "at midday", "afternoon": "in the afternoon",
+        "evening": "in the evening", "night": "at night"}
+
+
+def _scene_words(place: str, time: str) -> str:
+    where = {"room": "our room", "lookout": "the view from the lookout"}.get(place, f"the {place}")
+    return f"{where} {WHEN.get(time, '')}".strip()
 
 
 def describe_painting(d: dict) -> str:
@@ -264,8 +273,13 @@ def describe_painting(d: dict) -> str:
             things.append(o["type"])
     style = {"naive": "a simple", "watercolor": "a soft watercolor", "impressionist": "a dappled",
              "oil": "a rich oil", "pastel": "a gentle pastel", "ink": "an ink", "pointillist": "a dotted"}.get(d["style"], "a")
-    return (f"{style} painting of {d.get('subject', d.get('place', 'somewhere'))}" +
-            (f", with {', '.join(things[:5])}" if things else "") + f", in {d.get('light', {}).get('time', 'daytime')} light")
+    subject = d.get("subject") or d.get("place", "somewhere")
+    when = d.get("light", {}).get("time", "")
+    light = f", {WHEN[when]}" if when in WHEN and WHEN[when] not in subject else ""
+    named = ["the " + t if t in ("sun", "moon", "rainbow") else t if t in ("fireflies", "stars", "reeds", "bees") else
+             ("an " if t[0] in "aeiou" else "a ") + t for t in things[:5]]
+    listed = ", ".join(named[:-1]) + " and " + named[-1] if len(named) > 1 else "".join(named)
+    return f"{style} painting of {subject}" + (f", with {listed}" if named else "") + light
 
 
 # ====================================================================== music
@@ -416,6 +430,7 @@ SUBJECTS = ["cat", "bird", "hen", "owl", "fish", "figure", "tree", "mushroom", "
             "tower", "flower", "rabbit", "snail"]
 MATERIALS = {"clay": ["#c2703d", "#e09f6b", "#9c4a2a"], "wood": ["#a47148", "#c08552", "#7f5539"],
              "stone": ["#a8a29e", "#d6d3d1", "#78716c"]}
+CREATURES = ("cat", "bird", "hen", "owl", "fish", "figure", "rabbit", "snail")
 GLAZES = ["#3d7ea6", "#6a994e", "#d4a373", "#b5838d", "#e9c46a", "#f4f1de"]
 
 
@@ -497,7 +512,11 @@ def compose_sculpture(rng: random.Random, plan: dict, skill: float, material: st
         text = (plan.get("about") or "").lower()
         subject = next((x for x in SUBJECTS if x in text), None) or rng.choice(SUBJECTS if s > 0.4 else
                                                                                ["tower", "heart", "moon", "mushroom", "cat"])
-    pose = plan.get("pose") or rng.choice(["sitting", "sitting", "sleeping", "flying"])
+    pose = plan.get("pose") or rng.choice(["sitting", "sitting", "sleeping"] + (["flying"] * 2 if subject in ("bird", "owl") else []))
+    if subject not in CREATURES:
+        pose = "standing"
+    elif pose == "flying" and subject not in ("bird", "owl", "hen"):
+        pose = "sitting"
     parts = _template(subject, pose)
     wobble = 0.22 * (1 - s)                                  # unsure hands: lopsided, lumpy
     for p in parts:
@@ -536,10 +555,45 @@ def poem_spec(text: str, form: str = "", about: str = "") -> dict:
             "lines": lines, "about": about[:80]}
 
 
+POEM_SEEDS = {
+    "spring": ["new leaves", "the first bees", "rain on the seedlings", "lambs of cloud"],
+    "summer": ["warm stones", "the long light", "bees in the lavender", "the pond asleep in the sun"],
+    "autumn": ["red leaves", "apples in the grass", "woodsmoke", "the geese going south"],
+    "winter": ["snow on the roof", "the fire's glow", "frost on the window", "the quiet woods"]}
+POEM_TIME = {"dawn": "the sky turns pink", "morning": "the hens wake up", "noon": "the shadows hide",
+             "afternoon": "the bees hum slow", "evening": "the lamps are lit", "night": "the stars come out"}
+
+
+def small_poem(rng: random.Random, season: str = "spring", time: str = "noon", about: str = "", synth: str = "Zen",
+               form: str = "") -> dict:
+    """A small poem from the day itself, when no language model is at hand."""
+    seed = about or rng.choice(POEM_SEEDS.get(season, POEM_SEEDS["spring"]))
+    when = POEM_TIME.get(time, "the day goes by")
+    form = form if form in FORMS else rng.choice(["haiku", "quatrain", "lullaby", "couplets"])
+    if form == "haiku":
+        lines = [f"{seed.capitalize()}", f"{when}, soft and slow", f"{synth} is watching too"]
+    elif form == "lullaby":
+        lines = [f"Hush now, {synth}, {when},", f"{seed.capitalize()} will keep till day.",
+                 "Close your eyes, the house is warm,", "and I am here to stay."]
+    elif form == "couplets":
+        lines = [f"I saw {seed} today,", "and wished that it would stay.", f"Then {when} for {synth} and me,",
+                 "as quiet as can be."]
+    else:
+        lines = [f"Today I saw {seed},", f"and then {when}.", f"{synth} held my hand", "and the hollow was ours."]
+    return {"title": seed.capitalize() if not seed.startswith("the ") else seed[4:].capitalize(), "form": form,
+            "about": seed, "text": "\n".join(lines)}
+
+
 # ====================================================================== titles and words
 def default_title(kind: str, data: dict, rng: random.Random) -> str:
     if kind == "painting":
-        return rng.choice(["", "The ", "My "]) + str(data.get("subject", "picture")).capitalize()[:50]
+        subj = str(data.get("subject") or "a picture").strip()
+        things = [o["type"] for o in data.get("objects", []) if isinstance(o, dict) and o.get("type")]
+        if things and rng.random() < 0.35:
+            a = rng.choice(things)
+            subj = f"the {a}" + (f" and the {things[-1]}" if things[-1] != a else "")
+        bare = re.sub(r"^(the|a|an|our|my)\s+", "", subj, flags=re.I)
+        return (rng.choice([bare.capitalize(), "The " + bare, "My " + bare]) if bare != subj else subj[:1].upper() + subj[1:])[:60]
     if kind == "music":
         return rng.choice(["Song of", "Tune for", "Little piece for", "Melody of"]) + " " + \
             rng.choice(["the morning", "the pond", "Moss", "the stars", "the rain", "the kitchen", "spring", "the hens"])
