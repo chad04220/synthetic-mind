@@ -1,13 +1,17 @@
-"""The Academy: the process where Ada learns. It does nothing else.
+"""The Academy: the process where Zen learns. It does nothing else.
 
-It trains her brain on a mixture of four kinds of text:
+It trains Zen's brain on a mixture of:
 
-    FineWeb       the open web, streamed
-    lessons       written by Wren (the companion's language model): lessons, answers, topics you asked for
-    journal       Ada's own life in the World: what she sensed, decided, did, heard and read
+    FineWeb       the open web, streamed: the language of the world beyond Zen's
+    experience    Zen's own life, as it lived it: what it perceived, thought, did and made, and how
+                  each deed and each mark turned out. Learnt two ways: predicting what follows
+                  what it does (its understanding of the world), and a policy gradient on its
+                  own choices (doing more of what turned out well)
+    journal       what was said to and by Zen: talks with you, the Sprite's answers and critiques, books
     concepts      drills stating the facts in the concept graph
+    lessons       anything written into curriculum.jsonl (nothing by default)
 
-It measures her with held-out FineWeb (bits per byte) and with concept tests worded unlike any
+It measures Zen with held-out FineWeb (bits per byte) and with concept tests worded unlike any
 drill, publishes a fresh brain to the World every few minutes (and whenever it is told to stop
 for the day), and saves its full training state so it can resume exactly where it left off.
 """
@@ -91,7 +95,7 @@ class Academy:
 
             torch.set_num_threads(max(1, (os.cpu_count() or 4) - 2))   # two cores stay with the World and the Hub
         else:
-            torch.set_num_threads(2)   # on the GPU it needs little CPU; the cores stay with the synth and Wren
+            torch.set_num_threads(2)   # on the GPU it needs little CPU; the cores stay with Zen's brain and the Sprite
         if self.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True

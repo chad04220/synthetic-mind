@@ -1,5 +1,5 @@
 """The web server, running inside the Hub process. Every handler is quick: requests to the Academy
-or World are forwarded and awaited without blocking, and Wren's model runs on worker threads."""
+or World are forwarded and awaited without blocking, and the Sprite's model runs on worker threads."""
 from __future__ import annotations
 
 import asyncio
@@ -160,7 +160,7 @@ def create_app(hub: Hub) -> FastAPI:
                     if any(e["kind"] == "concepts" for e in evs):
                         msg["concepts"] = hub.concept_report
                 li = hub.local.info()
-                if li != local:                                  # Wren's model: setup progress
+                if li != local:                                  # the Sprite's model: setup progress
                     local = li
                     msg["oracle"] = hub.oracle_info()
                 s = hub.settings()

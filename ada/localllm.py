@@ -130,7 +130,7 @@ class LocalLLM:
         return True
 
     # ------------------------------------------------------------------ setup
-    name = ""                        # who this model speaks for ("Wren's mind"); the Hub sets it
+    name = ""                        # who this model speaks for ("the Sprite's mind"); the Hub sets it
 
     @property
     def who(self) -> str:
@@ -175,7 +175,7 @@ class LocalLLM:
             raise RuntimeError(f"no prebuilt llama.cpp for {platform.system()} {platform.machine()}; use Ollama")
         tag, url = self._find_release(suffix)
         archive = self.folder / "downloads" / url.rsplit("/", 1)[1]
-        self._download(url, archive, f"llama.cpp {tag} (the engine for Wren's mind)")
+        self._download(url, archive, f"llama.cpp {tag} (the engine for the Sprite's mind)")
         dest = self.folder / "llama.cpp"
         tmp = self.folder / "llama.cpp.tmp"
         shutil.rmtree(tmp, ignore_errors=True)
