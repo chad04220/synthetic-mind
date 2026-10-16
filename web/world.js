@@ -56,7 +56,7 @@ const MapView = (() => {
   }
 
   function view() {
-    if (st.follow === "all" || !st.world) return { x: 0, y: 0, w: 64, h: 40 };
+    if (st.follow === "all" || !st.world?.ada) return { x: 0, y: 0, w: 64, h: 40 };
     const w = st.world, f = st.follow === "you" && w.visitor ? w.visitor : w.ada;
     return { x: Math.min(Math.max(f.x + .5 - 16, 0), 32), y: Math.min(Math.max(f.y + .5 - 10, 0), 20), w: 32, h: 20 };
   }
@@ -94,7 +94,7 @@ const MapView = (() => {
   }
 
   function draw(t) {
-    const w = st.world; if (!w || !w.terrain) return;
+    const w = st.world; if (!w || !w.terrain || !w.ada) return;
     const vw = view(), dpr = devicePixelRatio || 1;
     const ts = Math.max(4, Math.floor(cv.clientWidth * dpr / vw.w));
     if (cv.width !== Math.round(ts * vw.w)) { cv.width = Math.round(ts * vw.w); cv.height = Math.round(ts * vw.h); }

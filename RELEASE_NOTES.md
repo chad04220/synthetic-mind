@@ -1,3 +1,31 @@
+# Ada v1.1.3
+
+## Faster training
+
+Your v1.1.2 report showed the earlier fix working: with Ollama out of GPU memory, the Academy went
+from about 6,900 to about 18,000 tokens per second. It also showed what still held it back. A
+step took about 365 ms on the GPU: 45 ms for the forward pass, 68 ms for the loss and 253 ms for
+the backward pass. Most of that went to the loss over the 50,000-token vocabulary, which was
+worked out three times: once going forward, again when the backward pass recomputed it, and a
+third time to get its gradient.
+
+- **The loss and its gradient are now worked out in a single pass.** Each block of tokens' scores
+  over the vocabulary is computed once, turned straight into the gradients, then thrown away.
+  Results are identical to before (checked by a new test), and on a CPU this part runs 2–3×
+  faster. On your GPU the whole step should be noticeably quicker.
+- **The optimizer works on all same-shaped matrices at once** instead of one at a time: fewer,
+  larger GPU operations, with exactly the same result (also checked by a test).
+- **Heat:** the report showed the laptop GPU at 89 °C, running at 1215 MHz while training. That is
+  safe, but it slows itself down to cool. The Health tab now says so and suggests what helps:
+  - plug the laptop in;
+  - raise the back for airflow, or use a cooling pad;
+  - choose the high-performance power mode;
+  - or set GPU intensity to Balanced.
+- Fixed a script error on the World page (`Cannot read properties of undefined (reading
+  'sleeping')`) when the page opened before the World had sent its first picture.
+
+---
+
 # Ada v1.1.2
 
 ## Training speed: finding out why it's slow, and two likely fixes

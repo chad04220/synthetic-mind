@@ -209,7 +209,7 @@ function renderHealth(h) {
 // ================================================================== world view
 const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", company: "Company", fun: "Fun" };
 function renderWorld() {
-  const w = MapView.st.world; if (!w) return;
+  const w = MapView.st.world; if (!w || !w.ada) return;   // before the World's first snapshot
   const a = w.ada, m = w.mind || {};
   setText($("#adaWhere"), a.sleeping ? "asleep" : `${a.place === "home" ? "at home" : "in the " + a.place}${a.carrying?.length ? " · carrying " + a.carrying.join(", ") : ""}`);
   setHTML($("#needs"), Object.entries(a.needs || {}).map(([k, v]) => {

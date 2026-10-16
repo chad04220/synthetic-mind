@@ -183,7 +183,10 @@ def findings(perf: dict, gpu: list, client: dict | None, restarts: dict) -> list
         add("warn", "gpu", "GPU memory is over 92% full; Windows may start swapping it, which is very slow. Use a smaller "
             "batch or brain, or close other GPU programs (Ollama models also live in GPU memory).")
     if gpu and (gpu[0].get("temp_c") or 0) >= 85:
-        add("warn", "gpu", f"The GPU is at {gpu[0]['temp_c']:.0f}°C and may be slowing itself down to cool.")
+        add("warn", "gpu", f"The GPU is at {gpu[0]['temp_c']:.0f}°C and is probably slowing itself down to cool "
+            f"(clock now {gpu[0].get('sm_clock_mhz') or '?'} MHz). That is safe, but training gets slower. On a laptop: "
+            "plug it in, raise the back for airflow or use a cooling pad, and pick the high-performance power mode; "
+            "or set GPU intensity to Balanced, which lets the GPU cool between steps.")
     if gpu and studying and (gpu[0].get("util_percent") or 0) > 95 and client and client.get("fps", 60) < 20:
         add("warn", "browser", "The GPU is fully busy training and the page is drawing slowly: the browser shares that GPU. "
             "Set GPU intensity to Balanced or Gentle, or watch while Ada is awake.")

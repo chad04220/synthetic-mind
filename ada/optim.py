@@ -27,17 +27,25 @@ class Muon(torch.optim.Optimizer):
     def step(self):
         for group in self.param_groups:
             lr, mom = group["lr"], group["momentum"]
+            # Matrices of the same shape are orthogonalised together, as one batch: far fewer,
+            # larger GPU kernels than doing every matrix of every layer on its own.
+            by_shape: dict = {}
             for p in group["params"]:
-                if p.grad is None:
-                    continue
-                st = self.state[p]
-                if "buf" not in st:
-                    st["buf"] = torch.zeros_like(p.grad)
-                buf = st["buf"]
-                buf.lerp_(p.grad, 1 - mom)
-                g = p.grad.lerp(buf, mom)  # Nesterov
-                u = _newton_schulz(g).to(p.dtype)
-                p.add_(u, alpha=-lr * max(1.0, p.size(-2) / p.size(-1)) ** 0.5)
+                if p.grad is not None:
+                    by_shape.setdefault(p.shape, []).append(p)
+            for shape, ps in by_shape.items():
+                bufs = []
+                for p in ps:
+                    st = self.state[p]
+                    if "buf" not in st:
+                        st["buf"] = torch.zeros_like(p.grad)
+                    bufs.append(st["buf"])
+                grads = [p.grad for p in ps]
+                torch._foreach_lerp_(bufs, grads, 1 - mom)
+                g = torch.stack(grads).lerp_(torch.stack(bufs), mom)  # Nesterov
+                u = _newton_schulz(g)
+                scale = -lr * max(1.0, shape[-2] / shape[-1]) ** 0.5
+                torch._foreach_add_(ps, list(u.to(ps[0].dtype).unbind(0)), alpha=scale)
 
 
 def build_optimizers(model, acfg, device_type: str) -> list[torch.optim.Optimizer]:

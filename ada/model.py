@@ -99,6 +99,49 @@ class Block(nn.Module):
         return x
 
 
+class FusedLMLoss(torch.autograd.Function):
+    """Mean cross-entropy of softcapped tied-embedding logits, with the gradient done in the forward.
+
+    For each chunk of tokens: logits z = h W^T (in the autocast dtype), y = c*tanh(z/c), loss from
+    log-softmax(y); dL/dz = (softmax(y) - onehot) * (1 - tanh^2) is turned straight into the
+    gradients for h and W, then the chunk's logits are thrown away. Compared with recomputing the
+    chunk under checkpointing, this skips one vocabulary-sized matrix product and a dozen
+    vocabulary-sized elementwise passes per chunk."""
+
+    @staticmethod
+    def forward(ctx, h, W, t, cap: float, chunk: int, dt):
+        with torch.autocast(h.device.type, enabled=False):
+            n = (t != -1).sum().clamp_min(1)
+            Wd = W.detach().to(dt)
+            gh = torch.empty_like(h)
+            gW = torch.zeros(W.shape, dtype=torch.float32, device=W.device)
+            total = torch.zeros((), dtype=torch.float32, device=h.device)
+            for i in range(0, h.size(0), chunk):
+                hc, tc = h[i:i + chunk].detach().to(dt), t[i:i + chunk]
+                valid = tc != -1
+                tg = tc.clamp_min(0).unsqueeze(1)
+                th = (hc @ Wd.T).float().div_(cap).tanh_()          # tanh(z / c)
+                y = th * cap                                         # softcapped logits
+                lse = torch.logsumexp(y, -1)
+                total += ((lse - y.gather(1, tg).squeeze(1)) * valid).sum()
+                g = y.sub_(lse.unsqueeze(1)).exp_()                  # softmax(y), in place
+                g.scatter_add_(1, tg, -valid.unsqueeze(1).to(g.dtype))
+                g.mul_(valid.unsqueeze(1))
+                g.mul_(th.mul_(th).neg_().add_(1))                   # times dy/dz = 1 - tanh^2
+                del th
+                g = g.to(dt)
+                gh[i:i + chunk] = (g @ Wd).to(h.dtype)
+                gW += g.T @ hc
+            ctx.save_for_backward(gh, gW, n)
+            return total / n
+
+    @staticmethod
+    def backward(ctx, go):
+        gh, gW, n = ctx.saved_tensors
+        s = go / n
+        return gh * s.to(gh.dtype), gW * s, None, None, None, None
+
+
 class Brain(nn.Module):
     def __init__(self, cfg: BrainConfig):
         super().__init__()
@@ -129,9 +172,15 @@ class Brain(nn.Module):
         return F.cross_entropy(self.logits(h), t, ignore_index=-1, reduction="sum")
 
     def chunked_loss(self, h, targets, chunk: int = 1024, reduction: str = "mean"):
-        """Cross-entropy without materialising the full (tokens x vocabulary) logits."""
+        """Cross-entropy without materialising the full (tokens x vocabulary) logits.
+
+        When training, the gradients of the vocabulary projection are worked out in the same pass
+        (FusedLMLoss), so nothing vocabulary-sized is kept for, or recomputed in, the backward pass."""
         h = h.reshape(-1, h.size(-1))
         t = targets.reshape(-1)
+        if torch.is_grad_enabled() and (h.requires_grad or self.embed.weight.requires_grad) and reduction == "mean":
+            dt = torch.get_autocast_dtype(h.device.type) if torch.is_autocast_enabled(h.device.type) else h.dtype
+            return FusedLMLoss.apply(h, self.embed.weight, t, self.cfg.logit_softcap, chunk, dt)
         total = h.new_zeros((), dtype=torch.float32)
         for i in range(0, h.size(0), chunk):
             if torch.is_grad_enabled():

@@ -494,3 +494,48 @@ def test_slow_training_on_a_fast_gpu_is_flagged():
                                               "training_tflops": 1.2, "gpu_free_mb": 300}}
     text = " ".join(f["text"] for f in findings({"academy": academy_perf}, [], None, {}))
     assert "1.2 of the 40 TFLOPS" in text and "spilling" in text
+
+
+def test_fused_loss_matches_plain_cross_entropy():
+    """The fused loss (gradients worked out in the forward pass) must give the same loss and
+    gradients as ordinary cross-entropy over the full logits, ignored targets included."""
+    import torch
+    from ada.config import BrainConfig
+    from ada.model import Brain
+    torch.manual_seed(0)
+    b = Brain(BrainConfig(vocab_size=300, d_model=32, n_layers=2, n_heads=4, seq_len=32))
+    with torch.no_grad():
+        for p in b.parameters():
+            p.add_(torch.randn_like(p) * 0.05)
+    x, y = torch.randint(0, 300, (3, 32)), torch.randint(0, 300, (3, 32))
+    y[0, :7] = -1
+
+    def run(fused):
+        b.zero_grad()
+        h = b.hidden(x)
+        loss = (b.chunked_loss(h, y, chunk=40) if fused else
+                torch.nn.functional.cross_entropy(b.logits(h.reshape(-1, 32)), y.reshape(-1), ignore_index=-1))
+        (2 * loss).backward()
+        return loss.item(), {n: p.grad.clone() for n, p in b.named_parameters()}
+
+    (l1, g1), (l2, g2) = run(True), run(False)
+    assert abs(l1 - l2) < 1e-5
+    for n in g1:
+        assert (g1[n] - g2[n]).norm() <= 1e-5 * (g2[n].norm() + 1e-8), n
+
+
+def test_muon_batched_step_matches_one_matrix_at_a_time():
+    from ada.optim import Muon, _newton_schulz
+    torch.manual_seed(0)
+    ps = [torch.nn.Parameter(torch.randn(*s)) for s in [(24, 8), (24, 8), (8, 8), (8, 20)]]
+    ref, bufs = [p.detach().clone() for p in ps], [torch.zeros_like(p) for p in ps]
+    opt = Muon(ps, lr=0.02)
+    for _ in range(2):
+        gs = [torch.randn_like(p) for p in ps]
+        for p, g in zip(ps, gs):
+            p.grad = g.clone()
+        opt.step()
+        for r, g, buf in zip(ref, gs, bufs):
+            buf.lerp_(g, 0.05)
+            r.add_(_newton_schulz(g.lerp(buf, 0.95)), alpha=-0.02 * max(1, r.size(-2) / r.size(-1)) ** 0.5)
+    assert max((p.detach() - r).abs().max().item() for p, r in zip(ps, ref)) < 1e-6
