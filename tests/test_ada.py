@@ -1057,3 +1057,35 @@ def test_wren_comes_back_to_unfinished_art_and_keeps_commissions(mind):
             break
     made = next(x for x in w.creations if x["author"] == w.wren.name and x["kind"] == "painting")
     assert made["data"]["subject"] == "Moss asleep by the fire" and made.get("commission") and c.commission is None
+
+
+def test_every_thought_and_conversation_is_kept_whole(tmp_path):
+    from ada.archive import Archive
+    from ada.hub import Hub
+
+    cfg = AdaConfig(name="Z", tokenizer="bytes")
+    cfg.oracle.enabled = False
+    hub = Hub(cfg, tmp_path)
+    hub.world_state = {"day": 3, "time": "morning"}
+    long = "I see the moon and the pond and the hens " * 20                 # far longer than any feed shows
+    hub.event("thought", text=long, tokens=[["I", 0.9]], brain=4)
+    for i in range(130):
+        hub.event("thought", text=f"thought {i}", tokens=[], brain=4)
+    hub.event("talk_end", talk=1, members=["Wren", "Z"], lines=[("Wren", "Look, Z!"), ("Z", "moon " * 50)], topic="the moon")
+    hub.event("chat", user="Hello Z", text="Hello you", tokens=[])
+    hub.event("chat", user="Sleepy?", text="", asleep=True)                # asleep: nothing was said
+    hub.event("answer", question="Why is fire hot?", text="Fire is hot like the sun.", by="Z")
+    hub.event("answer", question="How is Z?", text="Well.", by="you")       # yours to Wren: not Zen's
+
+    a = Archive(tmp_path / "Z")
+    first = a.page("thoughts", limit=100)
+    assert len(first["items"]) == 100 and first["more"] and first["items"][0]["text"] == "thought 129"
+    rest = a.page("thoughts", before=first["items"][-1]["t"], limit=100)
+    assert not rest["more"] and rest["items"][-1]["text"] == long and rest["items"][-1]["day"] == 3
+    assert a.page("thoughts", q="HENS")["items"][0]["text"] == long
+
+    talks = a.page("conversations")["items"]
+    assert [t["kind"] for t in talks] == ["question", "chat", "talk"]
+    assert talks[2]["lines"][1] == ["Z", "moon " * 50] and talks[2]["topic"] == "the moon" and talks[2]["with"] == "companion"
+    assert [t["kind"] for t in a.page("conversations", who="you")["items"]] == ["chat"]
+    assert a.page("conversations", q="fire")["items"][0]["lines"][1][1] == "Fire is hot like the sun."

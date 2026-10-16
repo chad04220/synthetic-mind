@@ -88,6 +88,12 @@ python run.py --no-fineweb --no-oracle     offline (Wren lives by simple rules)
   - the words Wren has heard Zen say;
   - how Wren is looking after Zen right now;
   - Wren's diary.
+- **💭 Thoughts** has every thought Zen has had, whole and newest first, grouped by day. Shading
+  shows how sure its brain was of each word. You can search for a word and page back to the very
+  first thought.
+- **🗣️ Conversations** has every conversation Zen has had, line by line and in full: its talks with
+  Wren, its questions to Wren, and its talks with you. You can show only Wren's or only yours, and
+  search them.
 - **📖 Stories** collects Wren's bedtime stories, one per night.
 - **🖼️ Keepsakes** holds everything either of them made:
   - paintings from the easel: layered landscapes and rooms in one of seven styles (naive, watercolour,

@@ -1,3 +1,22 @@
+# Synthetic Mind v3.3.0
+
+- **💭 Thoughts, a tab of its own.** Every thought Zen has, kept whole on disk
+  (`minds/<name>/thoughts.jsonl`) and shown in full, newest first, with a header for each day.
+  - Shading shows how sure its brain was of each word; switch it off to read plain text.
+  - Search for a word, and page back as far as the very first thought.
+  - New thoughts appear at the top as Zen has them.
+- **🗣️ Conversations, a tab of its own.** Every conversation Zen has, kept whole on disk
+  (`minds/<name>/conversations.jsonl`), every line in full as a chat:
+  - its conversations with Wren, with what they were about;
+  - its questions to Wren and Wren's answers;
+  - its talks with you. Messages a few minutes apart read as one conversation.
+  - Show all of them, only Wren's or only yours, and search them.
+- Nothing is cut off any more: the boxes on Home show only the latest, but these tabs keep and
+  show everything.
+- Thoughts and conversations are kept from this version on; earlier ones weren't stored in full.
+
+---
+
 # Synthetic Mind v3.2.0
 
 **Keepsakes that grow into real art.** Zen and Wren can now make richer, more crafted pieces, and

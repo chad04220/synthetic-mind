@@ -936,7 +936,7 @@ class Companion:
             self.zen.needs["company"] = min(100, self.zen.needs["company"] + 15)
             self.b.needs["company"] = min(100, self.b.needs["company"] + 15)
             self.note(f"I talked with {self.zen.name}" + (f" about {t.topic}" if t.topic else "") + ".")
-        self.life.link.send("event", kind="talk_end", talk=t.id, members=t.members, lines=t.history)
+        self.life.link.send("event", kind="talk_end", talk=t.id, members=t.members, lines=t.history, topic=t.topic)
         self.next_decide = self.now() + 2
 
     def notice_words(self, line: str):

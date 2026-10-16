@@ -21,6 +21,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 from . import academy, life
+from .archive import Archive
 from .concepts import ConceptGraph
 from .config import AdaConfig, cpu_threads, get_live, set_live
 from .diag import Perf, findings, gpu_readings, setup_logging, system_info
@@ -78,6 +79,7 @@ class Hub:
         self.gallery: dict[int, dict] = {}            # every work made at the homestead, by id
         self.stories: dict[float, dict] = {}          # Wren's bedtime stories, by time
         self.journey = Journey(self.folder, cfg.name)
+        self.archive = Archive(self.folder)           # every thought and conversation of the synth, whole
         self.concept_report: dict = {}
         self._load_history()
 
@@ -195,9 +197,40 @@ class Hub:
             self.events.append(ev)
             if kind in self.feeds:
                 self.feeds[kind].append(ev)
+        try:
+            self.keep(ev)
+        except OSError as e:
+            self.log.warning(f"could not keep {kind} in the archive: {e}")
         if kind != "milestone":
             for m in self.journey.observe(ev, self.world_state.get("day")):
                 self.event("milestone", **m)
+
+    def keep(self, ev: dict):
+        """Zen's thoughts and conversations go to the archive in full (the live feeds keep only the latest)."""
+        kind, ws, z, wren = ev["kind"], self.world_state, self.cfg.name, self.cfg.companion
+        if kind not in ("thought", "talk_end", "chat", "answer"):
+            return
+        t = self.archive_t = max(ev["t"], getattr(self, "archive_t", 0.0) + 1e-6)   # unique: pages never skip one
+        when = {"t": round(t, 6), "day": ws.get("day"), "time": ws.get("time", "")}
+        if kind == "thought":
+            if not (ev.get("text") or "").strip():
+                return                                     # a silent moment: nothing to read
+            self.archive.add("thoughts", when | {"text": ev.get("text", ""), "tokens": ev.get("tokens") or [],
+                                                 "brain": ev.get("brain")})
+        elif kind == "talk_end":
+            lines = [[w, l] for w, l in ev.get("lines") or []]
+            if lines:
+                other = next((m for m in ev.get("members", []) if m != z), wren)
+                self.archive.add("conversations", when | {"with": "companion" if other == wren else other,
+                                                          "kind": "talk", "members": ev.get("members", []),
+                                                          "topic": ev.get("topic", ""), "lines": lines})
+        elif kind == "chat" and (ev.get("user") or ev.get("text")) and not ev.get("asleep"):
+            self.archive.add("conversations", when | {"with": "you", "kind": "chat", "members": ["you", z],
+                                                      "lines": [["you", ev.get("user") or ""], [z, ev.get("text") or ""]],
+                                                      "tokens": ev.get("tokens") or []})
+        elif kind == "answer" and ev.get("by") == z:
+            self.archive.add("conversations", when | {"with": "companion", "kind": "question", "members": [z, wren],
+                                                      "lines": [[z, ev.get("question", "")], [wren, ev.get("text", "")]]})
 
     def events_since(self, eid: int) -> list[dict]:
         with self.lock:

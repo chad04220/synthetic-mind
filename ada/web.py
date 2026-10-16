@@ -85,6 +85,13 @@ def create_app(hub: Hub) -> FastAPI:
         return PlainTextResponse(text, headers={
             "Content-Disposition": f'attachment; filename="ada-diagnostics-{stamp}.txt"'})
 
+    @app.get("/api/archive/{kind}")
+    async def archive(kind: str, before: float | None = None, limit: int = 60, q: str = "", who: str = ""):
+        if kind not in ("thoughts", "conversations"):
+            raise HTTPException(404, f"no archive called {kind}")
+        page = await asyncio.to_thread(hub.archive.page, kind, before, limit, q, who)
+        return clean(page)
+
     @app.post("/api/client_perf")
     def client_perf(body: dict):
         hub.record_client_perf({k: v for k, v in body.items() if isinstance(v, (int, float, str, bool))})

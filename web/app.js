@@ -150,13 +150,15 @@ function tick(m) {
 
 function onEvent(e) {
   switch (e.kind) {
-    case "thought": addThought(e); S.lastThought = e; break;
+    case "thought": addThought(e); S.lastThought = e; Journal.live("thoughts", e); break;
+    case "talk_end": Journal.live("conversations", e); break;
     case "intent": case "did": addDeed(e); break;
     case "wren_intent": addWrenMind(e); break;
     case "talk_start": addDialogue(e); break;
     case "tried": S.tried = e; break;
     case "chat": if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; }
-      chatLine({ role: "user", text: e.user }); chatLine({ role: "mind", text: e.text, tokens: e.tokens, asleep: e.asleep }); break;
+      chatLine({ role: "user", text: e.user }); chatLine({ role: "mind", text: e.text, tokens: e.tokens, asleep: e.asleep });
+      Journal.live("conversations", e); break;
     case "tutor": tutorLine(e); break;
     case "npc": if (e.to === "you") chatLine({ role: "mind", who: e.name, text: e.text }); break;
     case "wren_says": addDialogue(e); Community.addFeed(e); break;
@@ -166,7 +168,7 @@ function onEvent(e) {
     case "happening": Community.addFeed(e);
       if (e.kind === "happening" && e.what === "rainbow") toast("🌈 A rainbow!"); break;
     case "story": Community.addStories([e]); Community.addFeed(e); toast(`📖 ${S.companion} tells ${SYNTH()} a bedtime story: “${e.title}”`, 6000); break;
-    case "answer": addQA(e); addDialogue(e); Community.addFeed(e); break;
+    case "answer": addQA(e); addDialogue(e); Community.addFeed(e); Journal.live("conversations", e); break;
     case "created": Community.addFeed(e); if (e.creation) Community.addWorks([e.creation]); break;
     case "milestone": S.journey = [...(S.journey || []), e]; Community.addFeed(e); toast(`🌱 ${e.title}`, 6000); break;
     case "read": break;
@@ -218,6 +220,8 @@ function renderAll() {
   renderHeader();
   if (S.view === "world") renderWorld();
   else if (S.view === "minds") renderMinds();
+  else if (S.view === "thoughts") Journal.open("thoughts");
+  else if (S.view === "talks") Journal.open("conversations");
   else if (S.view === "stories") Community.stories($("#stories"));
   else if (S.view === "gallery") renderGallery();
   else if (S.view === "academy") renderAcademy();
@@ -720,3 +724,151 @@ for (const r of $$("input[name=schedule]")) r.onchange = () => api("set", { key:
 $("#dayGentle").onchange = (e) => api("set", { key: "schedule.day_training", value: e.target.checked ? "gentle" : "pause" }).catch((er) => toast(er.message));
 
 connect();
+
+
+// ================================================================== Thoughts and Conversations: everything, whole
+// The Hub keeps every thought and conversation of the synth on disk; these tabs read it a page at a time
+// (newest first) and add new ones as they happen.
+const Journal = (() => {
+  const K = {
+    thoughts: { list: "#thList", more: "#thMore", end: "#thEnd", search: "#thSearch", noun: "thoughts" },
+    conversations: { list: "#tkList", more: "#tkMore", end: "#tkEnd", search: "#tkSearch", noun: "conversations" },
+  };
+  const st = { thoughts: { loaded: false, oldest: null, busy: false, q: "" }, conversations: { loaded: false, oldest: null, busy: false, q: "", who: "" } };
+  const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dayKey = (e) => `Day ${e.day ?? "?"}`;
+  const whoName = (w) => w === "you" ? "you" : w === "companion" ? S.companion : w;
+  const CHAT_GAP = 600;                                   // your messages this close together are one conversation
+
+  function place(box, el, e, atTop) {
+    el.dataset.day = dayKey(e);
+    if (atTop) {
+      const top = box.firstElementChild;
+      if (top?.classList.contains("arch-day") && top.dataset.day === dayKey(e)) top.after(el);
+      else { const h = document.createElement("div"); h.className = "arch-day"; h.dataset.day = dayKey(e); h.textContent = dayKey(e); box.prepend(h); h.after(el); }
+    } else {
+      const last = box.lastElementChild;
+      if (!last || last.dataset.day !== dayKey(e)) { const h = document.createElement("div"); h.className = "arch-day"; h.dataset.day = dayKey(e); h.textContent = dayKey(e); box.append(h); }
+      box.append(el);
+    }
+  }
+
+  // ---- thoughts
+  function thoughtEl(e) {
+    const d = document.createElement("article"); d.className = "arch-item thought";
+    const shade = $("#thShade").checked && e.tokens?.length;
+    d.innerHTML = `<div class="arch-text">${shade ? tokHTML(e.tokens) : esc(e.text || "") || '<span class="muted">(silence)</span>'}</div>
+      <div class="arch-meta">${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)} · brain v${e.brain ?? "?"}</div>`;
+    d._e = e;
+    return d;
+  }
+
+  // ---- conversations
+  function lineEl(who, text) {
+    const zen = who === SYNTH(), quiet = !text || text === "…";
+    const d = document.createElement("div");
+    d.className = `bub ${zen ? "zen" : who === "you" ? "you" : "wren"}${quiet ? " quiet" : ""}`;
+    d.innerHTML = `<b>${esc(who === "you" ? "You" : who)}</b><div>${quiet ? "…" : esc(text)}</div>`;
+    return d;
+  }
+  function talkEl(e) {
+    const d = document.createElement("article"); d.className = `arch-item talk with-${e.with === "you" ? "you" : "wren"}`;
+    const what = e.kind === "question" ? `${esc(SYNTH())} asks ${esc(S.companion)}` : e.with === "you" ? `With you` : `With ${esc(whoName(e.with))}`;
+    const topic = (e.topic || "").replace(/^(talk|chat) (with|to) \S+ (about )?/i, "").replace(/^about /i, "");
+    d.innerHTML = `<header><b>${what}</b>${topic ? `<span class="muted"> · about ${esc(topic)}</span>` : ""}
+      <span class="arch-meta">${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)}</span></header><div class="dialogue"></div>`;
+    const box = d.querySelector(".dialogue");
+    for (const [who, text] of e.lines || []) box.append(lineEl(who, text));
+    d._e = e;
+    return d;
+  }
+
+  const make = (kind, e) => kind === "thoughts" ? thoughtEl(e) : talkEl(e);
+  const matches = (kind, e) => {
+    const s = st[kind];
+    if (kind === "conversations" && s.who && e.with !== s.who) return false;
+    if (!s.q) return true;
+    const text = kind === "thoughts" ? e.text || "" : (e.lines || []).map((l) => l[1] || "").join(" ");
+    return text.toLowerCase().includes(s.q.toLowerCase());
+  };
+
+  // your messages a few minutes apart read as one conversation
+  function mergeChat(box, e, atTop) {
+    if (e.with !== "you") return false;
+    const items = [...box.querySelectorAll(".arch-item.talk")];
+    const near = atTop ? items[0] : items.at(-1);
+    if (!near || near._e.with !== "you") return false;
+    const gap = atTop ? e.t - near._e.t : (near._e.t0 ?? near._e.t) - e.t;
+    if (gap < 0 || gap > CHAT_GAP || dayKey(near._e) !== dayKey(e)) return false;
+    const dl = near.querySelector(".dialogue"), els = (e.lines || []).map(([w, t]) => lineEl(w, t));
+    if (atTop) { dl.append(...els); near._e = { ...near._e, t: e.t, lines: [...near._e.lines, ...e.lines] }; }
+    else { dl.prepend(...els); near._e = { ...near._e, t0: e.t, lines: [...e.lines, ...near._e.lines] }; }
+    return true;
+  }
+
+  function add(kind, e, atTop) {
+    const box = $(K[kind].list);
+    if (kind === "conversations" && mergeChat(box, e, atTop)) return;
+    place(box, make(kind, e), e, atTop);
+  }
+
+  async function load(kind, reset) {
+    const s = st[kind], k = K[kind];
+    if (s.busy) return;
+    s.busy = true;
+    if (reset) { $(k.list).innerHTML = ""; s.oldest = null; }
+    const p = new URLSearchParams({ limit: kind === "thoughts" ? 120 : 40 });
+    if (s.oldest != null) p.set("before", s.oldest);
+    if (s.q) p.set("q", s.q);
+    if (s.who) p.set("who", s.who);
+    try {
+      const r = await fetch(`/api/archive/${kind}?${p}`).then((x) => x.json());
+      for (const e of r.items || []) { add(kind, e, false); s.oldest = e.t; }
+      $(k.more).hidden = !r.more;
+      const n = $(k.list).querySelectorAll(".arch-item").length;
+      setText($(k.end), r.more ? "" : n ? `That's all of them${s.q ? ` with “${s.q}”` : ""}.` :
+        s.q ? `None with “${s.q}”.` : kind === "thoughts" ? `No thoughts yet. They start once ${SYNTH()} is awake.` : `No conversations yet.`);
+      s.loaded = true;
+    } catch (err) { setText($(k.end), `Couldn't load: ${err.message}`); }
+    s.busy = false;
+  }
+
+  function open(kind) { if (!st[kind].loaded) load(kind, true); }
+
+  function live(kind, ev) {
+    if (!st[kind].loaded) return;                         // loaded with everything when the tab opens
+    let e;
+    const ws = MapView.st.world || {}, when = { t: ev.t || Date.now() / 1000, day: ws.day, time: ws.time };
+    if (kind === "thoughts") { if (!(ev.text || "").trim()) return; e = { ...when, text: ev.text, tokens: ev.tokens, brain: ev.brain }; }
+    else if (ev.kind === "talk_end") {
+      if (!ev.lines?.length) return;
+      const other = (ev.members || []).find((m) => m !== SYNTH()) || S.companion;
+      e = { ...when, with: other === S.companion ? "companion" : other, kind: "talk", topic: ev.topic || "", lines: ev.lines };
+    } else if (ev.kind === "chat") {
+      if (ev.asleep || !(ev.user || ev.text)) return;
+      e = { ...when, with: "you", kind: "chat", lines: [["you", ev.user || ""], [SYNTH(), ev.text || ""]] };
+    } else if (ev.kind === "answer" && ev.by === SYNTH()) {
+      e = { ...when, with: "companion", kind: "question", lines: [[SYNTH(), ev.question || ""], [S.companion, ev.text || ""]] };
+    } else return;
+    if (!matches(kind, e)) return;
+    const box = $(K[kind].list);
+    const stick = box.getBoundingClientRect().top > -40;  // reading older entries further down: don't jump
+    add(kind, e, true);
+    if (!stick) window.scrollBy(0, box.firstElementChild?.nextElementSibling?.offsetHeight || 0);
+    setText($(K[kind].end), $(K[kind].more).hidden ? "That's all of them." : "");
+  }
+
+  // controls
+  let timers = {};
+  for (const kind of ["thoughts", "conversations"]) {
+    const k = K[kind];
+    $(k.more).onclick = () => load(kind, false);
+    $(k.search).oninput = (ev) => { clearTimeout(timers[kind]); timers[kind] = setTimeout(() => { st[kind].q = ev.target.value.trim(); load(kind, true); }, 300); };
+  }
+  $("#thShade").onchange = () => { for (const el of $$("#thList .arch-item")) { const n = thoughtEl(el._e); n.dataset.day = el.dataset.day; el.replaceWith(n); } };
+  $$("#tkWho button").forEach((b) => b.onclick = () => {
+    $$("#tkWho button").forEach((x) => x.classList.toggle("on", x === b));
+    st.conversations.who = b.dataset.who; load("conversations", true);
+  });
+  return { open, live, load, st };
+})();

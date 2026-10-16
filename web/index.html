@@ -27,6 +27,8 @@
 <nav class="main" id="nav">
   <button data-view="world" class="on">🏡 Home</button>
   <button data-view="minds">🌱 Together</button>
+  <button data-view="thoughts">💭 Thoughts</button>
+  <button data-view="talks">🗣️ Conversations</button>
   <button data-view="stories">📖 Stories</button>
   <button data-view="gallery">🖼️ Keepsakes</button>
   <button data-view="academy">🎓 Academy</button>
@@ -117,6 +119,26 @@
     <div class="card"><h2>📔 <span class="wrenname">Wren</span>'s diary</h2><div class="feed" id="wrenDiary"></div></div>
   </div>
   <div class="card"><h2>🏡 Life at the homestead</h2><div class="feed community" id="communityFeed"></div></div>
+</section>
+
+<!-- ====================================================== THOUGHTS -->
+<section class="view" id="view-thoughts">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">💭</span>
+    <div class="ph-text"><h1><span class="synthname">Zen</span>'s thoughts</h1><p>Every thought <span class="synthname">Zen</span> has had, whole, newest first. Shading shows how sure its brain was of each word: faint words were guesses.</p></div>
+    <div class="ph-actions"><input type="search" id="thSearch" placeholder="Find a word…" aria-label="Find a word in its thoughts">
+      <label class="switch"><input type="checkbox" id="thShade" checked><span></span><span class="sw-text">Shading</span></label></div></div></div>
+  <div class="arch" id="thList" aria-live="polite"></div>
+  <div class="arch-more"><button id="thMore" hidden>Show older thoughts</button><span class="muted" id="thEnd"></span></div>
+</section>
+
+<!-- ====================================================== CONVERSATIONS -->
+<section class="view" id="view-talks">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🗣️</span>
+    <div class="ph-text"><h1><span class="synthname">Zen</span>'s conversations</h1><p>Every conversation <span class="synthname">Zen</span> has had, line by line and in full: with <span class="wrenname">Wren</span>, its questions to <span class="wrenname">Wren</span>, and its talks with you.</p></div>
+    <div class="ph-actions"><div class="seg" id="tkWho"><button data-who="" class="on">All</button><button data-who="companion">With <span class="wrenname">Wren</span></button><button data-who="you">With you</button></div>
+      <input type="search" id="tkSearch" placeholder="Find a word…" aria-label="Find a word in its conversations"></div></div></div>
+  <div class="arch talks" id="tkList" aria-live="polite"></div>
+  <div class="arch-more"><button id="tkMore" hidden>Show older conversations</button><span class="muted" id="tkEnd"></span></div>
 </section>
 
 <!-- ====================================================== STORIES -->
