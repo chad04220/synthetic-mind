@@ -95,7 +95,7 @@ def builds(gpu: bool = True) -> list[dict]:
             out.append({"device": "vulkan", "patterns": [r"^llama-.*-bin-win-vulkan-x64\.zip$"]})
         out.append({"device": "cpu", "patterns": [rf"^llama-.*-bin-win-cpu-{'arm64' if arm else 'x64'}\.zip$"]})
     elif system == "Linux":
-        if gpu and not arm:
+        if gpu and not arm and (nvidia_gpu() or any(Path("/dev/dri").glob("renderD*"))):
             out.append({"device": "vulkan", "patterns": [r"^llama-.*-bin-ubuntu-vulkan-x64\.(tar\.gz|zip)$"]})
         out.append({"device": "cpu", "patterns": [rf"^llama-.*-bin-ubuntu-{'arm64' if arm else 'x64'}\.(tar\.gz|zip)$"]})
     elif system == "Darwin":
@@ -213,11 +213,11 @@ class LocalLLM:
 
     def _find_exe(self, device: str) -> Path | None:
         name = "llama-server.exe" if os.name == "nt" else "llama-server"
-        root = self.folder / f"llama.cpp-{device}"
-        if not root.exists():
-            return None
-        found = sorted(root.rglob(name))
-        return found[0] if found else None
+        for root in [self.folder / f"llama.cpp-{device}"] + ([self.folder / "llama.cpp"] if device == "cpu" else []):
+            found = sorted(root.rglob(name)) if root.exists() else []    # (llama.cpp: v4's CPU build)
+            if found:
+                return found[0]
+        return None
 
     def _server(self, build: dict) -> Path | None:
         """The llama-server program of this build, downloaded if needed (None if it isn't published)."""

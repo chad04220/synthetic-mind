@@ -1,151 +1,179 @@
-# Synthetic Mind: a mind that makes itself
+# Synthetic Mind: a living world, and a mind inside it that teaches itself
 
-**Zen** is a synth: a neural network that starts as random numbers, knowing no words and no way to
-move. It lives alone in an **endless world**: forests, meadows, rivers and lakes, deserts and
-snowfields, mountains, caves and old ruins, with weather, seasons, days and nights. Everything Zen
-does, its own brain decides: every step, every word, every brushstroke and every note. Beside it
-floats the **Sprite of All Knowing**, which answers whatever Zen asks, and looks at (and listens to)
-what Zen makes.
+**Zen** lives in a world of blocks you can change completely, like Minecraft.
+- **The world:** endless land with forests, plains, deserts, jungles, snowy mountains, oceans and
+  rivers. There are caves full of ore, ruins with chests, and a small cabin where Zen starts.
+- **What happens in it:** water and lava flow, sand falls, fire spreads, and crops grow.
+  - Levers, wire, lamps, doors, pistons and TNT work.
+  - Furnaces smelt, and chests hold things.
+  - Creatures wander; at night, hollows come out of the dark.
+- **Zen's mind:** a small pretrained language model running on your GPU with llama.cpp. It sees
+  its surroundings, decides, acts and talks, fast.
 
-- **Zen learns language** from scratch on your GPU: web text streamed from FineWeb, its own life,
-  the Sprite's answers, and drills on the facts of its world. It goes from static to babble, to
-  first words, phrases and sentences.
-- **Zen learns to live by living.** Its brain chooses each action from 14 motor words (*forward,
-  back, left, right, wait, take, drop, eat, drink, use, sleep, look, speak, ask*). Nothing else moves
-  it: there is no planner and no script. The world answers with what happens: hunger eased by
-  berries, thirst by the stream, cold by the fire, wonder at a new place, pain at a wall. From those
-  consequences its brain learns what to do, and also learns to predict what its deeds lead to.
-- **Zen asks.** When its brain chooses *ask*, its brain also writes the question, in whatever words
-  it has. The Sprite answers, in plain words, and Zen waits for the answer (its thoughts go on).
-- **Zen makes art from nothing.** At the easel, the piano or with a lump of clay, its brain chooses
-  every mark: where the brush goes, when it presses, which colour; every note and its length;
-  every bit of clay added or cut. No templates, no brushes that paint for it. The Sprite then
-  *sees* the painting or the sculpture and *hears* the song (it is a vision-and-audio model), says
-  what it sees, and scores it. That verdict is what Zen learns from, and so can your ♥.
+You can talk to Zen in the chat, or walk into its world yourself to dig, build and hand it things.
 
-## Start (Windows with an NVIDIA GPU)
+Zen can also **improve itself**:
+- It knows its mind is a model that can learn.
+- It can **reflect**: judge its own recent decisions, write down what it should have done instead,
+  and keep lessons.
+- It can **practise**: lie down while its model is trained on the decisions it judged good and
+  the better choices it wrote for its failures. It wakes up running what it learned.
+- Every practice round starts from the last one, so better decisions become better training
+  material for the next round.
+- Your 👍/👎 and corrections count too.
+- A practice round that makes it worse in the world is undone automatically, and Zen is told why.
 
-1. Install Python 3.10 or newer from python.org (tick *Add to PATH*).
-2. Double-click **`start.bat`**. The first run:
-   - creates `.venv`;
-   - installs PyTorch with CUDA and the other requirements;
-   - opens <http://127.0.0.1:8765>.
-3. The first time, the Sprite's mind is downloaded into `oracle/`: llama.cpp (tens of MB) and the
-   model, Qwen 2.5 Omni 3B with its eyes and ears (3.6 GB). The **Sprite** tab shows the progress.
-   [Ollama](https://ollama.com) is optional (the Sprite then answers but can't see or hear).
+## Start
 
-**Linux / macOS:** `./start.sh`. **By hand:** install PyTorch for your machine, then
-`pip install -r requirements.txt` and `python run.py`.
+1. Install Python 3.10 or newer from python.org (on Windows tick *Add to PATH*).
+2. **Windows:** double-click **`start.bat`**. **Linux / macOS:** `./start.sh`. **By hand:**
+   `pip install -r requirements.txt`, then `python run.py`.
+3. <http://127.0.0.1:8765> opens. The first time, Zen's model is downloaded into `oracle/`:
+   - **llama.cpp:** the CUDA build on Windows with an NVIDIA card, the Vulkan build for other GPUs,
+     Metal on Apple silicon, or the CPU build as a fallback.
+   - **The model:** Qwen 2.5 1.5B Instruct by default (1.1 GB).
+   - The Settings tab shows the progress, and lets you choose another model:
+     - Llama 3.2 1B or 3B;
+     - Gemma 3 1B;
+     - Qwen 2.5 0.5B, 3B or 7B.
 
-Each synth is saved continuously in `minds/<name>/`. Ctrl+C saves everything and stops. A synth
-from an earlier version keeps its brain, its journey and its keepsakes, and starts its life over in
-the endless world.
+Everything is saved continuously in `minds/<name>/`: the world (`region/`), Zen's memory
+(`mind.json`), every decision it made (`decisions.jsonl`) and its practice adapters (`adapters/`).
+Ctrl+C saves and stops.
 
 ```
-python run.py                              Zen (created on the first run, resumed after)
-python run.py --name Kai --seed 7          another synth, in another world, starting from nothing
-python run.py --preset medium              a bigger brain for a new synth (12 GB+ GPU)
-python run.py --schedule day_night         study only while it sleeps at night
-python run.py --oracle ollama              the Sprite's mind runs in Ollama
-python run.py --no-fineweb --no-oracle     offline (Zen's questions go unanswered)
+python run.py                          Zen and its world (created on the first run, resumed after)
+python run.py --name Kai --seed 42     another inhabitant, in another world
+python run.py --model llama-3.2-3b     a different model (also in Settings)
+python run.py --cpu                    its model on the CPU (slow: seconds per decision)
+python run.py --peaceful               no hostile creatures
 ```
+
+## How Zen decides
+
+A decision happens when one of these occurs:
+- an action ends;
+- someone speaks to it;
+- something important happens (it's hurt, night falls, someone gives it something);
+- it has been idle for a while.
+
+Each time, Zen's model reads one short observation, written in plain words from what its body
+perceives. The observation is built in this order:
+1. Its notes, lessons, named places and goal.
+2. Its learning: how often it has practised, and how many of its actions work.
+3. What it perceives: the time and weather, its health, food and inventory, and what it's looking
+   at. Also nearby blocks of interest with counts and directions, creatures and people.
+4. Recent events and the conversation.
+5. Its last few actions and what came of them.
+6. Why it is thinking now.
+
+The model answers with one decision, and a JSON schema (enforced by llama.cpp's grammar) guarantees
+the reply is always valid:
+
+```json
+{"thought": "...", "action": {"skill": "craft", "args": {"item": "wooden_pickaxe"}},
+ "say": null, "note": null, "goal": "Make a wooden pickaxe"}
+```
+
+The action starts the moment it has streamed in, before the rest of the reply. The fixed
+instructions stay in llama.cpp's prompt cache, so only the observation is new each time. On a GPU
+with the default model a decision takes a few hundred milliseconds.
+
+Its body carries out **skills**, all of them fast, deterministic and done the way a competent player
+would:
+
+| Kind | Skills |
+|---|---|
+| Moving and looking | `go_to` (A* path-finding with jumping, swimming and climbing), `look_at`, `follow` |
+| Gathering | `mine`, `mine_nearest` |
+| Building | `place`, `build` (named blueprints or its own list of blocks) |
+| Making | `craft`, `smelt` |
+| Containers and blocks | `use`, `put`, `take` |
+| Food and farming | `eat`, `plant`, `till`, `harvest` |
+| Creatures and people | `attack`, `give` |
+| Inventory | `equip`, `drop` |
+| Itself | `sleep`, `say`, `wait`, `stop` |
+
+Three more skills belong to its mind:
+- `reflect`: judge its recent decisions and keep lessons;
+- `practice`: train its model;
+- `name_place`: remember a spot by name, to find it again with `go_to`.
+
+## Practice: how it teaches itself
+
+1. **Everything is recorded.** Each decision is saved with the exact instructions and
+   observation Zen saw, its reply and what came of it (`decisions.jsonl`). Every judgement of it
+   is saved too (`judgements.jsonl`), whether its own from `reflect` or yours from the page.
+2. **Examples are chosen.**
+   - **Kept:** decisions that worked and that nobody judged bad. One you 👍'd counts twice.
+   - **Replaced:** a decision that went wrong is replaced by the better action Zen wrote for it
+     when it reflected.
+   - **Left out:** bad decisions with no better action.
+   - **Balanced:** no one skill may be more than a third of the examples, and older examples are
+     replayed alongside new ones so it keeps what it learned before.
+3. **Training.** A LoRA adapter (rank 16 on every attention and MLP projection) is trained on the
+   model's original weights (downloaded once from Hugging Face), on the reply tokens only. The
+   model server stops while it trains, so the GPU can do the work, and Zen sleeps.
+4. **Into use.** The adapter is written as a llama.cpp LoRA GGUF, and the server restarts with it
+   (`--lora`).
+5. **Checked.** Once Zen has made 30 decisions with the new adapter, their success rate is
+   compared with the old one's. If it fell by more than 12 points, Zen goes back to the previous
+   adapter, gets a lesson about it, and is told.
+
+Practice needs PyTorch, transformers, safetensors and gguf. The **Install training tools** button
+on the page installs them; with an NVIDIA GPU it installs the CUDA build of PyTorch.
+- **Speed:** a 1.5B model practises in a few minutes on an 8 GB GPU.
+- **On the CPU:** practice works, but slowly.
+- **Starting it:** Zen chooses when to practise. You can also press **Start practice**, or let it
+  practise automatically when it sleeps in a bed. Any adapter, or none, can be put back on the
+  Settings tab.
 
 ## What you see
 
-- **🏡 Home:** the world in 3D around Zen, streamed as it roams, with an overlay: the time and
-  weather, where Zen is, a local map, Zen's needs and feelings, what its brain just chose, and a live
-  feed. While Zen paints, plays or sculpts, the piece grows in a panel as each mark is made.
-  - **Watch:** drag to orbit, wheel to zoom, click anything.
-  - **Visit:** walk in with WASD and the mouse; talk to Zen (it hears you, and you are part of its
-    stream), give it what you carry, put things down for it to find.
-- **🌱 Zen:** its journey (first step, first meal, first question, first word, first painting…), its
-  body, its art, and its motor mind: how often it chooses each action, how sure it is, how its
-  rewards are going, and the stream of what it just did.
-- **💭 Thoughts** and **🗣️ Conversations:** everything it thought, did and said, whole and searchable
-  (with you, with the Sprite, and the Sprite's verdicts on its work).
-- **🗺️ Atlas:** the map of everywhere Zen has been, the places it found, and its trail.
-- **🖼️ Keepsakes:** every painting, song, sculpture and piece of writing, with what the Sprite saw and
-  said. Replay any piece mark by mark as a time-lapse. ♥ a piece to tell Zen you love it: every mark
-  that made it counts for more in its learning.
-- **🎓 Academy**, **🧠 Concepts**, **✨ Sprite**, **⚙️ Settings** and **🩺 Health:** the training
-  (including how much it is learning from its own life), what Zen understands, the Sprite (ask it
-  anything about Zen), every setting, and the program's own performance (**Download report**).
+- **🏡 Home:** the world in 3D, with sky, sun and moon, clouds, rain and snow, and block light. Zen
+  has a name tag and speech bubble, and a glow that pulses while it thinks. Beside it:
+  - its mind card: thought, goal, current skill, health and food, and the last decision with
+    👍/👎;
+  - the chat, its inventory, live events and a minimap.
 
-## How Zen's mind works
+  The view has two modes:
+  - **Watch:** orbit around Zen.
+  - **Visit:** walk in yourself.
+    - WASD, Space to jump, Shift to sneak, Ctrl to sprint, the mouse to look.
+    - Hold the left button to dig, right-click to place or use.
+    - 1–9 and the wheel for the hotbar, E for the inventory, Q to drop, G to give to Zen, V for
+      third person.
+- **🧠 Mind:** every decision, with the following:
+  - its latency, what it saw, thought and did, and what came of it;
+  - 👍/👎 and *show it what it should have done*;
+  - a latency chart and its practice;
+  - its notes, lessons, places and goals.
+- **🗣️ Conversations / 💭 Thoughts:** everything it said and heard, and every thought and reflection,
+  in full, searchable.
+- **🗺️ Map:** the explored land from above, with Zen, you and its named places.
+- **⚙️ Settings:**
+  - the model, and whether it runs on the GPU;
+  - how adventurous its decisions are and how often it thinks;
+  - radio chat (whether it hears the chat box from anywhere);
+  - practice, day length, hostiles, and render distance.
+- **🩺 Health:** what each process is doing, decision latency, the GPU, warnings, and a downloadable
+  diagnostics report.
 
-Zen lives one continuous stream, the same one its brain reads and learns from:
-
-```
-<|world|> Meadow, morning, mild. Ahead: a stream. I see a berry bush 2 ahead. I am thirsty.
-<|act|> forward
-<|world|> I step forward. I wade into the water.
-<|thought|> (whatever its brain thinks)
-<|act|> drink
-<|world|> I drink the cool water. I am less thirsty.
-<|act|> ask
-<|mind|> (the question its brain writes)
-<|oracle|> (the Sprite's answer)
-```
-
-- **Choosing.** At each beat its brain reads the stream and the next word after `<|act|>` is sampled
-  from its own probabilities over the motor words (at the easel: over the brush's words; at the
-  piano: notes; with clay: the sculptor's words). The cache of what it has read is kept between
-  beats, so a choice takes tens of milliseconds on the CPU.
-- **Learning.** The World scores each action (needs relieved or worsened, pain, novelty, answers
-  received; for art, the Sprite's verdict). The Academy trains on windows of the stream with:
-  - the ordinary language-model loss, so Zen learns what follows what it does (its understanding);
-  - a policy-gradient loss on its own choices, weighted by how each turned out compared with what it
-    usually gets, with a small bonus for staying curious.
-  Together with FineWeb and the Sprite's words, the same brain learns to speak, to understand and
-  to act.
-
-## The world
-
-Endless and generated from a seed, in chunks of 32×32 tiles as Zen (or you) goes:
-
-- **Land:** meadow, grassland, forest, pine forest, jungle, swamp, savanna, desert, tundra, snow,
-  mountains and rock; lakes, rivers and the sea; beaches.
-- **Places:** ruins with chests and readable books, abandoned cabins, caves, standing stones,
-  springs, cairns to climb and look far from, beehives, nests and old wells, each with a name.
-- **Life:** deer, rabbits, foxes, birds, fish, frogs and owls at night, fireflies in summer, goats and
-  lizards, and the rare bear. Berries, apples, mushrooms (some of them poisonous), honey, eggs.
-- **Physics:** day and night, seasons, rain, storms, snow, fog and wind; temperature by land, height
-  and hour; shelter and fire for warmth; darkness without light; getting wet and drying. Zen gets
-  hungry, thirsty, tired and cold; it falls asleep when exhausted and faints (waking at home) when
-  its health runs out.
-- **Home:** a cabin at the start with a bed, a fireplace with wood and a flint, a bookshelf, a chest,
-  an easel with paper, a piano, a desk, a rain barrel, and a pond and a beehive nearby.
-
-## How it is built
+## Layout
 
 ```
-   FineWeb ──┐                                ┌── the Sprite: llama.cpp on the CPU (Qwen 2.5 Omni 3B: sees and hears)
-             ▼                                ▼
- ┌────────────────────────┐ brain  ┌──────────────────────┐ events ┌─────────────────────────────┐
- │ ACADEMY (GPU)          │───────▶│ HUB                  │◀──────▶│ WORLD (CPU)                 │
- │ trains Zen's brain on  │ files  │ web page, schedule,  │        │ the endless world; Zen's    │
- │ text and on its own    │◀───────┤ the Sprite's words,  │        │ brain choosing every deed,  │
- │ experience; publishes  │ exp.   │ supervision          │        │ word and mark               │
- └────────────────────────┘journal └─────────▲────────────┘        └─────────────────────────────┘
-                                              │ WebSocket
-                                       your browser (three.js)
+run.py                the launcher
+ada/hub.py            the Hub: web server, its model server, practice (coach.py), archives, health
+ada/web.py            HTTP + WebSocket API
+ada/localllm.py       llama.cpp: picking the build (CUDA / Vulkan / Metal / CPU), models, adapters
+ada/coach.py          practice rounds: stop the model, train, swap in the adapter
+ada/life.py           the World process: the world at 20 Hz, its body and skills, its mind
+ada/agent/mind.py     observation, decisions, memory, reflect / practice / name_place, rollback
+ada/agent/practice.py examples from judged decisions, LoRA training, GGUF export
+ada/agent/skills.py   the 24 skills, as state machines
+ada/vox/              blocks, items, recipes, terrain, simulation, body physics, A*, descriptions
+web/                  the page (three.js, chunk meshing in a worker)
+docs/DESIGN-v5.md     the design
 ```
 
-- **Zen's brain:** a small modern transformer (RMSNorm, rotary positions, QK-norm, SwiGLU, tied
-  embeddings, logit soft-capping) trained with Muon and AdamW in bf16; a 32,768-token vocabulary
-  trained on FineWeb; the batch sized to the GPU; new layers grown when learning plateaus.
-- **The GPU is for training.** Zen's brain lives on the CPU (half the physical cores, at most 4); the
-  Sprite gets the rest and runs only when asked. The 3D view draws at most 60 frames a second.
-
-```
-run.py               starts the Hub, which starts the Academy and the World
-ada/academy.py       training (text + experience), evaluation, publishing    ada/model.py   the brain
-ada/life.py          the World process: Zen's stream, choices, words, art    ada/motor.py   choosing and experience
-ada/world/terrain.py the endless land                 ada/world/sim.py   things, beings, physics, senses, rewards
-ada/world/studio.py  the easel, piano and clay        ada/world/render.py  pictures and sounds for the Sprite
-ada/sprite.py        what the Sprite is asked         ada/hub.py         processes, schedule, the Sprite's model
-ada/localllm.py      llama.cpp servers                ada/oracle.py      reaching the model (built-in or Ollama)
-ada/archive.py       thoughts and conversations kept whole                 ada/journey.py Zen's milestones
-web/                 the page (three.js)              docs/DESIGN-v4.md  the design
-tests/               python -m pytest tests
-```
+Tests: `python -m pytest -q tests`.

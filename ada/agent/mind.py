@@ -297,10 +297,13 @@ class Mind:
         if self.wake_reasons:
             return "; ".join(self.wake_reasons[:3])
         idle = getattr(self.cfg, "idle_seconds", 20.0) if self.cfg else 20.0
-        if not body_busy and now - self.last_think > min(idle, 3.0) and self.pending is None:
-            return "you are free to do something"
-        if now - self.last_think > idle:
-            return "a while has passed"
+        if not body_busy:
+            if self.pending is None and now - self.last_think > min(idle, 3.0):
+                return "you are free to do something"
+            if now - self.last_think > idle:
+                return "a while has passed"
+        elif now - self.last_think > max(120.0, 4 * idle):     # a long job: look up now and then
+            return "you have been at this a while"
         return None
 
     def memory_text(self) -> str:
@@ -400,7 +403,13 @@ class Mind:
             self.goal = rec["goal"].strip()
         self.learning["since"] = self.learning.get("since", 0) + 1
         self.recent.append(rec)
+        if "outcome" in rec:                        # its action was quicker than its reply
+            self._log_decision(self._loggable(rec))
         return rec
+
+    @staticmethod
+    def _loggable(rec: dict) -> dict:
+        return {k: v for k, v in rec.items() if k != "self" and not k.startswith("_")}
 
     def failed(self, rec: dict, error: str) -> None:
         self.thinking, self.busy_with = False, ""
@@ -412,7 +421,8 @@ class Mind:
         rec["outcome"] = {"ok": bool(ok), "text": text, **({"details": details} if details else {})}
         self.last_result = {"skill": rec.get("action", {}).get("skill"), "args": rec.get("action", {}).get("args"),
                             "ok": ok, "text": text}
-        self._log_decision({k: v for k, v in rec.items() if k != "self"})
+        if "reply" in rec:                          # (else finish() logs it once the reply is complete)
+            self._log_decision(self._loggable(rec))
         if self.pending is rec:
             self.pending = None
 
@@ -428,7 +438,7 @@ class Mind:
         self.places[name] = [round(float(c)) for c in pos]
         return f"I'll remember this spot as {name}."
 
-    def reflect_request(self, n: int = 12) -> tuple[list[dict], dict] | None:
+    def reflect_request(self, n: int = 10) -> tuple[list[dict], dict] | None:
         """The decisions to look back on, and the request that asks the model to judge them."""
         todo = [r for r in self.recent if "outcome" in r and "self" not in r][-n:]
         if len(todo) < 3:
@@ -436,7 +446,10 @@ class Mind:
         lines = []
         for i, r in enumerate(todo, 1):
             obs = r["obs"]
-            obs = obs[obs.find("\n\n", obs.find("Your goal") if "Your goal" in obs else 0):][:900].strip()
+            at = obs.find("What you perceive now:")
+            obs = (obs[at + len("What you perceive now:"):] if at >= 0 else obs)
+            obs = obs[:obs.find("\n\n")] if "\n\n" in obs else obs
+            obs = obs.strip()[:520]
             line = (f"{i}. You perceived:\n{obs}\nYou chose: {json.dumps(r['action'])}"
                     f" (thinking: {r.get('thought', '')})\nWhat followed: {'it worked' if r['outcome']['ok'] else 'it failed'}: "
                     f"{r['outcome']['text']}")

@@ -609,7 +609,7 @@ function drawLatency(vals) {
   const mx = Math.max(300, percentile(vals, 0.97) * 1.15), L = 44 * dpr, R = 8 * dpr, T = 8 * dpr, B = 18 * dpr;
   const X = (i) => L + (i / Math.max(1, vals.length - 1)) * (W - L - R), Y = (v) => H - B - (Math.min(v, mx) / mx) * (H - T - B);
   g.strokeStyle = css("--line"); g.lineWidth = 1;
-  const step = mx > 2000 ? 1000 : mx > 800 ? 250 : 100;
+  const raw = mx / 5, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= raw);
   for (let v = 0; v <= mx; v += step) { g.beginPath(); g.moveTo(L, Y(v)); g.lineTo(W - R, Y(v)); g.stroke(); g.fillText(v >= 1000 ? `${v / 1000}s` : `${v}`, 4 * dpr, Y(v) + 4 * dpr); }
   g.setLineDash([5 * dpr, 4 * dpr]); g.strokeStyle = css("--good"); g.beginPath(); g.moveTo(L, Y(250)); g.lineTo(W - R, Y(250)); g.stroke(); g.setLineDash([]);
   const med = percentile(vals, 0.5); g.strokeStyle = css("--warm"); g.lineWidth = 1.5 * dpr; g.beginPath(); g.moveTo(L, Y(med)); g.lineTo(W - R, Y(med)); g.stroke();
@@ -643,7 +643,7 @@ function renderPractice(el, full) {
     ${full || ads.length ? `<h3>Adapters</h3><div class="adapters">
       <div class="adapter${!active ? " on" : ""}"><div><b>Base model</b><small>as downloaded, no practice</small></div>${!active ? '<span class="badge on">in use</span>' : '<button data-practice="use" data-name="">Use the base model</button>'}</div>
       ${ads.slice().reverse().slice(0, full ? 20 : 3).map((a) => `<div class="adapter${a.name === active ? " on" : ""}"><div><b>${esc(a.name)}</b><small>${a.created ? ago(a.created) + " · " : ""}${a.examples ?? "?"} examples${a.loss != null ? ` · loss ${(+a.loss).toFixed(3)}` : ""}${a.liked ? ` · ${a.liked} 👍` : ""}${a.corrected ? ` · ${a.corrected} ✏️` : ""}</small></div>${a.name === active ? '<span class="badge on">in use</span>' : `<button data-practice="use" data-name="${esc(a.name)}">Use</button>`}</div>`).join("")}</div>` : ""}
-    ${full && (L.history || []).length ? `<h3>What practice changed</h3><div class="pr-hist">${L.history.slice().reverse().slice(0, 6).map((h) => `<div><b>${esc(h.adapter)}</b> <span class="muted">${h.t ? ago(h.t) : ""} · ${h.examples ?? "?"} examples</span>${h.before != null ? `<span>judged good ${pct(h.before)} → ${h.after != null ? pct(h.after) : "measuring…"}</span>` : ""}${h.rolled_back ? '<span class="bad">rolled back</span>' : ""}</div>`).join("")}</div>` : ""}
+    ${full && (L.history || []).length ? `<h3>What practice changed</h3><div class="pr-hist">${L.history.slice().reverse().slice(0, 6).map((h) => `<div><b>${esc(h.adapter)}</b> <span class="muted">${h.t ? ago(h.t) : ""} · ${h.examples ?? "?"} examples</span>${h.before != null ? `<span>actions that worked ${pct(h.before)} → ${h.after != null ? pct(h.after) : "measuring…"}</span>` : ""}${h.rolled_back ? '<span class="bad">rolled back</span>' : ""}</div>`).join("")}</div>` : ""}
     ${full ? `<details class="pr-adv"><summary>Practice settings</summary><div class="sliders">
       <label>Examples needed before practising <input type="range" min="10" max="400" step="10" data-set="mind.practice_min"><output></output></label>
       <label>Steps per practice <input type="range" min="50" max="2000" step="50" data-set="mind.practice_steps"><output></output></label>

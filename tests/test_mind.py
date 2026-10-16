@@ -193,3 +193,19 @@ def test_a_practice_round_that_made_it_worse_is_undone(tmp_path):
     back = m.check_practice()
     assert back and back["rollback_to"] is None and m.learning["adapter"] is None and "made me worse" in back["text"]
     assert m.check_practice() is None                                          # judged once
+
+
+def test_a_decision_whose_action_ends_before_its_reply_is_still_logged_whole(tmp_path, llama):
+    m = Mind(tmp_path, "Zen", SKILLS)
+    m.url = llama.url
+    llama.replies.append(reply(skill="go_to", args={"x": 1, "y": 2, "z": 3}))
+    got = []
+    rec = m.think("Here.", "test", lambda r, a: got.append(r))
+    kind, _, res = m.inbox.get(timeout=10)
+    assert got and got[0] is rec
+    m.outcome(rec, True, "Arrived at once.")           # the body was quicker than the rest of the reply
+    assert not (tmp_path / "decisions.jsonl").exists()
+    m.finish(rec, res)
+    row = json.loads((tmp_path / "decisions.jsonl").read_text().splitlines()[-1])
+    assert row["reply"] and row["outcome"]["text"] == "Arrived at once." and row["thought"] == "Logs nearby."
+    assert len(practice.examples(tmp_path)[0]) == 1

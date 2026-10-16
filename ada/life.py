@@ -233,6 +233,15 @@ class World:
         if rec.get("_begun"):
             return
         rec["_begun"] = True
+        same = (self.running is not None and w.skills.busy and
+                json.dumps(self.running.get("action"), sort_keys=True) ==
+                json.dumps({"skill": (action or {}).get("skill"), "args": (action or {}).get("args") or {}}, sort_keys=True))
+        if same:                    # it decided to keep doing what it is doing: carry on, don't restart
+            self.end(True, "You decided to keep at it.", wake=False)
+            rec["action"] = {"skill": action.get("skill"), "args": action.get("args") or {}}
+            self.running = rec
+            self.mind.pending = rec
+            return
         if self.running is not None and self.running is not rec and self.practising is None:
             # it changed its mind: the old decision ends here, and its interruption is not the new one's outcome
             old = self.running.get("action", {}).get("skill")

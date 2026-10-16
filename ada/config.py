@@ -17,7 +17,7 @@ class MindConfig:
     model: str = "qwen2.5-1.5b"      # see localllm.CATALOG
     gpu: bool = True                 # run the model on the GPU when there is one
     cpu_threads: int = 0             # for the model on the CPU; 0 = the physical cores
-    context: int = 8192
+    context: int = 16384             # shared by the server's two slots (decisions and reflection)
     temperature: float = 0.7
     idle_seconds: float = 20.0       # it thinks at least this often, even when nothing happens
     radio: bool = True               # it hears the chat box from anywhere (else only within hear_radius)
@@ -129,7 +129,7 @@ def physical_cores() -> int:
 
 def model_threads(cfg: AdaConfig) -> int:
     """CPU threads for the model server: the physical cores less one for the world."""
-    return cfg.mind.cpu_threads or max(1, physical_cores() - 1)
+    return cfg.mind.cpu_threads or max(2, physical_cores() - 1)
 
 
 def get_live(cfg: AdaConfig) -> dict:
