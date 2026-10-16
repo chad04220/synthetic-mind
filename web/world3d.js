@@ -268,8 +268,8 @@ class Billboards {
     this.tex = tex; this.cap = 0; this.n = 0;
     const defines = {}; defines["MODE_" + mode.toUpperCase()] = 1;
     if (additive) defines.ADDITIVE = 1; if (cut) defines.ALPHA_CUT = 1; if (lit) defines.LIT = 1; if (!fog || additive) defines.NOFOG = 1;
-    const uniforms = THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { map: { value: tex } }]);
-    uniforms.uLight = U.light;
+    const uniforms = THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { map: { value: null } }]);
+    uniforms.map.value = tex; uniforms.uLight = U.light;   // the shared texture itself (merge would clone it, and a clone misses atlas updates)
     this.mat = new THREE.ShaderMaterial({
       uniforms, defines, vertexShader: BB_VERT, fragmentShader: BB_FRAG, fog: fog && !additive,
       transparent: !cut, depthWrite: cut, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -481,7 +481,7 @@ const WEATHER = {
   clear:  { mix: 0,    top: C("#3a7fd6"), hor: C("#c4e4f6"), light: 1.0,  sunVis: 1.0,  fog: [70, 280],  cloud: 0.45, cloudCol: 1.0 },
   cloudy: { mix: 0.62, top: C("#7f8c9c"), hor: C("#bcc4cc"), light: 0.42, sunVis: 0.25, fog: [45, 200],  cloud: 1.0,  cloudCol: 0.82 },
   rain:   { mix: 0.85, top: C("#58636f"), hor: C("#8d97a1"), light: 0.2,  sunVis: 0.0,  fog: [16, 95],   cloud: 1.0,  cloudCol: 0.6 },
-  storm:  { mix: 0.92, top: C("#363d4a"), hor: C("#626b78"), light: 0.12, sunVis: 0.0,  fog: [12, 75],   cloud: 1.0,  cloudCol: 0.42 },
+  storm:  { mix: 0.95, top: C("#2a303b"), hor: C("#4f5763"), light: 0.05, sunVis: 0.0,  fog: [12, 75],   cloud: 1.0,  cloudCol: 0.42 },
   snow:   { mix: 0.75, top: C("#a6b1be"), hor: C("#dde3ea"), light: 0.38, sunVis: 0.12, fog: [14, 85],   cloud: 1.0,  cloudCol: 0.95 },
   fog:    { mix: 0.7,  top: C("#a7b2bc"), hor: C("#cfd5da"), light: 0.4,  sunVis: 0.3,  fog: [2, 30],    cloud: 0.6,  cloudCol: 0.95 },
 };
@@ -1453,7 +1453,10 @@ function buildFurniture() {
         for (let i = 0; i < rows; i++) {   // stone courses, slightly varied
           const y0 = base + i * 0.42, y1 = Math.min(topY, y0 + 0.42), wide = y1 <= bb + WALL_H + 0.2;
           const hw = wide ? 0.55 : 0.4, d = wide ? 0.7 : 0.55;
-          cb(-hw, hw, 0, d, y0, y1, vary(COL.stone, hash2(e.id, i, 9), 0.08));
+          const sc = vary(COL.stone, hash2(e.id, i, 9), 0.16).multiplyScalar(i % 2 ? 0.94 : 1.04);
+          cb(-hw, hw, 0, d, y0 + 0.02, y1 - 0.02, sc);
+          cb(-hw + 0.03, hw - 0.03, 0.03, d - 0.03, y0, y1, shade(COL.stone, 0.62));   // mortar joint
+          if (i % 2 === 0) for (const a of [-hw + 0.2, hw - 0.25]) cb(a - 0.08, a + 0.08, -0.02, d + 0.02, y0 + 0.08, y0 + 0.3, vary(COL.stone, hash2(e.id, i, 11), 0.2));
         }
         cb(-0.48, 0.48, -0.04, 0.63, topY, topY + 0.1, shade(COL.stone, 0.75));
         cb(-0.26, 0.26, 0.08, 0.47, topY + 0.1, topY + 0.13, C("#1b1612"));
@@ -1805,7 +1808,7 @@ function computeEnvTargets() {
   const t = {
     top: P("top").lerp(shade(wx.top, dayF), wx.mix), hor: P("hor").lerp(shade(wx.hor, dayF), wx.mix), bot: P("bot").lerp(shade(wx.hor, dayF * 0.8), wx.mix),
     sun: P("sun"), hemS: P("hemS").lerp(shade(wx.hor, dayF), wx.mix * 0.6), hemG: P("hemG"),
-    sunI: Pn("sunI") * (isDay ? wx.light : lerp(1, wx.light, 0.6)), hemI: Pn("hemI") * lerp(1, 1.05, wx.mix) * (L.weather === "rain" ? 0.8 : L.weather === "storm" ? 0.7 : 1),
+    sunI: Pn("sunI") * (isDay ? wx.light : lerp(1, wx.light, 0.6)), hemI: Pn("hemI") * lerp(1, 1.05, wx.mix) * (L.weather === "rain" ? 0.8 : L.weather === "storm" ? 0.55 : 1),
     sunDir: isDay ? dir : new THREE.Vector3(-dir.x * 0.6, Math.max(0.25, arc * 0.8), -0.45).normalize(),
     moonDir: isDay ? new THREE.Vector3(0, -1, 0) : new THREE.Vector3(Math.cos(ang), Math.max(0.12, arc * 0.85), -0.4).normalize(),
     stars: isDay ? 0 : smooth(0.05, 0.35, -e) * (L.weather === "clear" ? 1 : L.weather === "cloudy" ? 0.25 : 0),
@@ -1845,7 +1848,7 @@ function updateEnv(dt) {
   S.sun.color.copy(E.sun); S.sun.intensity = E.sunI;
   S.hemi.color.copy(E.hemS); S.hemi.groundColor.copy(E.hemG); S.hemi.intensity = E.hemI + flash * 3.2;
   if (flash > 0.01) { sk.uTop.value.lerp(C("#c9d4ff"), flash * 0.55); sk.uHor.value.lerp(C("#e6ecff"), flash * 0.5); }
-  S.bowMat.uniforms.uAlpha.value = E.rainbow * 0.42 * (1 - E.night) * (1 - E.rain * 0.6); S.bow.visible = S.bowMat.uniforms.uAlpha.value > 0.005;
+  S.bowMat.uniforms.uAlpha.value = E.rainbow * 0.34 * (1 - E.night) * (1 - E.rain * 0.6); S.bow.visible = S.bowMat.uniforms.uAlpha.value > 0.005;
   // fog follows the horizon colour; distances grow with the camera distance (overview)
   const cd = S.cam.dist;
   S.scene.fog.color.copy(E.hor);
@@ -2165,7 +2168,7 @@ function updateSprites(dt, t) {
     if (!s) { l.intensity = 0; return; }
     l.position.set(s.x, s.y + 0.25, s.z); l.color.setRGB(s.col[0], s.col[1] * 0.9, s.col[2] * 0.8);
     const pw = clamp(s.power, 1, 8);
-    l.intensity = (0.7 + pw * 0.3) * s.fl * (0.45 + night * 0.75); l.distance = 2.6 + pw * 0.9;
+    l.intensity = (0.7 + pw * 0.36) * s.fl * (0.45 + night * 0.75); l.distance = 2.6 + pw * 0.9;
   });
   // embers (open fires only)
   let fi = 0;

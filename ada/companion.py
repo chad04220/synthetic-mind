@@ -31,6 +31,7 @@ from .world import agent as ag
 from .world.sim import _and, where
 
 CARE = {"caretaker": 2, "guide": 1, "friend": 0}
+PATIENCE = 10.0          # seconds (world time) Wren waits for its model before acting on its own judgement
 
 
 @dataclass
@@ -69,6 +70,8 @@ class Companion:
         self.recent_labels: deque = deque(maxlen=6)
         self.plan: ag.Plan | None = None
         self.waiting: tuple | None = None            # (request id, since, options) while the model chooses
+        self.late: tuple | None = None               # a question the model is still answering after Wren moved on
+        self.ahead: tuple | None = None              # (label, say, thought): its answer, for the next choice
         self.diary: deque = deque(maxlen=240)          # {"day", "time", "text"}
         self.thoughts: deque = deque(maxlen=80)
         self.intent: dict = {}
@@ -172,10 +175,12 @@ class Companion:
                 self.finish(*result)
             return
         if self.waiting:
-            rid, since, _ = self.waiting
-            if self.now() - since > 35:
+            rid, since, opts = self.waiting
+            if self.now() - since > PATIENCE:
+                # The model is slow right now: act on Wren's own judgement, and keep the model's
+                # answer, when it comes, for the next choice.
                 self.waiting = None
-                self.life.pending.pop(rid, None)
+                self.late = (rid, self.now(), opts)
                 self.choose(None)
             return
         if self.now() >= self.next_decide:
@@ -187,9 +192,21 @@ class Companion:
             self.set_plan(ag.Goal("rest", "sofa", reason="Nothing needs doing.", source="companion"))
             return
         opts.sort(key=lambda o: -o.score)
+        if self.ahead:                                 # a choice the model made while Wren was busy
+            label, say, thought = self.ahead
+            self.ahead = None
+            match = next((o for o in opts if o.label == label), None)
+            if match and match.score >= opts[0].score - 4:
+                self.model_thought(thought)
+                self.pending_line = say if self.near_zen(6) else ""
+                self.choose(match, opts, by_model=True)
+                return
         urgent = opts[0].score >= 9
-        if urgent or not self.life.voice_ready or not self.life.cfg.oracle.enabled:
-            self.choose(None, opts)
+        if self.late and self.now() - self.late[1] > 120:
+            self.life.pending.pop(self.late[0], None)
+            self.late = None                           # it never came
+        if urgent or self.late or not self.life.voice_ready or not self.life.cfg.oracle.enabled:
+            self.choose(None, opts)                    # (one question to the model at a time)
             return
         top = opts[:7]
         self.rng.shuffle(top)                          # no favourite positions: the model reads the labels
@@ -200,16 +217,24 @@ class Companion:
                                near=self.near_zen(6))
         self.waiting = (rid, self.now(), top)
 
+    def model_thought(self, thought: str):
+        if thought:
+            self.thoughts.append({"text": thought, "t": time.time()})
+            self.life.link.send("event", kind="wren_thought", text=thought)
+
     def on_decision(self, rid: str, data: dict):
+        i = data.get("choice", -1)
+        if self.late and self.late[0] == rid:          # too late for the last choice: keep it for the next
+            opts = self.late[2]
+            self.late = None
+            if 0 <= i < len(opts):
+                self.ahead = (opts[i].label, data.get("say", ""), data.get("thought", ""))
+            return
         if not self.waiting or self.waiting[0] != rid:
             return
         _, _, opts = self.waiting
         self.waiting = None
-        i = data.get("choice", -1)
-        thought = data.get("thought", "")
-        if thought:
-            self.thoughts.append({"text": thought, "t": time.time()})
-            self.life.link.send("event", kind="wren_thought", text=thought)
+        self.model_thought(data.get("thought", ""))
         self.pending_line = data.get("say", "") if self.near_zen(6) else ""
         self.choose(opts[i] if 0 <= i < len(opts) else None, opts, by_model=0 <= i < len(opts))
 
@@ -350,7 +375,8 @@ class Companion:
         if self.plan and self.plan.goal.verb not in ("feed", "give", "dry", "light", "cook", "bake") and not self.talk:
             self.plan = None
             self.b.activity = ""
-        self.waiting = None
+        if self.waiting:                               # its model's answer can still serve the next choice
+            self.late, self.waiting = (self.waiting[0], self.now(), self.waiting[2]), None
         self.next_decide = 0.0
         if self.b.sleeping and self.w.phase == "day":
             self.b.sleeping = False
@@ -664,7 +690,7 @@ class Companion:
             return
         if t.state == "compose":
             t.state = "waiting"
-            t.until = now + 60
+            t.until = now + (25 if t.members[t.speaker] == self.name else 60)   # a slow model: Wren's own words
             who = t.members[t.speaker]
             closing = t.turns <= 1
             if who == self.name:

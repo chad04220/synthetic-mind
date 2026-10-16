@@ -90,6 +90,7 @@ class Hub:
         self.oracle.cpu_threads = cpu_threads(cfg)["oracle"]
         self.wren = WrenVoice(self.oracle, cfg.companion, cfg.name)
         self.voice_was_ready = None
+        self.voice_busy = 0                            # Wren's requests in flight (lessons wait for them)
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lessons")   # lessons and assessments
         self.voice_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wren")   # Wren in the World
         self.teaching = False
@@ -264,6 +265,8 @@ class Hub:
             for c in m.get("chat", []):
                 self.feeds["chat"].append({"id": 0, "kind": "chatline", **c})
         elif t == "oracle":
+            m["queued"] = time.time()
+            self.voice_busy += 1
             self.voice_pool.submit(self._world_oracle, m)
         elif t == "perf":
             self.perf_latest[m["src"]] = m["perf"]
@@ -569,8 +572,8 @@ class Hub:
         """Keep lessons flowing while the Academy studies: your topics first, then what Ada gets wrong."""
         o = self.cfg.oracle
         studying = self.academy_wanted is not None and self.academy_wanted[0] == "resume"
-        if self.teaching or not self.oracle_ready():
-            return
+        if self.teaching or not self.oracle_ready() or self.voice_busy:
+            return                                     # Wren's life first; lessons when the model is free
         if not self.topics and not (o.background_teaching and studying and time.time() - self.last_teach >= o.lesson_seconds):
             return
         if self.topics:
@@ -621,8 +624,12 @@ class Hub:
         purpose, p, st = m["purpose"], m["payload"], int(m.get("stage", self.stage) or 0)
         text, extra = "", {}
         t0 = time.perf_counter()
+        waited = time.time() - m.get("queued", time.time())
+        stale = waited > {"wren_decide": 60, "wren_turn": 90}.get(purpose, 600)
         try:
-            if self.oracle_ready():
+            if stale:
+                self.perf.add(f"{self.cfg.companion}: dropped (waited too long)", waited)
+            elif self.oracle_ready():
                 if purpose == "wren_decide":
                     extra["decision"] = self.wren.decide(p["situation"], p["synth"], p.get("memory", []), p["options"],
                                                          st, p.get("near", False))
@@ -645,7 +652,9 @@ class Hub:
                     text = self.wren.tutor(p["history"], p["user"], p["mind"], st)
         except Exception as e:
             self.event("error", text=f"{self.cfg.companion}'s mind ({purpose}): {type(e).__name__}: {e}")
-        self.perf.add(f"{self.cfg.companion}: {purpose.replace('wren_', '')}", time.perf_counter() - t0)
+        self.voice_busy = max(0, self.voice_busy - 1)
+        if not stale:
+            self.perf.add(f"{self.cfg.companion}: {purpose.replace('wren_', '')}", time.perf_counter() - t0)
         if not text and purpose == "wren_book":
             facts = self.graph.drill(random.Random())
             text = " ".join(t for _, t in facts)

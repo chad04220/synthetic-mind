@@ -831,6 +831,22 @@ def test_wren_asks_its_model_and_follows_the_choice(mind):
     assert c.thoughts[-1]["text"] == "A fine morning."
 
 
+def test_a_slow_model_never_keeps_wren_waiting(mind):
+    from ada.companion import PATIENCE
+
+    life = _wren_life(mind, voice=True)
+    c = life.companion
+    c.decide()
+    first = next(d for k, d in life.link.sent if k == "oracle" and d["purpose"] == "wren_decide")
+    for _ in range(int(PATIENCE / life.cfg.world.tick) + 2):
+        life.step()
+    assert c.waiting is None and len(c.decisions) >= 1    # it moved on by itself
+    opts = first["payload"]["options"]
+    life.oracle_reply(first["rid"], "", {"decision": {"choice": 0, "say": "", "thought": "Later is fine."}})
+    assert c.ahead and c.ahead[0] == opts[0].replace(" (needed now)", "")
+    assert not [d for k, d in life.link.sent if k == "oracle" and d["purpose"] == "wren_decide" and d is not first]
+
+
 def test_wren_voice_prompts_and_parsing():
     from ada.wren import WrenVoice, _line
 
