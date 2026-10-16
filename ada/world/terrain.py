@@ -524,7 +524,8 @@ class Terrain:
                 ch.feat[i] = f
                 ch.water[i] = _HOME_WATER.get((x, y), 0)
                 ch.biome[i] = B["lake"] if (x, y) in _HOME_WATER else B["meadow"]
-                ch.h[i] = 30 if (x, y) not in _HOME_WATER else (-12 if _HOME_WATER[(x, y)] == WATER_DEEP else -4)
+                if (x, y) in _HOME_WATER:            # the pond: a flat surface just below the meadow
+                    ch.h[i] = ch.h[i] - (9 if _HOME_WATER[(x, y)] == WATER_DEEP else 6)
         for k, x, y, st in _HOME_SPAWNS:
             if x0 <= x < x0 + CHUNK and y0 <= y < y0 + CHUNK:
                 ch.spawns.append((k, x, y, st))

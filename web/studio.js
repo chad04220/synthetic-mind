@@ -226,7 +226,7 @@ const Studio = (() => {
     const n = d.n || 12, vox = voxelsOf(d), list = [];
     for (let i = 0; i < vox.length; i++) if (vox[i]) list.push(i);
     const mat = new THREE.MeshStandardMaterial({ color: matColor(d), roughness: 0.85, metalness: 0 });
-    const geo = new THREE.SphereGeometry(0.72, 16, 12), m = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length)), M = new THREE.Matrix4();
+    const geo = new THREE.SphereGeometry(0.8, 16, 12), m = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length)), M = new THREE.Matrix4();
     list.forEach((i, k) => { const x = i % n, z = Math.floor(i / n) % n, y = Math.floor(i / (n * n));
       const j = (hash(i, 3) - 0.5) * 0.08; M.makeTranslation(x - n / 2 + 0.5 + j, y + 0.5, z - n / 2 + 0.5 - j); m.setMatrixAt(k, M); });
     m.count = list.length; scene.add(m);
