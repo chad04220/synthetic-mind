@@ -1,3 +1,17 @@
+# Synthetic Mind v2.0.1
+
+Fixes from the first diagnostics report from v2.0.0.
+
+- **The 3D valley stays off the training GPU.** It used to ask the browser for the fast GPU and
+  draw as many frames as the screen allowed (240 a second on a 240 Hz laptop screen), so it
+  shared the GPU, and its heat, with the Academy. It now asks for the low-power GPU and draws
+  at most 60 frames a second (30 on Low quality), which looks the same.
+- **Settings show the right vocabulary.** The brain uses the tokenizer's 32,768 tokens; Settings
+  and the diagnostics report showed the old default of 50,304.
+- **FineWeb status.** It shows "streaming" while documents are buffered, rather than
+  "connecting" each time it opens the next file.
+- **No ResourceWarning** while a voice's server is still loading its model.
+
 # Synthetic Mind v2.0.0: Zen and the valley of minds
 
 A new synth, a valley four times the size, a community of minds that think, talk and create,

@@ -814,3 +814,11 @@ def test_journey_records_each_first_once(tmp_path):
     assert j.observe({"kind": "thought", "text": "the sun"}) == []                 # only the first time
     assert j.observe({"kind": "talk", "members": ["Mira", "Zen"], "topic": "bread"})[0]["key"] == "first_conversation"
     assert Journey(tmp_path, "Zen").done == j.done                                # kept on disk
+
+
+def test_settings_show_the_tokenizers_vocabulary():
+    from ada.config import TOKENIZER_VOCAB, AdaConfig
+    from ada.tokenizer import make_tokenizer
+    for name, size in TOKENIZER_VOCAB.items():
+        assert make_tokenizer(name).vocab_size == size
+        assert AdaConfig(tokenizer=name).to_dict()["brain"]["vocab_size"] == size

@@ -86,7 +86,8 @@ class FineWebStream:
                 from huggingface_hub import HfApi, HfFileSystem
 
                 api, fs = HfApi(), HfFileSystem()
-                self.status = "connecting"
+                if not self.docs:
+                    self.status = "connecting"            # (with documents buffered, it stays "streaming")
                 path = rng.choice(self._files(api, rng))
                 with fs.open(f"datasets/{self.repo}/{path}", block_size=4 << 20) as f:
                     pf = pq.ParquetFile(f)

@@ -288,8 +288,10 @@ class LocalLLM:
                         self.status, self.detail, self.progress = "ready", "", 1.0
                         self.log(f"{self.who} is ready: {self.label()} on the CPU with {threads} threads")
                         return
-            except (urllib.error.URLError, OSError):
-                pass                                          # still loading the model (503) or starting
+            except (urllib.error.URLError, OSError) as e:
+                if isinstance(e, urllib.error.HTTPError):
+                    e.close()                                 # still loading the model (503)
+                # or still starting
             time.sleep(0.5)
         raise RuntimeError("llama-server didn't become ready within 3 minutes")
 

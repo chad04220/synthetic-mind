@@ -124,6 +124,10 @@ class ScheduleConfig:
     day_training: str = "pause"        # with day_night: pause | gentle training while she's awake
 
 
+# The padded vocabulary of each tokenizer (ada/tokenizer.py), known here without loading it.
+TOKENIZER_VOCAB = {"fineweb32k": 32768, "gpt2": 50304, "bytes": 320}
+
+
 @dataclass
 class AdaConfig:
     version: int = CONFIG_VERSION
@@ -145,7 +149,11 @@ class AdaConfig:
             self.academy.batch_size, self.academy.grad_accum = 8, 2
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # The embedding table is sized by the tokenizer (the Academy sets it when it builds the
+        # brain); show that size rather than the default, which only fits "gpt2".
+        d["brain"]["vocab_size"] = TOKENIZER_VOCAB.get(self.tokenizer, d["brain"]["vocab_size"])
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "AdaConfig":

@@ -461,7 +461,7 @@ function init(container, opts = {}) {
   if (getComputedStyle(container).position === "static") container.style.position = "relative";
   container.classList.add("w3d-root");
 
-  const r = S.renderer = new THREE.WebGLRenderer({ antialias: S.quality === "high", powerPreference: "high-performance", alpha: false });
+  const r = S.renderer = new THREE.WebGLRenderer({ antialias: S.quality === "high", powerPreference: "low-power", alpha: false });
   r.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_CAP[S.quality]));
   r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05;
   r.outputColorSpace = THREE.SRGBColorSpace;
@@ -1890,7 +1890,9 @@ function pick(e) {
 function frame(now) {
   S.raf = requestAnimationFrame(frame);
   if (S.paused) return;
-  const minGap = S.quality === "low" ? 1000 / 31 : 0;
+  // A frame cap: the valley looks the same at 60 fps as at 240, and on a laptop the browser
+  // shares the GPU (and its heat) with the Academy's training.
+  const minGap = S.quality === "low" ? 1000 / 31 : 1000 / 61;
   if (now - S.lastFrame < minGap) return;
   const dt = Math.min(0.1, (now - S.lastFrame) / 1000); S.lastFrame = now;
   if (!S.vw || !S.vh || S.container.clientWidth === 0) return;
