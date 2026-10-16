@@ -151,6 +151,7 @@ CHOICES = {
     "schedule.mode": ("day_night", "together", "academy", "world"),
     "schedule.day_training": ("pause", "gentle"),
     "academy.intensity": ("full", "balanced", "gentle"),
+    "world.device": ("auto", "cuda", "cpu"),
 }
 
 LIVE = {
@@ -159,7 +160,7 @@ LIVE = {
     "academy.mix_fineweb": float, "academy.mix_lessons": float, "academy.mix_journal": float,
     "academy.mix_concepts": float, "academy.muon_lr": float, "academy.adam_lr": float,
     "academy.auto_grow": bool,
-    "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
+    "world.device": str, "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
     "world.thought_tokens": int, "world.thought_temperature": float, "world.thoughts_grounded": bool,
     "world.intent_temperature": float, "world.reply_tokens": int, "world.reply_temperature": float,
     "oracle.url": str, "oracle.model": str, "oracle.enabled": bool, "oracle.background_teaching": bool,

@@ -178,9 +178,14 @@ def findings(perf: dict, gpu: list, client: dict | None, restarts: dict) -> list
     if late and late.get("avg_ms", 0) > 250:
         add("warn", "world", f"World steps take {late['avg_ms']:.0f} ms on average (they should be under 250 ms); the World "
             "is running behind. Ada's brain may be on a busy device.")
-    for k in ("deciding", "thinking", "request: chat"):
-        if wt.get(k, {}).get("max_ms", 0) > 2000:
-            add("info", "world", f"'{k}' once took {wt[k]['max_ms'] / 1000:.1f} s (her brain running on {wg.get('device', '?')}).")
+    slow = {k: v for k, v in wt.items() if k.startswith("brain: ") and k != "brain: waiting in line"
+            and k != "brain: load" and v.get("avg_ms", 0) > 1000}
+    if slow:
+        k, v = max(slow.items(), key=lambda kv: kv[1]["avg_ms"])
+        tip = (" The GPU may be busy training; Settings → World device = cpu keeps her daily life off it."
+               if wg.get("device") == "cuda" else "")
+        add("info", "world", f"Her brain takes {v['avg_ms'] / 1000:.1f} s for '{k[7:]}' on {wg.get('device', '?')}. "
+            f"The world no longer waits for it, but her replies arrive that much later.{tip}")
     lag = ht.get("event loop lag", {})
     if lag and lag.get("max_ms", 0) > 250:
         add("warn", "hub", f"The Hub's web server stalled for up to {lag['max_ms']:.0f} ms; something is starving it of CPU.")

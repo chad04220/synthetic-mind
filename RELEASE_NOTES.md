@@ -1,3 +1,23 @@
+# Ada v1.1.1
+
+## Fixed: the world froze every few seconds
+
+Your Health report showed it: one of Ada's thoughts took 2.8 seconds on the GPU, and her thinking,
+deciding and replies all ran on the World's main loop, so the whole valley stopped while she
+searched for words (the World's steps fell up to 2.5 s behind).
+
+- **Her brain now has its own thread.** Thoughts, intentions, replies and loading a new brain are
+  queued (your messages first) and answered in the background; the World keeps its pace no matter
+  how long they take. If her own words take more than 3 seconds, her needs decide for her.
+- **Generating words is much faster on a GPU.** Previously every word made the program stop and
+  wait for the GPU several times, which is especially slow on Windows. Now the GPU works through
+  several words before the program checks in.
+- **Settings → Her brain runs on** (GPU / CPU) moves her brain while she lives, without restarting.
+  On the CPU, her daily life leaves the GPU entirely to the Academy.
+- The Health tab now says when her brain itself is slow, and suggests what to do.
+
+---
+
 # Ada v1.1.0
 
 ## New: error logs and a performance report you can share

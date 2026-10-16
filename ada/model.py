@@ -145,32 +145,52 @@ class Brain(nn.Module):
     def generate(self, prompt: list[int], max_new: int, temperature: float = 0.8, top_p: float = 0.95,
                  stop: set[int] | None = None, n_real: int | None = None, stop_text=None):
         """Sample up to max_new tokens after prompt. Returns [(id, prob, entropy)].
-        Stops before any id in `stop`; `stop_text(ids)` may end generation early."""
+
+        Ends before any id in `stop`, or once `stop_text(ids)` is true. On a GPU the tokens stay on
+        the device and are only checked every few steps: waiting for the GPU after every token
+        costs far more than the occasional extra token (especially on Windows)."""
         T = self.cfg.seq_len
         prompt = prompt[-(T - max_new):] or [0]
         dev = self.embed.weight.device
+        on_gpu = dev.type != "cpu"
         caches = [{} for _ in self.blocks]
         h = self.hidden(torch.tensor([prompt], device=dev), caches)
-        out = []
-        for _ in range(max_new):
+        stop_t = torch.tensor(sorted(stop), device=dev) if stop else None
+        toks, probs, ents = [], [], []
+        temp = max(temperature, 1e-3)
+        for i in range(max_new):
             logits = self.logits(h[0, -1])
             if n_real is not None:
                 logits[n_real:] = float("-inf")
-            if not torch.isfinite(logits).any():
-                break
             full = F.softmax(logits, -1)
-            ent = float(-(full * full.clamp_min(1e-12).log()).sum())
-            p = F.softmax(logits / max(temperature, 1e-3), -1)
-            sp, si = p.sort(descending=True)
-            sp = sp * ((sp.cumsum(-1) - sp) < top_p)
-            nxt = int(si[torch.multinomial(sp / sp.sum(), 1)])
-            if stop and nxt in stop:
+            ents.append(-(full * full.clamp_min(1e-12).log()).sum())
+            top_v, top_i = F.softmax(logits / temp, -1).topk(min(64, logits.numel()))
+            top_v = top_v * ((top_v.cumsum(0) - top_v) < top_p)
+            nxt = top_i[torch.multinomial(top_v / top_v.sum(), 1)]
+            toks.append(nxt)
+            probs.append(full[nxt])
+            # Look at what was generated only now and then (every token on a CPU, where it's free).
+            if (not on_gpu or i % 8 == 7 or i == max_new - 1) and self._should_stop(toks, stop_t, stop_text):
                 break
-            out.append((nxt, float(full[nxt]), ent))
-            if stop_text and stop_text([t for t, _, _ in out]):
+            h = self.hidden(nxt.view(1, 1), caches)
+        ids = torch.cat(toks).tolist()
+        ps = torch.cat(probs).float().tolist()
+        es = torch.stack(ents).float().tolist()
+        out = []
+        for t, p, e in zip(ids, ps, es):
+            if stop and t in stop:
                 break
-            h = self.hidden(torch.tensor([[nxt]], device=dev), caches)
+            out.append((t, p, e))
+            if stop_text and stop_text([x for x, _, _ in out]):
+                break
         return out
+
+    @staticmethod
+    def _should_stop(toks, stop_t, stop_text) -> bool:
+        ids = torch.cat(toks)
+        if stop_t is not None and bool(torch.isin(ids, stop_t).any()):
+            return True
+        return bool(stop_text and stop_text(ids.tolist()))
 
     @torch.no_grad()
     def capture(self, ids: list[int]) -> dict:

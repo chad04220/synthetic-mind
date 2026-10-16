@@ -46,8 +46,8 @@ class FakeLink:
     def log(self, *a, **k):
         pass
 
-    def reply(self, *a, **k):
-        pass
+    def reply(self, rid, result=None, error=None):
+        self.sent.append(("reply", {"rid": rid, "result": result, "error": error}))
 
     def kinds(self):
         return [d.get("kind", t) for t, d in self.sent]
@@ -214,7 +214,7 @@ def test_file_tail_reads_only_whole_new_lines(tmp_path):
 def test_life_with_a_brain(mind):
     a = academy(mind)
     a.publish("test")
-    life = Life(mind, FakeLink())
+    life = Life(mind, FakeLink(), threaded=False)
     life.maybe_load_brain()
     assert life.brain_version == 1
     for _ in range(200):
@@ -405,3 +405,40 @@ def test_report_has_everything(tmp_path):
                     "Warnings and errors", "a test warning"):
         assert section in text
     assert (tmp_path / "R" / "logs" / "diagnostics-latest.txt").exists()
+
+
+def test_a_slow_brain_never_stalls_the_world(mind):
+    """Her brain works on its own thread: however long it takes, the world keeps its pace."""
+    import time as _t
+
+    a = academy(mind)
+    a.publish("test")
+    life = Life(mind, FakeLink())                 # threaded, as in the real World process
+    life.maybe_load_brain()
+    for _ in range(100):
+        life.speaker.deliver()
+        if life.brain is not None:
+            break
+        _t.sleep(0.05)
+    assert life.brain is not None
+    real = life.brain.generate
+
+    def slow(*a, **k):
+        _t.sleep(1.5)
+        return real(*a, **k)
+
+    life.brain.generate = slow
+    life.next_thought = 0
+    assert life.chat("Hello Ada", rid="r1") is None            # the reply comes later
+    worst = 0.0
+    end = _t.time() + 5
+    while _t.time() < end:
+        t = _t.perf_counter()
+        life.step()
+        life.speaker.deliver()
+        worst = max(worst, _t.perf_counter() - t)
+        _t.sleep(0.02)
+    assert worst < 0.5, f"a world step took {worst:.2f}s"
+    replies = [d for k, d in life.link.sent if k == "reply" and d["rid"] == "r1"]
+    assert replies and "text" in replies[0]["result"]
+    assert any(d.get("kind") == "intent" for k, d in life.link.sent)   # her needs decided while she searched for words

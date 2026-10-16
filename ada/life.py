@@ -7,8 +7,11 @@ brain rests, and the Academy gets the GPU to itself.
 """
 from __future__ import annotations
 
+import itertools
 import json
+import queue
 import random
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -32,8 +35,63 @@ def run(name: str, root: str, inbox, outbox):
         raise
 
 
+class Speaker:
+    """Runs Ada's brain on its own thread, so the world never waits for her words.
+
+    Requests (load a new brain, a reply to you, something to say, an intention, a thought) are
+    queued by urgency and answered one at a time; the World collects the answers each loop. With
+    threaded=False (tests) a request is answered on the spot."""
+
+    PRIORITY = {"load": 0, "chat": 1, "speech": 2, "intent": 3, "thought": 4}
+
+    def __init__(self, life: "Life", threaded: bool = True):
+        self.life, self.threaded = life, threaded
+        self.jobs: queue.PriorityQueue = queue.PriorityQueue()
+        self.done: queue.Queue = queue.Queue()
+        self.busy: dict[str, int] = {}
+        self.seq = itertools.count()
+        if threaded:
+            threading.Thread(target=self._run, name="ada-brain", daemon=True).start()
+
+    def pending(self, kind: str) -> bool:
+        return self.busy.get(kind, 0) > 0
+
+    def ask(self, kind: str, work, callback):
+        """Run work() (which uses the brain) and later call callback(result) on the World's thread."""
+        self.busy[kind] = self.busy.get(kind, 0) + 1
+        if not self.threaded:
+            self.busy[kind] -= 1
+            callback(work())
+            return
+        self.jobs.put((self.PRIORITY.get(kind, 5), next(self.seq), kind, work, callback, time.perf_counter()))
+
+    def _run(self):
+        perf = self.life.link.perf
+        while True:
+            _, _, kind, work, callback, queued = self.jobs.get()
+            perf.add("brain: waiting in line", time.perf_counter() - queued)
+            t = time.perf_counter()
+            try:
+                result = work()
+            except Exception as e:   # a failed thought must not take the World down
+                self.life.link.warn(f"Ada's brain failed while working on '{kind}': {type(e).__name__}: {e}")
+                result = None
+            perf.add(f"brain: {kind}", time.perf_counter() - t)
+            self.done.put((kind, callback, result))
+
+    def deliver(self):
+        while True:
+            try:
+                kind, callback, result = self.done.get_nowait()
+            except queue.Empty:
+                return
+            self.busy[kind] -= 1
+            if result is not None:
+                callback(result)
+
+
 class Life:
-    def __init__(self, folder: Path, link: Link, with_brain: bool = True):
+    def __init__(self, folder: Path, link: Link, with_brain: bool = True, threaded: bool = True):
         from .tokenizer import make_tokenizer
 
         self.folder, self.link = folder, link
@@ -63,6 +121,9 @@ class Life:
         self.pending: dict[str, dict] = {}            # oracle requests in flight
         self.last_intent: dict = {}
         self.bedtime = False
+        self.intent_wait: tuple | None = None          # (request number, since, perception) while she finds words
+        self.intent_seq = itertools.count()
+        self.speaker = Speaker(self, threaded and with_brain)
         self.load()
 
     # ------------------------------------------------------------------ brain
@@ -82,8 +143,12 @@ class Life:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return
-        if meta.get("version", 0) <= self.brain_version:
+        if meta.get("version", 0) <= self.brain_version or self.speaker.pending("load"):
             return
+        self.speaker.ask("load", lambda: self._load_brain(meta), self._use_brain)
+
+    def _load_brain(self, meta: dict):
+        """On the brain thread: read and prepare the published weights."""
         import torch
 
         from .config import BrainConfig
@@ -94,22 +159,34 @@ class Life:
         brain = Brain(bc)
         dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
         brain.load_state_dict({k: v.float() for k, v in blob["weights"].items()})
-        self.brain = brain.to(self.device, dtype).eval()
+        return brain.to(self.device, dtype).eval(), meta
+
+    def _use_brain(self, loaded):
+        brain, meta = loaded
+        self.brain = brain
         self.brain_version, self.brain_meta = meta["version"], meta
         self.link.send("event", kind="brain", meta=meta)
         self.link.log(f"living with brain v{meta['version']} (step {meta['step']}, {meta.get('stage_name', '')})")
 
-    def lm(self, parts, prefix: str = "", max_new: int = 24, temperature: float = 0.8, stop_text=None):
-        """Generate after a prompt of (role, text) parts. Returns (text, tokens) or ('', [])."""
-        if self.brain is None:
-            return "", []
+    def say_async(self, kind: str, parts, callback, prefix: str = "", max_new: int = 24, temperature: float = 0.8,
+                  stop_text=None, ids: list[int] | None = None):
+        """Ask her brain for words after a prompt; callback(text, tokens, raw) runs later on this thread."""
         from .tokenizer import encode_parts
 
-        ids = encode_parts(self.tok, parts) + self.tok.encode(prefix)
-        out = self.brain.generate(ids, max_new, temperature, 0.95, stop=self.stop_ids, n_real=self.tok.n_real,
+        prompt = ids if ids is not None else encode_parts(self.tok, parts) + self.tok.encode(prefix)
+
+        def work():
+            brain = self.brain
+            if brain is None:
+                return []
+            return brain.generate(prompt, max_new, temperature, 0.95, stop=self.stop_ids, n_real=self.tok.n_real,
                                   stop_text=stop_text)
-        toks = [t for t, _, _ in out]
-        return prefix + self.tok.decode(toks), [[self.tok.token_str(t), round(p, 3)] for t, p, _ in out]
+
+        def done(out):
+            toks = [t for t, _, _ in out]
+            callback(prefix + self.tok.decode(toks), [[self.tok.token_str(t), round(p, 3)] for t, p, _ in out], out)
+
+        self.speaker.ask(kind, work, done)
 
     # ------------------------------------------------------------------ journal
     def journal(self, kind: str, parts, weight: float = 1.0):
@@ -175,12 +252,31 @@ class Life:
         return True
 
     def decide(self):
+        """Ask her brain what she wants to do. While it finds words she waits; after 3 s her needs decide."""
         w = self.world
+        if self.intent_wait:
+            if time.time() - self.intent_wait[1] > 3.0:
+                perception = self.intent_wait[2]
+                self.intent_wait = None
+                self.choose(perception, "", [])
+            return
         perception = w.perceive(self.day_seconds)
-        own, toks = self.lm([("<|world|>", perception), ("<|intent|>", "")], prefix="I",
-                            max_new=16, temperature=self.cfg.world.intent_temperature,
-                            stop_text=lambda ids: "." in self.tok.decode(ids[-2:]))
-        own = own.strip()
+        req = next(self.intent_seq)
+        self.intent_wait = (req, time.time(), perception)
+        self.say_async("intent", [("<|world|>", perception), ("<|intent|>", "")],
+                       lambda text, toks, _: self.on_intent(req, perception, text, toks), prefix="I", max_new=16,
+                       temperature=self.cfg.world.intent_temperature,
+                       stop_text=lambda ids: "." in self.tok.decode(ids[-2:]))
+
+    def on_intent(self, req: int, perception: str, own: str, toks):
+        if not self.intent_wait or self.intent_wait[0] != req or self.plan or self.world.ada.sleeping:
+            return                     # too late: her needs already chose, or she fell asleep
+        self.intent_wait = None
+        self.choose(perception, own, toks)
+
+    def choose(self, perception: str, own: str, toks):
+        w = self.world
+        own = own.strip() if self.brain is not None else ""
         goal = ag.parse(own) if own else None
         if goal and goal.verb != "wait":
             goal.source, goal.text = "self", own.split(".")[0] + "."
@@ -260,15 +356,19 @@ class Life:
         w = self.world
         if "talk" in info:
             who = info["talk"]
-            line, _ = self.lm([("<|world|>", perception), ("<|mind|>", "")], max_new=20,
-                              temperature=self.cfg.world.reply_temperature)
-            if line.strip():
-                w.ada.say(line.strip())
-            if who == "friend":
-                self.link.send("event", kind="ada_says", text=line.strip(), to="friend")
-            else:
-                self.oracle("npc", npc=who, role=NPCS[who]["role"], ada_said=line.strip(),
-                            season=w.season, weather=w.weather, place=w.place_of(w.ada.x, w.ada.y))
+
+            def spoken(line, toks, _):
+                line = line.strip()
+                if line:
+                    w.ada.say(line)
+                if who == "friend":
+                    self.link.send("event", kind="ada_says", text=line, to="friend")
+                else:
+                    self.oracle("npc", npc=who, role=NPCS[who]["role"], ada_said=line,
+                                season=w.season, weather=w.weather, place=w.place_of(w.ada.x, w.ada.y))
+
+            self.say_async("speech", [("<|world|>", perception), ("<|mind|>", "")], spoken, max_new=20,
+                           temperature=self.cfg.world.reply_temperature)
         if "ask" in info:
             self.asked_at = time.time()
             self.oracle("answer", question=info["ask"])
@@ -296,17 +396,21 @@ class Life:
             parts.append(("<|world|>", self.world.perceive(self.day_seconds)))
         from .tokenizer import encode_parts
 
+        if self.speaker.pending("thought"):
+            return
         ids = self.memory[-192:] + encode_parts(self.tok, parts) + [self.tok["<|thought|>"]]
-        out = self.brain.generate(ids, cfg.thought_tokens, cfg.thought_temperature, 0.95, stop=self.stop_ids,
-                                  n_real=self.tok.n_real)
-        gen = [t for t, _, _ in out]
-        self.memory = (self.memory + [self.tok["<|thought|>"]] + gen)[-800:]
-        th = {"text": self.tok.decode(gen), "tokens": [[self.tok.token_str(t), round(p, 3)] for t, p, _ in out],
-              "brain": self.brain_version, "t": time.time()}
-        self.thoughts.append(th)
-        self.link.send("event", kind="thought", **th)
 
-    def chat(self, text: str) -> dict:
+        def thought(text, toks, out):
+            gen = [t for t, _, _ in out]
+            self.memory = (self.memory + [self.tok["<|thought|>"]] + gen)[-800:]
+            th = {"text": text, "tokens": toks, "brain": self.brain_version, "t": time.time()}
+            self.thoughts.append(th)
+            self.link.send("event", kind="thought", **th)
+
+        self.say_async("thought", None, thought, max_new=cfg.thought_tokens, temperature=cfg.thought_temperature, ids=ids)
+
+    def chat(self, text: str, rid=None):
+        """Ada answers you. Returns the reply when it's ready at once; otherwise replies to `rid` later."""
         w = self.world
         if w.ada.sleeping:
             return {"asleep": True, "text": ""}
@@ -316,18 +420,25 @@ class Life:
         hist = []
         for m in self.chat_log[-6:]:
             hist.append(("<|user|>" if m["role"] == "user" else "<|mind|>", m["text"]))
-        reply, toks = self.lm([("<|world|>", w.perceive(self.day_seconds))] + hist + [("<|user|>", text), ("<|mind|>", "")],
-                              max_new=self.cfg.world.reply_tokens, temperature=self.cfg.world.reply_temperature)
-        reply = reply.strip()
-        w.ada.say(reply or "…")
-        self.chat_log += [{"role": "user", "text": text, "t": time.time()},
-                          {"role": "mind", "text": reply, "tokens": toks, "t": time.time(), "brain": self.brain_version}]
-        self.chat_log = self.chat_log[-200:]
-        self.journal("heard", [("<|user|>", text)], 1.5)
-        w.needs["company"] = min(100, w.needs["company"] + 8)
-        if self.cfg.oracle.tutor_replies:
-            self.oracle("tutor", history=[[m["role"], m["text"]] for m in self.chat_log[-8:-2]], user=text, mind=reply)
-        return {"text": reply, "tokens": toks, "brain": self.brain_version}
+        answer: dict = {}
+
+        def replied(reply, toks, _):
+            reply = reply.strip()
+            w.ada.say(reply or "…")
+            self.chat_log += [{"role": "user", "text": text, "t": time.time()},
+                              {"role": "mind", "text": reply, "tokens": toks, "t": time.time(), "brain": self.brain_version}]
+            self.chat_log = self.chat_log[-200:]
+            self.journal("heard", [("<|user|>", text)], 1.5)
+            w.needs["company"] = min(100, w.needs["company"] + 8)
+            if self.cfg.oracle.tutor_replies:
+                self.oracle("tutor", history=[[m["role"], m["text"]] for m in self.chat_log[-8:-2]], user=text, mind=reply)
+            answer.update(text=reply, tokens=toks, brain=self.brain_version)
+            if rid is not None:
+                self.link.reply(rid, dict(answer))
+
+        self.say_async("chat", [("<|world|>", w.perceive(self.day_seconds))] + hist + [("<|user|>", text), ("<|mind|>", "")],
+                       replied, max_new=self.cfg.world.reply_tokens, temperature=self.cfg.world.reply_temperature)
+        return dict(answer) if answer else None
 
     def oracle_reply(self, rid: str, text: str, extra: dict | None = None):
         req = self.pending.pop(rid, None)
@@ -472,7 +583,9 @@ class Life:
         cmd, rid = msg.get("cmd"), msg.get("rid")
         try:
             if cmd == "chat":
-                result = self.chat(msg["text"])
+                result = self.chat(msg["text"], rid)
+                if result is None:
+                    return              # the reply follows when her brain has found the words
             elif cmd == "oracle_reply":
                 self.oracle_reply(msg["req"], msg.get("text", ""))
                 result = True
@@ -494,7 +607,18 @@ class Life:
                 self.next_thought = 0
                 result = True
             elif cmd == "config":
+                old = self.cfg.world.device
                 self.cfg = AdaConfig.from_dict(msg["config"])
+                if self.cfg.world.device != old and self.with_brain:
+                    self.device = pick_device(self.cfg.world.device)   # move her brain: reload it there
+                    if self.device.type == "cpu":
+                        import os
+
+                        import torch
+
+                        torch.set_num_threads(min(2, os.cpu_count() or 2))
+                    self.brain_version = 0
+                    self.maybe_load_brain()
                 result = True
             elif cmd == "full":
                 self.broadcast(full=True)
@@ -568,6 +692,9 @@ class Life:
 
     def loop(self):
         self.maybe_load_brain()
+        while self.brain is None and self.speaker.pending("load"):   # her first brain, before she wakes
+            time.sleep(0.05)
+            self.speaker.deliver()
         self.broadcast(full=True)
         self.link.send("history", thoughts=list(self.thoughts), chat=self.chat_log)
         next_tick = next_cast = next_save = next_brain = time.time()
@@ -579,6 +706,8 @@ class Life:
             for msg in self.link.commands():
                 with perf.time(f"request: {msg.get('cmd')}"):
                     self.handle(msg)
+            with perf.time("taking her brain's answers"):
+                self.speaker.deliver()
             now = time.time()
             if now >= next_tick:
                 late = now - next_tick
