@@ -343,7 +343,8 @@ class LocalLLM:
             raise RuntimeError(self.detail or self.error or f"{self.who} isn't running yet")
         # Some small models' chat templates (Gemma's) have no system role: put it in the message.
         body = {"messages": [{"role": "user", "content": f"{system}\n\n{prompt}"}],
-                "temperature": temperature, "max_tokens": max_tokens, "stream": False}
+                "temperature": temperature, "max_tokens": max_tokens, "stream": False,
+                "cache_prompt": True}       # Wren's long fixed instructions come first: reuse them between requests
         if as_json:
             body["response_format"] = {"type": "json_object"}
         req = urllib.request.Request(self.url + "/v1/chat/completions", data=json.dumps(body).encode(),

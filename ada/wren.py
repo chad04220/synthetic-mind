@@ -79,7 +79,7 @@ class WrenVoice:
                        f"{self.synth} often: that is how {self.synth} learns. Don't do the same thing again and again. "
                        f"Reply with JSON: "
                        f'{{"choice": the number, {say}, "thought": "one short private thought"}}',
-                       temperature=0.75, max_tokens=160)
+                       temperature=0.75, max_tokens=110)
         try:
             choice = int(d.get("choice", 0)) - 1
         except (TypeError, ValueError):

@@ -403,6 +403,20 @@ def test_hub_schedule_and_world_deltas(tmp_path):
     assert hub.world_full()["full"] and len(hub.world_full()["ents"]) == len(w.entities)
 
 
+def test_world_happenings_reach_the_page(tmp_path):
+    from ada.hub import Hub
+
+    cfg = AdaConfig(name="H2", tokenizer="bytes")
+    cfg.oracle.enabled = False
+    hub = Hub(cfg, tmp_path)
+    w = World(seed=1)
+    snap = w.snapshot(full=True)
+    snap["happenings"] = [{"kind": "fire_out", "text": "The fire burns out.", "what": "stove", "t": 1.0}]
+    hub.on_message({"type": "world", "snap": snap})          # a key named like ours must not break the merge
+    ev = hub.feeds["happening"][-1]
+    assert ev["what"] == "fire_out" and ev["text"] == "The fire burns out." and hub.world_state
+
+
 def test_oracle_lesson_pack_against_a_fake_ollama(tmp_path):
     from ada.hub import Hub
 

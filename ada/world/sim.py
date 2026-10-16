@@ -787,7 +787,7 @@ class World:
                 if e["fuel"] <= 0:
                     e["lit"] = False
                     e["ash"] = min(5, e.get("ash", 0) + 1)
-                    self.event("fire_out", f"The fire in {kind_of(e)['noun']} burns out.", what=e["kind"])
+                    self.event("fire_out", f"The fire in {kind_of(e)['noun']} burns out.", thing=e["kind"])
                 self.touch(e)
         stove_lit = bool(fires.get("stove", {}).get("lit"))
         # ---- lamps and candles burn down

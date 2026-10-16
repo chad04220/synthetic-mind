@@ -187,7 +187,7 @@ def findings(perf: dict, gpu: list, client: dict | None, restarts: dict) -> list
             f"(clock now {gpu[0].get('sm_clock_mhz') or '?'} MHz). That is safe, but training gets slower. On a laptop: "
             "plug it in, raise the back for airflow or use a cooling pad, and pick the high-performance power mode; "
             "or set GPU intensity to Balanced, which lets the GPU cool between steps.")
-    if gpu and studying and (gpu[0].get("util_percent") or 0) > 95 and client and client.get("fps", 60) < 20:
+    if gpu and studying and (gpu[0].get("util_percent") or 0) > 95 and client and client.get("visible") and client.get("view") == "world" and client.get("fps", 60) < 20:
         add("warn", "browser", "The GPU is fully busy training and the page is drawing slowly: the browser shares that GPU. "
             "Set GPU intensity to Balanced or Gentle, or watch while Ada is awake.")
     late = wt.get("tick", {})

@@ -246,11 +246,11 @@ def physical_cores() -> int:
 
 
 def cpu_threads(cfg: AdaConfig) -> dict:
-    """How the CPU's physical cores are shared: Ada's brain gets half (it thinks in short bursts,
-    and one-token-at-a-time generation gains little beyond that), Wren's model gets the rest, so the
-    two never fight over the same cores. The Academy, on the GPU, needs almost no CPU."""
+    """How the CPU's physical cores are shared. The synth's brain is small and thinks in short bursts:
+    a third of the cores (at most 2) is plenty. Wren's model, a 2B language model, gets the rest, so
+    the two never fight over the same cores. The Academy, on the GPU, needs almost no CPU."""
     cores = physical_cores()
-    world = cfg.world.cpu_threads or max(1, cores // 2)
+    world = cfg.world.cpu_threads or max(1, min(2, cores // 3))
     oracle = cfg.oracle.cpu_threads or max(1, cores - world)
     return {"cores": cores, "world": world, "oracle": oracle}
 

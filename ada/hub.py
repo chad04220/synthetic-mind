@@ -276,7 +276,7 @@ class Hub:
     def _merge_world(self, snap: dict):
         works = snap.pop("creations", None)
         for h in snap.pop("happenings", None) or []:
-            self.event("happening", **{k: v for k, v in h.items() if k not in ("t", "kind")}, what=h.get("kind"))
+            self.event("happening", **({k: v for k, v in h.items() if k not in ("t", "kind")} | {"what": h.get("kind")}))
         for st in snap.pop("stories", None) or []:
             self.stories[st["t"]] = st
         with self.lock:

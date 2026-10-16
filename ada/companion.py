@@ -213,8 +213,8 @@ class Companion:
         top = opts[:7]
         self.rng.shuffle(top)                          # no favourite positions: the model reads the labels
         w = self.w
-        rid = self.life.oracle("wren_decide", situation=w.perceive(me=self.b), synth=self.synth_state(),
-                               memory=[f"{x['time']}: {x['text']}" for x in list(self.diary)[-6:]],
+        rid = self.life.oracle("wren_decide", situation=w.perceive(me=self.b)[:600], synth=self.synth_state(),
+                               memory=[f"{x['time']}: {x['text']}" for x in list(self.diary)[-4:]],
                                options=[o.label + (" (needed now)" if o.score >= 6 else "") for o in top],
                                near=self.near_zen(6))
         self.waiting = (rid, self.now(), top)
