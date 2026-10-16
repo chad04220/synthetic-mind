@@ -212,9 +212,9 @@ const MapView = (() => {
   }
 
   function frame(t) {
-    requestAnimationFrame(frame);
-    const pf = st.perf;           // how often the browser gives us a frame: the page's real smoothness
-    if (pf.prev && !document.hidden) { pf.frames++; pf.gapMax = Math.max(pf.gapMax, t - pf.prev); }
+    setTimeout(() => requestAnimationFrame(frame), 30);   // the minimap needs ~25 frames a second at most
+    const pf = st.perf;           // how often the browser gives us a frame: gaps show a page that stalls
+    if (pf.prev && !document.hidden) { pf.frames++; pf.gapMax = Math.max(pf.gapMax, t - pf.prev - 30); }
     pf.prev = document.hidden ? 0 : t;
     if (!st.world || document.hidden) return;
     const weather = st.world.weather === "rain" || st.world.weather === "snow";

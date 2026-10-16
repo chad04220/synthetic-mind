@@ -87,8 +87,11 @@
     </div>
     <div class="card">
       <div class="subtabs" id="adaTabs">
-        <button data-pane="talk" class="on">💬 Talk</button><button data-pane="thoughts">💭 Thoughts</button>
-        <button data-pane="diary">📔 Deeds</button><button data-pane="village">🪶 <span class="wrenname">Wren</span></button>
+        <button data-pane="talk" class="on" title="Your conversation with Zen">💬 You &amp; <span class="synthname">Zen</span></button>
+        <button data-pane="dialogue" title="Everything Zen and Wren say to each other, and nothing else">🗣️ <span class="synthname">Zen</span> &amp; <span class="wrenname">Wren</span></button>
+        <button data-pane="thoughts" title="Zen's inner monologue, written freely by its own brain">💭 <span class="synthname">Zen</span>'s thoughts</button>
+        <button data-pane="wthoughts" title="What Wren thinks and why it does what it does">🪶 <span class="wrenname">Wren</span>'s thoughts</button>
+        <button data-pane="diary" title="What each of them did">📔 Deeds</button>
       </div>
       <div class="pane on" id="pane-talk">
         <div class="chat" id="chat"></div>
@@ -96,8 +99,9 @@
         <form class="inline" id="suggestForm" title="If it understands, it does it, and learns from it"><input id="suggestText" placeholder="Suggest what it does, e.g. feed the cat" autocomplete="off"><button>Suggest</button></form>
       </div>
       <div class="pane" id="pane-thoughts"><div class="muted" style="margin-bottom:6px">The synth's inner monologue, written freely by its own brain. Brighter words were more certain.</div><div class="feed" id="thoughts"></div></div>
-      <div class="pane" id="pane-diary"><div class="feed" id="diary"></div></div>
-      <div class="pane" id="pane-village"><div class="feed" id="village"></div></div>
+      <div class="pane" id="pane-dialogue"><div class="muted" style="margin-bottom:6px">Only what <span class="synthname">Zen</span> and <span class="wrenname">Wren</span> say to each other: their conversations, <span class="wrenname">Wren</span>'s words to <span class="synthname">Zen</span>, and <span class="synthname">Zen</span>'s questions.</div><div class="dialogue" id="dialogue"></div></div>
+      <div class="pane" id="pane-wthoughts"><div class="muted" style="margin-bottom:6px">What <span class="wrenname">Wren</span> thinks to itself, and what it decides to do next and why. <span class="synthname">Zen</span> never hears these.</div><div class="feed" id="wthoughts"></div></div>
+      <div class="pane" id="pane-diary"><div class="row" style="margin-bottom:6px"><label class="switch"><input type="checkbox" id="deedsZen" checked><span></span>✨ <span class="synthname">Zen</span></label><label class="switch"><input type="checkbox" id="deedsWren" checked><span></span>🪶 <span class="wrenname">Wren</span></label></div><div class="feed" id="diary"></div></div>
     </div>
   </div>
 </section>

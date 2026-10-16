@@ -45,7 +45,9 @@ setInterval(() => {
   const now = performance.now(), secs = (now - P.t0) / 1000, mp = MapView.st.perf;
   const body = {
     window_s: Math.round(secs), visible: !document.hidden, view: S.view,
-    fps: Math.round(mp.frames / secs), worst_frame_gap_ms: Math.round(mp.gapMax),
+    // frames the 3D view really drew (capped at 60), else the minimap's pace
+    fps: W3.api && S.view === "world" ? (W3.api.stats().fps || 0) : Math.round(mp.frames / secs), fps_cap: 60,
+    worst_frame_gap_ms: Math.round(mp.gapMax),
     draws_per_s: +(mp.draws / secs).toFixed(1), draw_avg_ms: +(mp.drawMs / Math.max(1, mp.draws)).toFixed(1), draw_max_ms: Math.round(mp.drawMax),
     msgs_per_s: +(P.msgs / secs).toFixed(1), kb_per_s: +(P.bytes / 1024 / secs).toFixed(1),
     msg_avg_ms: +(P.msgMs / Math.max(1, P.msgs)).toFixed(1), msg_max_ms: Math.round(P.msgMax),
@@ -90,7 +92,7 @@ function init(m) {
     for (const e of S.feeds[k] || []) Community.st.feed.push(e);
   Community.st.feed.sort((a, b) => a.t - b.t);
   Community.addStories(m.stories || []);
-  $("#chat").innerHTML = ""; $("#thoughts").innerHTML = ""; $("#diary").innerHTML = ""; $("#village").innerHTML = "";
+  $("#chat").innerHTML = ""; $("#thoughts").innerHTML = ""; $("#diary").innerHTML = ""; $("#dialogue").innerHTML = ""; $("#wthoughts").innerHTML = "";
   $("#lessons").innerHTML = ""; $("#qa").innerHTML = "";
   for (const c of S.feeds.chat || []) {
     if (c.kind === "chatline") chatLine(c);
@@ -98,8 +100,10 @@ function init(m) {
     else if (c.kind === "tutor") tutorLine(c);
   }
   for (const e of S.feeds.thought || []) addThought(e);
-  for (const e of S.feeds.deed || []) addDeed(e);
-  for (const e of [...(S.feeds.wren_says || []), ...(S.feeds.wren_did || []), ...(S.feeds.answer || [])].sort((a, b) => a.t - b.t)) addVillage(e);
+  const byTime = (...ks) => ks.flatMap((k) => S.feeds[k] || []).sort((a, b) => a.t - b.t);
+  for (const e of byTime("deed", "wren_did")) addDeed(e);
+  for (const e of byTime("talk_start", "talk", "wren_says", "ada_says", "answer")) addDialogue(e);
+  for (const e of byTime("wren_thought", "wren_intent")) addWrenMind(e);
   for (const e of S.feeds.lesson || []) addLesson(e);
   for (const e of S.feeds.answer || []) addQA(e);
   for (const e of S.feeds.wren_thought || []) addWrenThought(e);
@@ -148,21 +152,24 @@ function onEvent(e) {
   switch (e.kind) {
     case "thought": addThought(e); S.lastThought = e; break;
     case "intent": case "did": addDeed(e); break;
+    case "wren_intent": addWrenMind(e); break;
+    case "talk_start": addDialogue(e); break;
     case "tried": S.tried = e; break;
     case "chat": if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; }
       chatLine({ role: "user", text: e.user }); chatLine({ role: "mind", text: e.text, tokens: e.tokens, asleep: e.asleep }); break;
     case "tutor": tutorLine(e); break;
     case "npc": if (e.to === "you") chatLine({ role: "mind", who: e.name, text: e.text }); break;
-    case "wren_says": addVillage(e); Community.addFeed(e); break;
-    case "wren_did": addVillage(e); Community.addFeed(e); break;
-    case "wren_thought": addWrenThought(e); Community.addFeed(e); break;
-    case "ada_says": case "talk": case "happening": Community.addFeed(e);
+    case "wren_says": addDialogue(e); Community.addFeed(e); break;
+    case "wren_did": addDeed(e); Community.addFeed(e); break;
+    case "wren_thought": addWrenThought(e); addWrenMind(e); Community.addFeed(e); break;
+    case "ada_says": case "talk": addDialogue(e); Community.addFeed(e); break;
+    case "happening": Community.addFeed(e);
       if (e.kind === "happening" && e.what === "rainbow") toast("🌈 A rainbow!"); break;
     case "story": Community.addStories([e]); Community.addFeed(e); toast(`📖 ${S.companion} tells ${SYNTH()} a bedtime story: “${e.title}”`, 6000); break;
-    case "answer": addQA(e); Community.addFeed(e); break;
+    case "answer": addQA(e); addDialogue(e); Community.addFeed(e); break;
     case "created": Community.addFeed(e); if (e.creation) Community.addWorks([e.creation]); break;
     case "milestone": S.journey = [...(S.journey || []), e]; Community.addFeed(e); toast(`🌱 ${e.title}`, 6000); break;
-    case "read": addVillage(e); break;
+    case "read": break;
     case "lesson": addLesson(e); break;
     case "metric": S.metrics.push(e.point); if (S.metrics.length > 20000) S.metrics.shift(); chartsDue(); break;
     case "assessment": S.assessments.push(e); chartsDue(); break;
@@ -341,18 +348,49 @@ function prepend(box, html, max = 120) {
 }
 function addThought(e) { prepend($("#thoughts"), `${tokHTML(e.tokens)}<div class="meta">brain v${e.brain ?? "?"} · ${new Date(e.t * 1000).toLocaleTimeString()}</div>`); }
 function addDeed(e) {
+  const when = `<span class="when">${new Date(e.t * 1000).toLocaleTimeString()}</span>`;
+  if (e.kind === "wren_did") {
+    prepend($("#diary"), `<span class="who wren">🪶 ${esc(S.companion)}</span>${e.ok === false ? "⚠️ " : ""}${esc(e.text)}${when}`, 200);
+    $("#diary").firstChild.classList.add("wren");
+    return;
+  }
   if (e.kind === "intent") {
-    const who = { self: "🗣️ its own words", needs: "🧭 its needs", you: "🙋 your idea" }[e.source] || "";
-    prepend($("#diary"), `<b class="t">${who}</b>${esc(e.text)}${e.reason ? `<div class="meta">${esc(e.reason)}</div>` : ""}`);
-  } else prepend($("#diary"), `${e.ok ? "✅" : "⚠️"} ${esc(e.text)}<div class="meta">${e.reward != null ? "reward " + e.reward : ""}</div>`);
+    const who = { self: "🗣️ its own words", needs: "🧭 its needs", you: "🙋 your idea", companion: `🪶 ${esc(S.companion)}'s words` }[e.source] || "";
+    prepend($("#diary"), `<span class="who zen">✨ ${esc(SYNTH())}</span><b class="t">${who}</b>${esc(e.text)}${e.reason ? `<div class="meta">${esc(e.reason)}</div>` : ""}`, 200);
+  } else prepend($("#diary"), `<span class="who zen">✨ ${esc(SYNTH())}</span>${e.ok ? "✅" : "⚠️"} ${esc(e.text)}${when}`, 200);
+  $("#diary").firstChild.classList.add("zen");
 }
-function addVillage(e) {
-  if (!e.text || e.text === "…") return;
-  const html = e.kind === "wren_says" ? `<b class="t">🗨️ ${esc(S.companion || "Wren")}${e.heard ? ` <span class="muted">(${esc(SYNTH())} heard)</span>` : ""}</b>${esc(e.text)}`
-    : e.kind === "wren_did" ? `<span class="muted">${e.ok === false ? "⚠️ " : ""}${esc(e.text)}</span>`
-    : e.kind === "answer" ? `<b class="t">❓ ${e.by === "you" ? "You asked" : esc(SYNTH()) + " asked"}</b><i>${esc(e.question)}</i>\n${esc(e.text)}`
-    : e.kind === "read" ? `<b class="t">📘 ${esc(SYNTH())} read</b>${esc(e.text)}` : esc(e.text);
-  prepend($("#village"), html, 120);
+
+// ------------------------------------------------------------------ Zen & Wren: only what they say to each other
+function bubble(who, text, note = "") {
+  const zen = who === SYNTH(), d = document.createElement("div");
+  d.className = `bub ${zen ? "zen" : "wren"}${!text || text === "…" ? " quiet" : ""}`;
+  d.innerHTML = `<b>${esc(who)}</b>${note ? `<span class="note">${esc(note)}</span>` : ""}<div>${!text || text === "…" ? "…" : esc(text)}</div>`;
+  return d;
+}
+function addDialogue(e) {
+  const box = $("#dialogue"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30, add = [];
+  if (e.kind === "talk_start") {
+    const d = document.createElement("div"); d.className = "sep";
+    d.textContent = `💬 ${e.members?.[0] || ""} starts a conversation${e.topic ? ` · ${e.topic}` : ""} · ${new Date((e.t || Date.now() / 1000) * 1000).toLocaleTimeString()}`;
+    add.push(d);
+  } else if (e.kind === "talk") add.push(bubble(e.name, e.text));
+  else if (e.kind === "ada_says") { if (e.text) add.push(bubble(SYNTH(), e.text, e.to && e.to !== S.companion ? `to ${e.to}` : "")); }
+  else if (e.kind === "answer") { if (e.by === "you") return; add.push(bubble(SYNTH(), e.question, "asks"), bubble(S.companion, e.text, "answers")); }
+  else if (e.kind === "wren_says") {
+    if (!e.heard || ["talk", "answer", "visitor"].includes(e.why) || !e.text) return;   // talk lines arrive as "talk"
+    add.push(bubble(S.companion, e.text, { name: "names something", narrate: "talks it through", care: "looks after Zen".replace("Zen", SYNTH()),
+      fact: "tells", say: "" }[e.why] ?? ""));
+  }
+  for (const d of add) box.append(d);
+  while (box.children.length > 300) box.firstChild.remove();
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+// ------------------------------------------------------------------ Wren's own mind: thoughts and decisions
+function addWrenMind(e) {
+  const when = `<div class="meta">${new Date(e.t * 1000).toLocaleTimeString()}</div>`;
+  if (e.kind === "wren_thought") prepend($("#wthoughts"), `💭 <i>${esc(e.text)}</i>${when}`, 150);
+  else if (e.kind === "wren_intent") prepend($("#wthoughts"), `<b class="t">➡️ decides: ${esc(e.text)}</b>${e.reason ? esc(e.reason) : ""}${when}`, 150);
 }
 function addWrenThought(e) { prepend($("#wrenThoughts"), `💭 ${esc(e.text)}<div class="meta">${new Date(e.t * 1000).toLocaleTimeString()}</div>`, 60); }
 function chatLine(c) {
@@ -369,6 +407,8 @@ function tutorLine(e) {
   const t = document.createElement("div"); t.className = "tutor"; t.innerHTML = `<b>${esc(S.companion)} suggests:</b> ${esc(e.text)}`;
   last.append(t); $("#chat").scrollTop = $("#chat").scrollHeight;
 }
+$("#deedsZen").onchange = (e) => $("#diary").classList.toggle("hide-zen", !e.target.checked);
+$("#deedsWren").onchange = (e) => $("#diary").classList.toggle("hide-wren", !e.target.checked);
 $$("#adaTabs button").forEach((b) => b.onclick = () => {
   $$("#adaTabs button").forEach((x) => x.classList.toggle("on", x === b));
   $$(".below .pane").forEach((p) => p.classList.toggle("on", p.id === `pane-${b.dataset.pane}`));

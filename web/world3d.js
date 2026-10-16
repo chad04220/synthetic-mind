@@ -2675,11 +2675,17 @@ function hover(e) {
 }
 
 // ───────────────────────────────────────────────────────────── main loop
+// A frame cap: 60 fps (30 on Low), whatever the screen's refresh rate. The browser isn't even asked
+// for a frame until the next one is due, so on a 240 Hz laptop the page wakes 60 times a second, not
+// 240; the GPU (and its heat) stays with the Academy's training.
+function nextFrame() {
+  const gap = S.quality === "low" ? 1000 / 30 : 1000 / 60;
+  const wait = Math.max(0, gap - (performance.now() - S.lastFrame) - 3);
+  S.raf = setTimeout(() => requestAnimationFrame(frame), wait);
+}
 function frame(now) {
-  S.raf = requestAnimationFrame(frame);
+  nextFrame();
   if (S.paused) return;
-  // A frame cap: the valley looks the same at 60 fps as at 240, and on a laptop the browser
-  // shares the GPU (and its heat) with the Academy's training.
   const minGap = S.quality === "low" ? 1000 / 31 : 1000 / 61;
   if (now - S.lastFrame < minGap) return;
   const dt = Math.min(0.1, (now - S.lastFrame) / 1000); S.lastFrame = now;

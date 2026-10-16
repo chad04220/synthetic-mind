@@ -72,7 +72,8 @@ class Hub:
         self.assessments: deque = deque(maxlen=500)
         self.feeds = {k: deque(maxlen=n) for k, n in
                       (("thought", 80), ("chat", 200), ("answer", 60), ("lesson", 60), ("npc", 60), ("deed", 80),
-                       ("talk", 120), ("wren_says", 160), ("wren_did", 160), ("wren_thought", 80), ("ada_says", 60),
+                       ("talk", 160), ("talk_start", 40), ("wren_says", 160), ("wren_did", 160), ("wren_thought", 80),
+                       ("wren_intent", 80), ("ada_says", 60),
                        ("happening", 120), ("story", 60))}
         self.gallery: dict[int, dict] = {}            # every work made at the homestead, by id
         self.stories: dict[float, dict] = {}          # Wren's bedtime stories, by time
