@@ -1,30 +1,21 @@
-"use strict";
-// The dashboard. One WebSocket brings an initial picture and then small updates 4 times a second;
-// only the visible view is redrawn, and only the parts that changed.
+// app.js — the page: one WebSocket brings an init snapshot and then small ticks (~10 a second, only when
+// something changed); the 3D world (vox.js) draws the land, the panels draw the mind. Only the visible tab
+// is redrawn, and only the parts that changed.
+import { Reg, loadRegistry, buildTextures, iconURL, itemName, findBlock, normName, label, K, clearIcons } from "./blocks.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const big = (n) => n == null ? "–" : n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
+const big = (n) => n == null ? "–" : n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
 const pct = (v) => v == null ? "–" : `${Math.round(v * 100)}%`;
-const dur = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m` : `${s}s`; };
-const ago = (t) => dur(Date.now() / 1000 - t) + " ago";
-const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const dur = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; };
 const clock = (t) => new Date((t || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const ago = (t) => { const s = Date.now() / 1000 - t; return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 function setHTML(el, html) { if (el && el._h !== html) { el._h = html; el.innerHTML = html; } }
 function setText(el, t) { if (el && el.textContent !== t) el.textContent = t; }
-
-const MOTOR = ["forward", "back", "left", "right", "wait", "take", "drop", "eat", "drink", "use", "sleep", "look", "speak", "ask"];
-const MOTOR_ICON = { forward: "⬆️", back: "⬇️", left: "↶", right: "↷", wait: "⏸", take: "✋", drop: "🫳", eat: "🍽️", drink: "💧", use: "🛠️", sleep: "😴", look: "👀", speak: "🗣️", ask: "❓" };
-const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", health: "Health", boredom: "Boredom" };
-// every need is "higher is better" except boredom, which fills up as it gets worse
-const needColor = (k, v) => k === "boredom" ? (v > 60 ? "var(--bad)" : v > 35 ? "var(--warn)" : "color-mix(in srgb, var(--warn) 55%, var(--muted))")
-  : v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
-
-const S = { view: "world", settings: {}, academy: {}, metrics: [], concepts: {}, oracle: {}, feeds: {}, mode: "watch",
-            pendingChat: null, dids: [], rewards: [], lastDid: null, lastThought: null, studioKey: "" };
-const SYNTH = () => S.name || "Zen";
-const W3 = { api: null, ready: false };          // the 3D world (world3d.js), when WebGL is available
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window */ } } };
 
 async function api(name, body = {}) {
   const r = await fetch(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -38,735 +29,849 @@ function toast(text, ms = 2800) {
   let t = $(".toast"); if (!t) { t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); document.body.append(t); }
   t.textContent = text; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), ms);
 }
-window.toast = toast;
+let stageTimer;
+function stageToast(text, ms = 2600) {   // a short note over the 3D view (visible while the pointer is locked)
+  const el = $("#stageToast"); if (!text) return; el.textContent = text; el.hidden = false;
+  clearTimeout(stageTimer); stageTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
 function banner(text) { const b = $("#banner"); b.hidden = !text; if (text) b.textContent = text; }
-try { const th = localStorage.getItem("theme"); if (th) document.documentElement.dataset.theme = th; } catch { /* private window */ }
+{ const th = store.get("theme", ""); if (th) document.documentElement.dataset.theme = th; }
+
+// ================================================================== state
+const S = {
+  view: "home", name: "", settings: {}, model: {}, world: {}, agent: {}, mind: {}, visitor: null,
+  decisions: new Map(), events: [], blocksChanged: 0, goals: [], pendingChat: [], thinkingSince: 0,
+  creative: store.get("creative", false), creativeBar: store.get("creativeBar", null), sel: 0, mode: "watch",
+  mapView: { x: 0, z: 0, s: 3, init: false }, mini: { s: 2 },
+};
+const NAME = () => S.name || S.agent?.name || "it";
+let vox = null;
 
 // ================================================================== the page's own health
 const P = { t0: performance.now(), msgs: 0, bytes: 0, msgMs: 0, msgMax: 0, long: 0, longMs: 0, longMax: 0, errors: 0 };
-try {
-  new PerformanceObserver((list) => { for (const e of list.getEntries()) { P.long++; P.longMs += e.duration; P.longMax = Math.max(P.longMax, e.duration); } })
-    .observe({ type: "longtask", buffered: false });
-} catch { /* not every browser reports long tasks */ }
-addEventListener("error", (e) => { P.errors++; report("error", `${e.message} (${e.filename}:${e.lineno})`); });
-addEventListener("unhandledrejection", (e) => { P.errors++; report("error", String(e.reason)); });
-function report(level, text) { P.lastError = `${level}: ${text}`.slice(0, 300); }
+try { new PerformanceObserver((l) => { for (const e of l.getEntries()) { P.long++; P.longMs += e.duration; P.longMax = Math.max(P.longMax, e.duration); } }).observe({ type: "longtask", buffered: false }); } catch { /* not everywhere */ }
+addEventListener("error", (e) => { P.errors++; P.lastError = `${e.message} (${e.filename}:${e.lineno})`.slice(0, 300); });
+addEventListener("unhandledrejection", (e) => { P.errors++; P.lastError = String(e.reason).slice(0, 300); });
 setInterval(() => {
-  const now = performance.now(), secs = (now - P.t0) / 1000, mp = MapView.st.perf, w3 = W3.api && S.view === "world" ? W3.api.stats() : null;
+  const now = performance.now(), secs = (now - P.t0) / 1000, v = vox && S.view === "home" ? vox.stats() : null;
   const body = {
-    window_s: Math.round(secs), visible: !document.hidden, view: S.view,
-    fps: w3 ? w3.fps || 0 : Math.round(mp.frames / secs), fps_cap: 60, worst_frame_gap_ms: Math.round(mp.gapMax),
-    draw_ms_3d: w3 ? w3.ms : -1, draw_max_ms_3d: w3 ? w3.frameMax : -1, chunks_3d: w3 ? w3.chunks : -1, chunk_build_max_ms: w3 ? w3.jobMax : -1,
-    draws_per_s: +(mp.draws / secs).toFixed(1), draw_avg_ms: +(mp.drawMs / Math.max(1, mp.draws)).toFixed(1), draw_max_ms: Math.round(mp.drawMax),
-    msgs_per_s: +(P.msgs / secs).toFixed(1), kb_per_s: +(P.bytes / 1024 / secs).toFixed(1),
-    msg_avg_ms: +(P.msgMs / Math.max(1, P.msgs)).toFixed(1), msg_max_ms: Math.round(P.msgMax),
-    longtasks: P.long, longtask_ms: Math.round(P.longMs), longtask_max_ms: Math.round(P.longMax), js_errors: P.errors,
-    last_error: P.lastError || "", dpr: devicePixelRatio, window: `${innerWidth}x${innerHeight}`, browser: navigator.userAgent.slice(0, 160),
+    window_s: Math.round(secs), visible: !document.hidden, view: S.view, fps: v ? v.fps : 0, fps_cap: 60,
+    draw_ms_3d: v ? v.ms : -1, draw_max_ms_3d: v ? v.frameMax : -1, chunks_3d: v ? v.chunks : -1, draw_calls: v ? v.calls : -1, triangles: v ? v.triangles : -1,
+    mesh_avg_ms: v ? v.meshAvg : -1, mesh_max_ms: v ? v.meshMax : -1, edit_visible_ms: v?.editLatLast ?? -1,
+    msgs_per_s: +(P.msgs / secs).toFixed(1), kb_per_s: +(P.bytes / 1024 / secs).toFixed(1), msg_avg_ms: +(P.msgMs / Math.max(1, P.msgs)).toFixed(1), msg_max_ms: Math.round(P.msgMax),
+    longtasks: P.long, longtask_ms: Math.round(P.longMs), longtask_max_ms: Math.round(P.longMax), js_errors: P.errors, last_error: P.lastError || "",
+    dpr: devicePixelRatio, window: `${innerWidth}x${innerHeight}`, browser: navigator.userAgent.slice(0, 160),
     memory_mb: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 2 ** 20) : -1,
   };
   fetch("/api/client_perf", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
   S.clientPerf = body;
   Object.assign(P, { t0: now, msgs: 0, bytes: 0, msgMs: 0, msgMax: 0, long: 0, longMs: 0, longMax: 0, errors: 0 });
-  Object.assign(mp, { frames: 0, draws: 0, drawMs: 0, drawMax: 0, gapMax: 0 });
 }, 15000);
 
 // ================================================================== connection
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   ws.onmessage = (m) => {
-    const t0 = performance.now();
-    let msg; try { msg = JSON.parse(m.data); } catch { return; }
-    try { msg.type === "init" ? init(msg) : tick(msg); } catch (e) { console.error(e); report("error", e.message); P.errors++; }
-    const dt = performance.now() - t0;
-    P.msgs++; P.bytes += m.data.length; P.msgMs += dt; P.msgMax = Math.max(P.msgMax, dt);
+    const t0 = performance.now(); let msg; try { msg = JSON.parse(m.data); } catch { return; }
+    try { msg.type === "init" ? init(msg) : tick(msg); } catch (e) { console.error(e); P.errors++; P.lastError = e.message; }
+    const dt = performance.now() - t0; P.msgs++; P.bytes += m.data.length; P.msgMs += dt; P.msgMax = Math.max(P.msgMax, dt);
   };
   ws.onopen = () => banner("");
-  ws.onclose = () => { banner("Lost contact with the Hub. Reconnecting…"); setTimeout(connect, 1500); };
+  ws.onclose = () => { banner("Lost contact with the program. Reconnecting…"); setTimeout(connect, 1500); };
 }
 
 function init(m) {
-  S.settings = m.settings || {}; S.academy = m.academy || {}; S.metrics = m.metrics || [];
-  S.concepts = m.concepts || {}; S.oracle = m.oracle || {}; S.feeds = m.feeds || {};
-  S.name = m.name || "Zen"; setText($("#name"), S.name); document.title = `${S.name} · Synthetic Mind`;
-  $$(".synthname").forEach((el) => el.textContent = S.name);
-  $("#chatText").placeholder = `Say something to ${S.name}…`; setText($("#sayTo"), `to ${S.name}`);
-  S.journey = m.journey || [];
-  try { if (!localStorage.getItem("welcomed4")) { $("#welcome").showModal(); localStorage.setItem("welcomed4", "1"); } } catch { /* private window */ }
-  MapView.setWorld(m.world || {});
-  worldIn(m.world, true);
-  Community.st.feed = [];
-  for (const k of ["ada_says", "answer", "happening", "chat"]) for (const e of S.feeds[k] || []) Community.st.feed.push(Object.assign({ kind: k === "ada_says" ? "ada_says" : k }, e));
-  Community.st.feed.sort((a, b) => (a.t || 0) - (b.t || 0));
-  for (const id of ["#chat", "#thoughts", "#diary", "#dialogue", "#qa", "#actionStream"]) $(id).innerHTML = "";
-  S.dids = []; S.rewards = [];
-  for (const c of S.feeds.chat || []) {
-    if (c.kind === "chatline") chatLine(c);
-    else { chatLine({ role: "user", text: c.user }); chatLine({ role: "mind", text: c.text, tokens: c.tokens, asleep: c.asleep }); }
-  }
-  for (const e of S.feeds.thought || []) addThought(e);
-  for (const e of (S.feeds.did || S.feeds.deed || []).slice().sort((a, b) => (a.t || 0) - (b.t || 0))) addDeed(e);
-  const talk = [...(S.feeds.answer || []), ...(S.feeds.ada_says || []).filter((e) => e.to === "sprite")].sort((a, b) => (a.t || 0) - (b.t || 0));
-  for (const e of talk) addDialogue(Object.assign({ kind: e.question != null ? "answer" : "ada_says" }, e));
-  for (const e of (S.feeds.answer || []).slice().sort((a, b) => (a.t || 0) - (b.t || 0))) addQA(e);
+  S.settings = m.settings || {}; S.model = m.model || {};
+  S.world = {}; S.agent = {}; S.mind = {}; S.decisions.clear(); S.events = []; S.goals = [];
+  $("#chat").innerHTML = ""; $("#events").innerHTML = "";
+  worldIn(m.world || {}, true);
+  S.name = m.name || S.agent.name || "";
+  setText($("#name"), S.name || "…"); document.title = S.name ? `${S.name} · Synthetic Mind` : "Synthetic Mind";
+  $$(".synthname").forEach((el) => el.textContent = S.name || "it");
+  $("#chatText").placeholder = `Say something to ${NAME()}…`;
+  const f = m.feeds || {};
+  for (const d of f.decision || []) addDecision(d.decision || d);
+  const chats = [...(f.chat || [])].sort((a, b) => (a.t || 0) - (b.t || 0));
+  for (const e of chats) chatFromEvent(e, true);
+  for (const e of [...(f.happening || []), ...chats].sort((a, b) => (a.t || 0) - (b.t || 0))) feedEvent(e);
   for (const e of m.events || []) if (e.kind === "error") banner(e.text);
-  syncSettings(); renderAll(); drawCharts();
+  if (S.agent.inventory) renderAgentInv(true);
+  loadDecisions();
+  syncSettings(); renderAll();
+  if (store.get("welcomed5", false) === false) { try { $("#welcome").showModal(); } catch { /* old browser */ } store.set("welcomed5", true); }
+}
+async function loadDecisions() {
+  try { const r = await fetch("/api/decisions?limit=100").then((x) => x.json()); for (const d of r.items || r.decisions || r || []) addDecision(d); renderAll(); }
+  catch { /* the tick brings the recent ones anyway */ }
 }
 
 function worldIn(w, full) {
   if (!w) return;
-  if (w.creations) { Community.addWorks(w.creations); for (const c of w.creations) Community.refreshViewer(c.id); }
-  const ws = MapView.st.world || w;
-  Community.setMinds(buildMinds(ws)); Community.setSprite(ws.sprite);
-  if ("studio" in w) Studio.setLive(w.studio);
-  if (W3.api) { try { full ? W3.api.full(w) : W3.api.delta(w); } catch (e) { console.error(e); report("error", "3D: " + e.message); } }
-}
-
-// Zen as the overlay and the Zen tab show it, from the latest world picture
-function buildMinds(w) {
-  const z = w?.zen; if (!z) return Community.st.minds;
-  const m = w.mind || {}, motor = m.motor || {};
-  const doing = z.sleeping ? "sleeping" : z.waiting || m.waiting ? "waiting for the Sprite's answer" : m.creating ? { paint: "painting", compose: "playing the piano", sculpt: "shaping clay", write: "writing" }[m.creating] || m.creating : z.activity || "";
-  return [{ name: S.name || "Zen", kind: "synth", color: "#9fb4ff", glyph: "✨", needs: z.needs, feelings: z.feelings, sleeping: z.sleeping, waiting: z.waiting || m.waiting,
-    place: z.place, biome: z.biome, wet: z.wet, hands: z.hands, doing, said: z.said, thought: (S.lastThought?.text || "").trim().slice(0, 140),
-    last: motor.last || S.lastDid?.action, lastText: S.lastDid?.text, brain: m.brain, stage: S.academy.stage_name }];
+  for (const k of ["t", "day", "time", "clock", "weather", "light", "places", "spawn"]) if (k in w) S.world[k] = w[k];
+  if (w.agent) { Object.assign(S.agent, w.agent); if (w.agent.name && !S.name) S.name = w.agent.name; if ("inventory" in w.agent) S.invDirty = true; }
+  if (w.mind) {
+    const m = w.mind, oldGoal = S.mind.goal;
+    for (const k in m) if (k !== "decisions") S.mind[k] = m[k];
+    for (const d of m.decisions || []) addDecision(d);
+    if (m.goal && m.goal !== oldGoal) { S.goals.push({ t: S.world.t || Date.now() / 1000, goal: m.goal }); if (S.goals.length > 60) S.goals.shift(); }
+    if ("thinking" in m) { if (m.thinking && !S.thinkingSince) S.thinkingSince = performance.now(); if (!m.thinking) S.thinkingSince = 0; }
+  }
+  if ("visitor" in w) { S.visitor = w.visitor; renderHotbar(); if (!$("#invPanel").hidden) renderInvPanel(); }
+  if (w.blocks?.length) S.blocksChanged += w.blocks.length;
+  if (vox) {
+    try {
+      const pass = { ...w };
+      if (pass.agent || pass.mind) pass.agent = { ...(pass.agent || {}), ...(pass.mind ? { thinking: pass.mind.thinking } : {}) };
+      if (full) pass.full = true;
+      vox.update(pass);
+    } catch (e) { console.error(e); }
+  } else if (w.blocks?.length || w.entities) { (S.voxBacklog ||= []).push({ ...w, full }); if (S.voxBacklog.length > 300) S.voxBacklog.shift(); }
+  for (const e of w.events || []) onEvent(e);
 }
 
 function tick(m) {
-  if (m.world) { m.world.full ? MapView.setWorld(m.world) : MapView.applyDelta(m.world); worldIn(m.world, !!m.world.full); }
-  if (m.academy) S.academy = m.academy;
-  if (m.settings) { S.settings = m.settings; syncSettings(); }
-  if (m.oracle) S.oracle = m.oracle;
-  if (m.concepts) S.concepts = m.concepts;
+  if (m.settings) { Object.assign(S.settings, m.settings); syncSettings(); }
+  if (m.model) { S.model = { ...S.model, ...m.model }; }
+  if (m.world) worldIn(m.world, !!m.world.full);
   for (const e of m.events || []) onEvent(e);
   renderAll();
 }
 
 function onEvent(e) {
+  if (e && !e.kind && e.type) e = { ...e, kind: e.type };
+  if (!e || !e.kind) return;
+  if (e.id != null) { S.seenEv ||= new Set(); if (S.seenEv.has(e.id)) return; S.seenEv.add(e.id); if (S.seenEv.size > 3000) S.seenEv = new Set([...S.seenEv].slice(-1500)); }
   switch (e.kind) {
-    case "thought": addThought(e); S.lastThought = e; Journal.live("thoughts", e); break;
-    case "did": addDeed(e); Journal.live("thoughts", e); break;
-    case "ada_says":
-      Community.addFeed(e); Journal.live("conversations", e);
-      if (e.to === "sprite") addDialogue(e);
-      break;
-    case "chat": if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; }
-      chatLine({ role: "user", text: e.user }); chatLine({ role: "mind", text: e.text, tokens: e.tokens, asleep: e.asleep });
-      Journal.live("conversations", e); break;
-    case "answer": addQA(e); addDialogue(e); Community.addFeed(e); Journal.live("conversations", e);
-      if (e.by === "critique") toast(`🌟 The Sprite: ${e.text}`.slice(0, 180), 6000); break;
-    case "happening": Community.addFeed(e); if (e.what === "rainbow") toast("🌈 A rainbow!"); break;
-    case "created": Community.addFeed(e); if (e.creation) { const was = Community.st.works.has(e.creation.id); Community.addWorks([e.creation]); Community.refreshViewer(e.creation.id);
-      if (!was) toast(`${Community.KIND_ICON[e.creation.kind] || "✨"} ${SYNTH()} made ${e.creation.kind === "music" ? "a song" : "a " + e.creation.kind}!`, 5000); } break;
-    case "milestone": S.journey = [...(S.journey || []), e]; Community.addFeed(e); toast(`🌱 ${e.title}`, 6000); break;
-    case "metric": S.metrics.push(e.point || e); if (S.metrics.length > 20000) S.metrics.shift(); chartsDue(); break;
-    case "concepts": chartsDue(); break;
-    case "published": toast(`🎓 ${SYNTH()} has a new brain (v${e.meta?.version}, step ${big(e.meta?.step)}).`); break;
-    case "brain": toast(`🌍 ${SYNTH()} is now living with brain v${e.meta?.version}.`); break;
-    case "grew": toast(`🧠 ${SYNTH()}'s brain grew to ${e.layers} layers.`, 5000); break;
-    case "phase": toast(e.phase === "night" ? `🌙 Night falls.` : `☀️ Day ${e.day}: morning comes.`); break;
-    case "error": banner(e.text); setTimeout(() => banner(""), 15000); break;
+    case "decision": { const d = addDecision(e.decision || e); Journal.live("thoughts", { t: d.t, kind: "thought", id: d.id, text: d.thought, action: d.action, reason: d.reason, ms: d.ms }); if (d.say) { /* said arrives as its own event */ } break; }
+    case "reflection": feedEvent(e); Journal.live("thoughts", { t: e.t, kind: "reflection", text: e.text }); break;
+    case "said": chatFromEvent(e); feedEvent(e); Journal.live("conversations", { t: e.t, with: e.to === "you" ? "you" : "world", kind: "said", lines: [[NAME(), e.text]] }); break;
+    case "chat": chatFromEvent(e); Journal.live("conversations", { t: e.t, with: "you", kind: "chat", lines: [[e.who || "you", e.text]] }); break;
+    case "practice_started": toast(`🎓 ${NAME()} started practising${e.name ? ` (${e.name})` : ""}.`); feedEvent(e); break;
+    case "practice_done": toast(`🎓 Practice finished: ${e.name || "a new adapter"} is ready.`, 5000); feedEvent(e); break;
+    case "practice_failed": toast(`Practice failed: ${e.error || "unknown error"}`, 6000); feedEvent(e); break;
+    case "error": banner(e.text); setTimeout(() => banner(""), 15000); feedEvent(e); break;
+    case "log": break;
+    default: feedEvent(e);
   }
 }
+
+// ================================================================== decisions
+function normDecision(d) {
+  const ms = d.ms && typeof d.ms === "object" ? d.ms : { total_ms: d.ms ?? d.latency_ms };
+  return { ...d, ms, latency: ms.total_ms ?? ms.action_ms ?? ms.first_ms ?? null, firstMs: ms.first_ms ?? null };
+}
+function addDecision(raw) {
+  if (!raw || raw.id == null) return raw;
+  const d = normDecision(raw), old = S.decisions.get(d.id);
+  const merged = old ? { ...old, ...d } : d;
+  S.decisions.set(d.id, merged);
+  if (S.decisions.size > 400) S.decisions.delete(S.decisions.keys().next().value);
+  return merged;
+}
+const decList = () => [...S.decisions.values()].sort((a, b) => (a.t || 0) - (b.t || 0));
+const SKILL_ICON = { go_to: "🚶", walk: "🚶", look_at: "👀", mine: "⛏️", mine_nearest: "⛏️", dig: "⛏️", place: "🧱", build: "🏗️", craft: "🛠️", smelt: "🔥", use: "✋",
+  put: "📦", take: "📦", eat: "🍽️", attack: "⚔️", follow: "👣", give: "🎁", plant: "🌱", till: "🪏", harvest: "🌾", sleep: "😴", say: "💬", wait: "⏳", stop: "⏹️",
+  explore: "🧭", name_place: "📍", note: "📝", collect: "🧺", chop: "🪓" };
+function argText(v) {
+  if (v == null) return "";
+  if (Array.isArray(v)) return v.length <= 3 && v.every((x) => typeof x === "number") ? v.map((x) => Math.round(x)).join(", ") : `${v.length} items`;
+  if (typeof v === "object") return Object.entries(v).slice(0, 3).map(([k, x]) => `${k}=${argText(x)}`).join(" ");
+  return String(v).length > 40 ? String(v).slice(0, 38) + "…" : String(v);
+}
+function actionText(a) {
+  if (!a) return "–";
+  if (typeof a === "string") return a;
+  const sk = a.skill || a.name || "?", args = { ...(a.args || {}) };
+  let at = "";
+  if (!Array.isArray(args) && args.x != null && args.z != null) { at = ` at ${Math.round(args.x)}, ${args.y != null ? Math.round(args.y) + ", " : ""}${Math.round(args.z)}`; delete args.x; delete args.y; delete args.z; }
+  const parts =Array.isArray(args) ? args.map(argText) : Object.entries(args).map(([k, v]) => ["block", "item", "x", "target", "text", "name", "what"].includes(k) || Object.keys(args).length === 1 ? argText(v) : `${k}: ${argText(v)}`);
+  return `${sk.replace(/_/g, " ")}${parts.length ? " · " + parts.filter(Boolean).join(", ").replace(/_/g, " ") : ""}${at}`;
+}
+const skillIcon = (a) => SKILL_ICON[(typeof a === "string" ? a : a?.skill || "").split(/[\s(]/)[0]] || "▸";
+const msTxt = (v) => v == null ? "–" : v >= 10000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`;
+function latClass(v) { return v == null ? "" : v <= 250 ? "fast" : v <= 800 ? "ok" : "slow"; }
+function decSig(d) { return JSON.stringify([d.rating ?? 0, d.correction || "", d.outcome?.ok, d.outcome?.text, d.self?.value, d.latency]); }
+function decHTML(d, compact = false) {
+  const out = d.outcome, okc = out ? (out.ok === false ? "fail" : "ok") : "run";
+  const r = d.rating ?? 0;
+  const rate = `<span class="rate" role="group" aria-label="Rate this decision">
+    <button class="rb up${r === 1 ? " on" : ""}" data-rate="1" data-id="${esc(d.id)}" title="A good decision" aria-pressed="${r === 1}">👍</button>
+    <button class="rb down${r === -1 ? " on" : ""}" data-rate="-1" data-id="${esc(d.id)}" title="A poor decision" aria-pressed="${r === -1}">👎</button></span>`;
+  const self = d.self && d.self.value != null ? `<span class="selfj ${d.self.value > 0 ? "pos" : d.self.value < 0 ? "neg" : ""}" title="${esc(d.self.why || "its own judgement, looking back")}">self ${d.self.value > 0 ? "👍" : d.self.value < 0 ? "👎" : "·"}</span>` : "";
+  const corr = d.correction ? `<div class="dec-corr">✏️ <b>You showed it:</b> ${esc(d.correction)}</div>`
+    : `<details class="dec-fix"><summary>Show it what it should have done</summary><form class="inline" data-correct="${esc(d.id)}"><input name="text" placeholder="e.g. craft planks first" autocomplete="off" aria-label="What it should have done"><button>Save</button></form></details>`;
+  return `<div class="dec-top"><span class="dec-time">${clock(d.t)}</span><span class="actk ${okc}" title="${esc(JSON.stringify(d.action || {}))}">${skillIcon(d.action)} ${esc(actionText(d.action))}</span>
+      <span class="lat ${latClass(d.latency)}" title="${d.firstMs != null ? `first token ${msTxt(d.firstMs)} · ` : ""}${d.ms?.cached ? "prompt cached · " : ""}${d.ms?.tokens ? d.ms.tokens + " tokens" : ""}">${msTxt(d.latency)}</span>
+      ${d.obs_chars ? `<span class="obs" title="Size of what it saw">👁 ${big(d.obs_chars)} ch</span>` : ""}${d.adapter ? `<span class="obs" title="Practised adapter used">🎓 ${esc(d.adapter)}</span>` : ""}${self}<span class="grow"></span>${rate}</div>
+    ${d.thought ? `<div class="dec-thought">${esc(d.thought)}</div>` : ""}
+    ${d.say ? `<div class="dec-say">💬 “${esc(d.say)}”</div>` : ""}
+    ${!compact && d.reason ? `<div class="dec-why">because ${esc(d.reason)}</div>` : ""}
+    ${out ? `<div class="dec-out ${okc}">${out.ok === false ? "✗" : "✓"} ${esc(out.text || (out.ok === false ? "failed" : "done"))}</div>` : `<div class="dec-out run">… under way</div>`}
+    ${compact ? "" : corr}`;
+}
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-rate]"); if (!b) return;
+  const id = b.dataset.id, d = S.decisions.get(id) || [...S.decisions.values()].find((x) => String(x.id) === id); if (!d) return;
+  const want = +b.dataset.rate, value = d.rating === want ? 0 : want, was = d.rating;
+  d.rating = value || null; renderAll();
+  try { await api("agent", { action: "rate", id: d.id, value }); } catch (e) { d.rating = was; renderAll(); toast(e.message); }
+});
+document.addEventListener("submit", async (ev) => {
+  const f = ev.target.closest("[data-correct]"); if (!f) return;
+  ev.preventDefault();
+  const id = f.dataset.correct, text = f.text.value.trim(); if (!text) return;
+  const d = [...S.decisions.values()].find((x) => String(x.id) === id); if (!d) return;
+  try { await api("agent", { action: "correct", id: d.id, text }); d.correction = text; toast("Thanks: it will practise with that."); renderAll(); } catch (e) { toast(e.message); }
+});
 
 // ================================================================== header
-const SKY = { clear: "☀️", cloudy: "☁️", rain: "🌧️", storm: "⛈️", snow: "❄️", wind: "🌬️", windy: "🌬️", fog: "🌫️" };
+const SKY = { clear: "☀️", cloudy: "☁️", overcast: "☁️", rain: "🌧️", storm: "⛈️", thunder: "⛈️", snow: "❄️", fog: "🌫️" };
+function timeText() {
+  const w = S.world; let f = w.time;
+  if (typeof f === "string") return `Day ${w.day ?? "?"} · ${f}`;
+  f = typeof f === "number" && w.clock != null ? (f + 0.25) % 1 : w.clock != null ? (([h, m]) => (+h + +m / 60) / 24)(String(w.clock).split(":")) : f == null ? null : f <= 1 ? f : f <= 24 ? f / 24 : (f % 24000) / 24000;
+  const hm = f == null ? "" : `${String(Math.floor(f * 24)).padStart(2, "0")}:${String(Math.floor((f * 24 % 1) * 60)).padStart(2, "0")}`;
+  const ic = f == null ? "" : f < 0.23 || f > 0.79 ? "🌙" : f < 0.3 || f > 0.72 ? "🌅" : "";
+  const wx = String(w.weather || "clear").toLowerCase(), night = f != null && (f < 0.25 || f > 0.77);
+  return `Day ${w.day ?? "?"} · ${ic}${hm} · ${night && wx === "clear" ? "✨" : SKY[wx] || ""} ${wx}`;
+}
+function medianLatency() {
+  const v = decList().map((d) => d.latency).filter((x) => x != null).slice(-60).sort((a, b) => a - b);
+  return v.length ? v[Math.floor(v.length / 2)] : null;
+}
+function deviceText(m) {
+  const d = String(m.device || "").toLowerCase();
+  if (!d) return "";
+  return d === "cpu" ? "on CPU" : `on GPU${d !== "cuda" ? ` (${d})` : ""}`;
+}
 function renderHeader() {
-  const w = MapView.st.world, a = S.academy, mind = w?.mind || {};
-  if (w?.zen) {
-    setText($("#clock"), `Day ${w.day} · ${w.season} · ${w.time} · ${SKY[w.weather] || ""} ${w.weather} ${Math.round(w.temperature)}°C`);
-    const night = w.phase === "night", sc = S.settings["schedule.mode"], left = dur(mind.phase_left);
-    const txt = sc === "academy" ? "🎓 Study only: the world is paused" : mind.phase_left == null ? (night ? "🌙 Night" : "☀️ Day")
-      : sc === "world" ? (night ? `🌙 Night · morning in ${left}` : `☀️ Day · night in ${left}`)
-      : night ? `🌙 Night, studying · morning in ${left}` : `☀️ Day · night in ${left}`;
-    setText($("#sched"), txt); $("#sched").classList.toggle("night", night);
-    setText($("#btnSleep"), w.zen.sleeping ? "Wake up" : "Go to sleep");
-    $("#orb").classList.toggle("asleep", !!w.zen.sleeping);
-    setText($("#kDeeds"), big(mind.motor?.steps));
-  }
-  setText($("#sub"), a.version ? `brain v${a.version} · ${a.layers} layers · ${big(a.params)} parameters · ${a.device || ""}` : "starting the Academy…");
-  setText($("#kStage"), a.stage_name || "–");
-  setText($("#kTokens"), a.tokens != null ? big(a.tokens) + " tokens" : "–");
-  setText($("#kConcepts"), a.concepts?.accuracy != null ? pct(a.concepts.accuracy) : "–");
+  const m = S.model, st = S.mind.stats || {};
+  setText($("#clock"), S.world.day != null || S.world.time != null ? timeText() : "…");
+  const name = m.label || m.model || m.choice || "";
+  setText($("#sub"), m.status === "ready" ? `${name} · ${deviceText(m)}${m.adapter ? ` · 🎓 ${m.adapter}` : ""}` : m.status ? `model ${m.status}${m.progress ? " " + pct(m.progress) : ""}${m.detail ? ` · ${m.detail}` : ""}` : "connecting…");
+  setText($("#kLatency"), msTxt(st.last_ms ?? decList().at(-1)?.latency));
+  setText($("#kMedian"), msTxt(medianLatency()));
+  setText($("#kDecisions"), big(st.decisions ?? S.decisions.size));
+  setText($("#kBlocks"), big(S.blocksChanged));
+  $("#orb").classList.toggle("thinking", !!S.mind.thinking);
+  $("#orb").classList.toggle("asleep", !!S.mind.paused);
 }
 $("#btnHelp").onclick = () => $("#welcome").showModal();
-$("#btnSleep").onclick = () => api(MapView.st.world?.zen?.sleeping ? "wake_now" : "sleep_now").catch((e) => toast(e.message));
 
+// ================================================================== views
 function showView(v) {
   S.view = v;
   $$("#nav button").forEach((x) => x.classList.toggle("on", x.dataset.view === v));
   $$(".view").forEach((el) => el.classList.toggle("on", el.id === `view-${v}`));
-  if (v === "atlas") Atlas.open(); else Atlas.close();
-  renderAll(); if (v === "academy") drawCharts(); if (v === "health") pollHealth(true);
-  MapView.st.dirty = true;
-  if (W3.api) W3.api.pause(v !== "world" || document.hidden);
+  if (vox) vox.pause(v !== "home" || document.hidden);
+  if (v === "map") { S.mapDirty = true; requestAnimationFrame(drawBigMap); }
+  if (v === "health") pollHealth(true);
+  renderAll();
+  history.replaceState(null, "", v === "home" ? location.pathname : `#${v}`);
 }
 $$("#nav button").forEach((b) => b.onclick = () => showView(b.dataset.view));
+document.addEventListener("visibilitychange", () => vox?.pause(document.hidden || S.view !== "home"));
 
+let renderQueued = false;
 function renderAll() {
-  renderHeader();
-  if (S.view === "world") renderWorld();
-  else if (S.view === "zen") renderZen();
-  else if (S.view === "thoughts") Journal.open("thoughts");
-  else if (S.view === "talks") Journal.open("conversations");
-  else if (S.view === "gallery") Community.gallery($("#gallery"), $("#galleryChips"));
-  else if (S.view === "academy") renderAcademy();
-  else if (S.view === "concepts") renderConcepts();
-  else if (S.view === "sprite") renderSprite();
-  else if (S.view === "health") pollHealth();
+  if (renderQueued) return; renderQueued = true;
+  requestAnimationFrame(() => {
+    renderQueued = false;
+    renderHeader();
+    if (S.view === "home") renderHome();
+    else if (S.view === "mind") renderMind();
+    else if (S.view === "thoughts") Journal.open("thoughts");
+    else if (S.view === "talks") Journal.open("conversations");
+    else if (S.view === "map") { renderMapSide(); drawBigMap(); }
+    else if (S.view === "settings") renderSettings();
+    else if (S.view === "health") pollHealth();
+  });
 }
-Community.onChange = () => renderAll();
 
 // ================================================================== home
-function needsHTML(needs) {
-  return Object.entries(needs || {}).map(([k, v]) => {
-    const c = needColor(k, v), bored = k === "boredom" && v > 60;
-    return `<div class="need${k === "boredom" ? " inverse" : ""}" title="${k === "boredom" ? "Boredom: higher is worse" : esc(NEED_LABEL[k] || k)}"><span>${NEED_LABEL[k] || k}</span><div><i style="width:${Math.round(v)}%;background:${c}"></i></div><b>${bored ? "bored" : Math.round(v)}</b></div>`;
-  }).join("");
+const HEART = (v) => v == null ? null : clamp(v / 20, 0, 1);
+function heldHTML(h) {
+  if (h == null || h === "" || (typeof h === "object" && !h.item && !h.name && h.id == null)) return '<span class="muted">empty hand</span>';
+  const n = typeof h === "object" ? h.item ?? h.name ?? h.id : h;
+  return `<img src="${iconURL(n, 32)}" alt=""><span>${esc(itemName(n))}${typeof h === "object" && h.count > 1 ? ` ×${h.count}` : ""}</span>`;
 }
-const whereWords = (z) => [z.place, z.biome ? Chunks.label(z.biome) : ""].filter(Boolean).join(" · ");
-function renderWorld() {
-  const w = MapView.st.world; if (!w?.zen) return;
-  const z = w.zen, m = w.mind || {}, n = SYNTH(), me = Community.st.minds[0];
-  setText($("#ovClock"), `Day ${w.day} · ${w.season} · ${w.time} · ${SKY[w.weather] || ""} ${Math.round(w.temperature)}°C`);
-  setText($("#ovPlace"), `📍 ${whereWords(z) || "somewhere"}`);
-  Community.strip($("#mindStrip"));
-  setHTML($("#mindCard"), Community.card(me));
-  Community.feed($("#liveFeed"), ["ada_says", "answer", "created", "happening", "milestone", "chat"], 40);
-  renderStudio(w);
-  renderHotbar(w);
-  setText($("#adaTitle"), n);
-  setText($("#adaWhere"), z.sleeping ? "asleep" : `${whereWords(z)}${z.hands?.length ? " · holding " + z.hands.join(", ") : ""}${z.wet > 0.4 ? " · wet" : ""}`);
-  setHTML($("#needs"), needsHTML(z.needs));
-  setHTML($("#intent"), z.sleeping ? "💤 Sleeping" : esc(me?.doing ? me.doing[0].toUpperCase() + me.doing.slice(1) : "…"));
-  setText($("#intentWhy"), (z.feelings || []).length ? `Feels ${z.feelings.join(", ")}.` : "");
-  const mo = m.motor || {};
-  setText($("#motorMini"), mo.steps != null ? `· ${big(mo.steps)} so far · reward ${fmtR(mo.reward_rate)}/min` : "");
-  spark($("#sparkHome"), S.rewards.slice(-80));
-  setHTML($("#log"), (w.log || []).slice().reverse().map((l) => `<li>${esc(l)}</li>`).join(""));
+function skillText(a) {
+  const s = a.skill;
+  if (!s) return S.mind.busy_with ? `${S.mind.busy_with}…` : "idle";
+  if (typeof s === "string") return s.replace(/_/g, " ");
+  return actionText(s);
 }
-const fmtR = (v) => v == null ? "–" : (v >= 0 ? "+" : "") + (+v).toFixed(2);
-// the piece Zen is making right now
-function renderStudio(w) {
-  const st = w.studio, box = $("#studioInset");
-  box.hidden = !st;
-  if (!st) return;
-  const med = Studio.normMedium(st.medium);
-  setText($("#studioTitle"), `${SYNTH()} is ${Studio.mediumName(st.medium)}…`);
-  setText($("#studioSteps"), `${st.steps || 0} marks`);
-  const cv = $("#studioCanvas"), want = med === "music" ? [512, 200] : [512, 384];
-  if (cv.width !== want[0] || cv.height !== want[1]) { cv.width = want[0]; cv.height = want[1]; }
-  Studio.drawLive(cv);
+function renderHome() {
+  const a = S.agent, m = S.mind, w = S.world;
+  setText($("#ovClock"), timeText());
+  const pos = a.x != null ? `📍 ${Math.round(a.x)}, ${Math.round(a.y)}, ${Math.round(a.z)}` : "";
+  setText($("#ovWhere"), pos);
+  setText($("#mcName"), NAME());
+  const state = m.paused ? "⏸ paused" : m.thinking ? "💭 thinking…" : m.busy_with === "practising" ? "🎓 practising" : m.busy_with === "reflecting" ? "🪞 reflecting" : a.skill ? "acting" : "idle";
+  setText($("#mcState"), state);
+  $("#mindCard").classList.toggle("thinking", !!m.thinking);
+  setHTML($("#mcHeld"), heldHTML(a.held));
+  const thought = m.thought ?? a.thought;
+  setHTML($("#mcThought"), thought ? `“${esc(thought)}”` : '<span class="muted">No thoughts yet.</span>');
+  setText($("#mcGoal"), m.goal || a.goal || "–");
+  setText($("#mcSkill"), skillText(a));
+  $("#mcProgress").style.width = `${Math.round(clamp(+a.progress || 0, 0, 1) * 100)}%`;
+  const hp = HEART(a.health), fd = HEART(a.food);
+  $("#mcHealth").style.width = `${Math.round((hp ?? 0) * 100)}%`; setText($("#mcHealthN"), a.health != null ? `${Math.round(a.health)}/20` : "–");
+  $("#mcFood").style.width = `${Math.round((fd ?? 0) * 100)}%`; setText($("#mcFoodN"), a.food != null ? `${Math.round(a.food)}/20` : "–");
+  const last = decList().at(-1);
+  const box = $("#mcDecision");
+  if (last && !box.contains(document.activeElement)) { const sig = last.id + decSig(last); if (box._sig !== sig) { box._sig = sig; box.innerHTML = `<div class="ld-label">Last decision</div><div class="dec compact">${decHTML(last, true)}</div>`; } }
+  // chat: thinking indicator
+  const ind = $("#chat .typing");
+  if (m.thinking && !ind) { const d = document.createElement("div"); d.className = "msg mind typing"; d.innerHTML = '<span class="vx-dots"><i></i><i></i><i></i></span>'; $("#chat").append(d); $("#chat").scrollTop = 1e9; }
+  else if (!m.thinking && ind) ind.remove();
+  setText($("#chatHint"), S.settings["mind.radio"] === false && S.mode !== "visit" ? "radio off: it hears you only nearby" : "");
+  if (S.invDirty) renderAgentInv();
+  drawMini();
 }
-setInterval(() => { if (S.view === "world" && MapView.st.world?.studio && Studio.normMedium(MapView.st.world.studio.medium) === "sculpt") Studio.drawLive($("#studioCanvas")); }, 120);
+const normSlot = (s) => Array.isArray(s) ? (s[0] == null ? null : { item: s[0], count: s[1] ?? 1 }) : s || null;
+function slotHTML(s, i, sel) {
+  s = normSlot(s);
+  if (!s || (!s.item && !s.name && s.id == null)) return `<div class="slot${sel ? " sel" : ""}" data-slot="${i}"></div>`;
+  const n = s.item ?? s.name ?? s.id;
+  return `<div class="slot${sel ? " sel" : ""}" data-slot="${i}" title="${esc(itemName(n))}${s.count > 1 ? ` ×${s.count}` : ""}"><img src="${iconURL(n, 40)}" alt="">${s.count > 1 ? `<b>${s.count}</b>` : ""}</div>`;
+}
+function renderAgentInv(force) {
+  S.invDirty = false;
+  if (!Reg.ready && !force) return;
+  const inv = S.agent.inventory || [];
+  const slots = Array.isArray(inv) ? inv.map(normSlot) : Object.entries(inv).map(([item, count]) => ({ item, count }));
+  const n = Math.max(36, slots.length);
+  setHTML($("#agentInv"), Array.from({ length: n }, (_, i) => slotHTML(slots[i], i, false)).join(""));
+  const filled = slots.filter((s) => s && (s.item || s.name || s.id != null)).length;
+  setText($("#invCount"), `${filled} of ${n} slots`);
+}
 
-function renderHotbar(w) {
-  const v = w.visitor; if (!v || S.mode !== "you") return;
-  const hands = v.hands || v.carrying || [];
-  const slots = Array.from({ length: 4 }, (_, i) => hands[i]);
-  setHTML($("#hotbar"), slots.map((k, i) => `<div class="slot" title="${esc(k || "empty")}"><small>${i + 1}</small>${k ? (GLYPH[k] || "❔") : ""}</div>`).join(""));
+// chat
+function chatLine(who, text, cls = "", t) {
+  const d = document.createElement("div"); d.className = `msg ${cls}`;
+  d.innerHTML = `${cls.includes("mind") ? `<b>${esc(who)}</b>` : ""}<span>${esc(text)}</span>${t ? `<small>${clock(t)}</small>` : ""}`;
+  const box = $("#chat"), ind = box.querySelector(".typing");
+  ind ? box.insertBefore(d, ind) : box.append(d);
+  while (box.children.length > 150) box.firstChild.remove();
+  box.scrollTop = box.scrollHeight;
+  return d;
+}
+function chatFromEvent(e, initial) {
+  if (e.kind === "said" || (e.kind !== "chat" && e.text && !e.who)) {
+    if (!e.text) return;
+    chatLine(NAME(), e.text, `mind${e.to === "you" ? " to-you" : ""}`, e.t);
+  } else if (e.kind === "chat") {
+    const who = e.who || "you";
+    if (who === "you") {
+      const i = S.pendingChat.findIndex((p) => p.text === e.text);
+      if (i >= 0) { S.pendingChat[i].el.classList.remove("pending"); S.pendingChat.splice(i, 1); return; }
+      chatLine("you", e.text, "user", e.t);
+    } else chatLine(who, e.text, "mind other", e.t);
+  }
+}
+async function sendChat(text) {
+  const el = chatLine("you", text, "user pending", Date.now() / 1000);
+  S.pendingChat.push({ text, el }); if (S.pendingChat.length > 10) S.pendingChat.shift();
+  try { const r = await api("chat", { text }); el.classList.remove("pending"); if (typeof r === "string" && r) toast(r); }
+  catch (e) { el.classList.add("failed"); toast(e.message); }
+}
+$("#chatForm").onsubmit = (ev) => { ev.preventDefault(); const t = $("#chatText").value.trim(); if (!t) return; $("#chatText").value = ""; sendChat(t); };
+
+// the live events feed
+const EV_ICON = { said: "💬", chat: "🗨️", happening: "✨", reflection: "🪞", practice_started: "🎓", practice_done: "🎓", practice_failed: "⚠️", error: "⚠️", system: "ℹ️", decision: "🧠" };
+function evText(e) {
+  if (e.kind === "said") return `${NAME()}: “${e.text}”${e.to && e.to !== "all" ? ` (to ${e.to})` : ""}`;
+  if (e.kind === "chat") return `${e.who === "you" || !e.who ? "You" : e.who}: “${e.text}”`;
+  if (e.kind === "practice_started") return `Practice started${e.by ? ` (by ${e.by})` : ""}${e.name ? `: ${e.name}` : ""}`;
+  if (e.kind === "practice_done") return `Practice done: ${e.name || ""}${e.info?.loss != null ? ` · loss ${(+e.info.loss).toFixed(3)}` : ""}`;
+  if (e.kind === "practice_failed") return `Practice failed: ${e.error || ""}`;
+  if (e.kind === "reflection") return `Looking back: ${e.text}`;
+  if (e.kind === "gave") return `${e.name || "Someone"} gave ${e.to === 1 || e.to === S.agent.id ? NAME() : "someone"} ${e.count || ""} ${itemName(e.item)}`.replace(/\s+/g, " ");
+  if (e.kind === "joined") return `${e.name || "A visitor"} walked into the world.`;
+  if (e.kind === "left") return `${e.name || "The visitor"} left.`;
+  if (e.kind === "weather") return `The weather turns: ${e.weather}.`;
+  if (e.kind === "death" || e.kind === "died") return `${e.name || "Someone"} died${e.cause ? ` (${e.cause})` : ""}.`;
+  if (e.kind === "practice_started" || e.kind === "practice_done" || e.kind === "practice_failed") return "";
+  return e.text || (QUIET.has(e.kind) ? "" : e.what || e.title || "");
+}
+const QUIET = new Set(["decision", "skill_start", "skill_end", "block", "blocks", "log", "tick", "set", "hurt", "pickup", "picked_up", "move"]);
+function feedEvent(e) {
+  const text = evText(e); if (!text) return;
+  S.events.push(e); if (S.events.length > 200) S.events.shift();
+  const box = $("#events"), d = document.createElement("div");
+  d.className = `ev k-${esc(e.kind)}`;
+  d.innerHTML = `<span class="ev-ic">${EV_ICON[e.kind] || e.icon || "•"}</span><span class="ev-t">${esc(text)}</span><span class="ev-when">${clock(e.t)}</span>`;
+  box.prepend(d); while (box.children.length > 120) box.lastChild.remove();
 }
 
-// a little bar chart of rewards: green for good deeds, red for bad, with a running average
-function spark(cv, vals) {
-  if (!cv) return;
-  const dpr = devicePixelRatio || 1, W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr); if (!W || !H) return;
+// ------------------------------------------------------------------ visiting: modes, hotbar, inventory
+// the block an item places (items.json `place`), else a block of the same name
+function blockForItem(n) { const it = Reg.items.get(normName(n)); return findBlock(it?.place ?? it?.block ?? n); }
+const DEFAULT_BAR = [["grass_block", "grass"], ["dirt"], ["cobblestone"], ["oak_planks", "planks"], ["stone_bricks", "bricks"], ["glass"], ["oak_log", "log"], ["torch"], ["bricks", "white_wool"]];
+function creativeSlots() {
+  if (!Reg.ready) return Array(9).fill(null);
+  if (!S.creativeBar) S.creativeBar = DEFAULT_BAR.map((alts) => alts.map((n) => findBlock(n)?.id).find((x) => x != null) ?? null);
+  return S.creativeBar.map((id) => id == null ? null : { id, item: findBlock(id)?.key, count: 1 });
+}
+function hotSlots() {
+  if (S.creative) return creativeSlots();
+  const inv = S.visitor?.inventory || [];
+  return Array.from({ length: 9 }, (_, i) => normSlot(inv[i])).map((s) => s && (s.item || s.name || s.id != null) ? { ...s, id: blockForItem(s.item ?? s.name ?? s.id)?.id } : null);
+}
+function renderHotbar() {
+  const visiting = S.mode === "visit";
+  $("#hotbar").hidden = !visiting; $("#btnInv").hidden = !visiting; $("#btnCam").hidden = !visiting;
+  if (!visiting) return;
+  const slots = hotSlots();
+  setHTML($("#hotbar"), slots.map((s, i) => slotHTML(s, i, i === S.sel).replace('class="slot', `data-key="${i + 1}" class="slot`)).join(""));
+  vox?.setHotbar({ slots, selected: S.sel, creative: S.creative });
+}
+$("#hotbar").addEventListener("click", (e) => { const s = e.target.closest("[data-slot]"); if (s) selectSlot(+s.dataset.slot); });
+function selectSlot(i) {
+  S.sel = i; renderHotbar();
+  if (!S.creative) api("visitor", { action: "select", slot: i }).catch(() => {});
+}
+let moveBusy = false, moveNext = null;
+function sendMove(body) {
+  if (moveBusy) { moveNext = body; return; }
+  moveBusy = true;
+  api("visitor", body).catch(() => {}).finally(() => { moveBusy = false; if (moveNext) { const n = moveNext; moveNext = null; sendMove(n); } });
+}
+function voxCommand(body, quiet) {
+  if (S.creative) body.creative = true;
+  if (body.action === "move") { sendMove(body); return Promise.resolve(); }
+  return api("visitor", body).then((r) => {
+    if (r && typeof r === "object" && r.ok === false) { const err = new Error(r.text || "That didn't work."); throw err; }
+    const t = typeof r === "string" ? r : r?.text; if (t && !quiet) stageToast(t); return r;
+  })
+    .catch((e) => { if (!quiet) stageToast(e.message); throw e; });
+}
+async function setMode(mode) {
+  if (mode === S.mode) return;
+  const was = S.mode; S.mode = mode;
+  $$("#modes [data-mode]").forEach((x) => x.classList.toggle("on", x.dataset.mode === mode));
+  $("#stage").classList.toggle("visiting", mode === "visit");
+  if (mode === "visit") {
+    try {
+      const r = await api("visitor", { action: "join", creative: S.creative || undefined }), v = r?.visitor || (r?.x != null ? r : null);
+      if (v) S.visitor = { ...(S.visitor || {}), ...v }; else if (typeof r === "string") stageToast(r); else if (r?.ok === false) toast(r.text || "Couldn't join.");
+    }
+    catch (e) { toast(e.message); }
+  } else if (was === "visit") { api("visitor", { action: "leave" }).catch(() => {}); $("#invPanel").hidden = true; }
+  if (vox) { if (mode === "visit" && S.visitor) vox.update({ visitor: S.visitor }); vox.setMode(mode); }
+  renderHotbar();
+}
+$$("#modes [data-mode]").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+$("#btnCam").onclick = () => { const d = vox?.debug; if (d) d.third(!d.S.cam.third); };
+$("#btnInv").onclick = () => toggleInv();
+function toggleInv(open) {
+  const p = $("#invPanel"); p.hidden = open == null ? !p.hidden : !open;
+  if (!p.hidden) { if (document.pointerLockElement) document.exitPointerLock(); renderInvPanel(); }
+}
+$("#invClose").onclick = () => toggleInv(false);
+addEventListener("keydown", (e) => {
+  if (e.code === "Escape" && !$("#invPanel").hidden) toggleInv(false);
+  if (e.code === "KeyE" && !$("#invPanel").hidden && document.activeElement?.tagName !== "INPUT") { e.preventDefault(); toggleInv(false); }
+});
+function renderInvPanel() {
+  const inv = S.creative ? creativeSlots() : (S.visitor?.inventory || []);
+  const n = S.creative ? 9 : Math.max(36, inv.length);
+  setText($("#invNote"), S.creative ? "Creative: click a block below to put it in the selected slot" : S.visitor ? "the first row is your hotbar" : "join the world to carry things");
+  setHTML($("#invGrid"), Array.from({ length: n }, (_, i) => slotHTML(inv[i], i, i === S.sel)).join(""));
+  $("#creativeBox").hidden = !S.creative;
+  if (S.creative) renderPalette();
+}
+function renderPalette() {
+  const q = normName($("#palSearch").value || "");
+  const list = Reg.list.filter((b) => b.kind !== K.AIR && b.id !== 0 && (!q || b.key.includes(q)));
+  setHTML($("#palette"), list.map((b) => `<button class="pal" data-block="${b.id}" title="${esc(b.label)}"><img src="${iconURL(b.id, 36)}" alt="${esc(b.label)}"></button>`).join(""));
+}
+$("#palSearch").oninput = renderPalette;
+$("#invGrid").addEventListener("click", (e) => { const s = e.target.closest("[data-slot]"); if (s && +s.dataset.slot < 9) selectSlot(+s.dataset.slot); });
+$("#palette").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-block]"); if (!b) return;
+  creativeSlots(); S.creativeBar[S.sel] = +b.dataset.block; store.set("creativeBar", S.creativeBar);
+  renderHotbar(); renderInvPanel();
+});
+
+// ------------------------------------------------------------------ minimap
+function drawTiles(g, W, H, cx, cz, s) {
+  g.imageSmoothingEnabled = false;
+  const tiles = vox?.tiles; if (!tiles) return 0;
+  let n = 0;
+  const x0 = cx - W / 2 / s, z0 = cz - H / 2 / s, x1 = cx + W / 2 / s, z1 = cz + H / 2 / s;
+  for (const t of tiles.values()) {
+    const bx = t.cx * 16, bz = t.cz * 16;
+    if (bx + 16 < x0 || bx > x1 || bz + 16 < z0 || bz > z1) continue;
+    g.drawImage(t.canvas, Math.floor((bx - cx) * s + W / 2), Math.floor((bz - cz) * s + H / 2), Math.ceil(16 * s), Math.ceil(16 * s)); n++;
+  }
+  return n;
+}
+function marker(g, x, y, yaw, col, r, dpr) {
+  g.save(); g.translate(x, y);
+  if (yaw != null) { g.rotate(Math.atan2(Math.cos(yaw), -Math.sin(yaw)) - Math.PI / 2); g.fillStyle = col; g.beginPath(); g.moveTo(0, -r * 2.1); g.lineTo(r * 0.9, -r * 0.6); g.lineTo(-r * 0.9, -r * 0.6); g.closePath(); g.fill(); g.rotate(0); }
+  g.restore();
+  g.beginPath(); g.arc(x, y, r, 0, 7); g.fillStyle = col; g.fill(); g.lineWidth = 2 * dpr; g.strokeStyle = "#fff"; g.stroke();
+}
+function placesList() { const p = S.mind.places || S.world.places || {}; return Array.isArray(p) ? p.map((x) => ({ name: x.name, x: x.x ?? x[0], y: x.y ?? x[1], z: x.z ?? x[2] })) : Object.entries(p).map(([name, v]) => ({ name, x: Array.isArray(v) ? v[0] : v.x, y: Array.isArray(v) ? v[1] : v.y, z: Array.isArray(v) ? v[2] : v.z })); }
+function drawMarkers(g, W, H, cx, cz, s, dpr, labels) {
+  const P = (x, z) => [(x - cx) * s + W / 2, (z - cz) * s + H / 2];
+  for (const p of placesList()) {
+    if (p.x == null) continue; const [x, y] = P(p.x + 0.5, p.z + 0.5); if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
+    g.fillStyle = "#ffd166"; g.strokeStyle = "#5a3d00"; g.lineWidth = 1.5 * dpr; g.beginPath(); g.arc(x, y - 6 * dpr, 4.5 * dpr, 0, 7); g.fill(); g.stroke();
+    g.beginPath(); g.moveTo(x - 3 * dpr, y - 4 * dpr); g.lineTo(x, y); g.lineTo(x + 3 * dpr, y - 4 * dpr); g.fill();
+    if (labels) { g.font = `600 ${11 * dpr}px system-ui`; g.textAlign = "center"; g.lineWidth = 3 * dpr; g.strokeStyle = "rgba(0,0,0,.7)"; g.strokeText(p.name, x, y - 14 * dpr); g.fillStyle = "#fff"; g.fillText(p.name, x, y - 14 * dpr); }
+  }
+  const ci = vox?.camInfo();
+  if (ci?.me) { const [x, y] = P(ci.me.x, ci.me.z); marker(g, x, y, ci.me.yaw, "#f08a3c", 4.5 * dpr, dpr); }
+  const a = vox?.agentPos() || (S.agent.x != null ? S.agent : null);
+  if (a) { const [x, y] = P(a.x, a.z); marker(g, x, y, S.agent.yaw ?? null, "#1fb3a4", 5 * dpr, dpr); if (labels) { g.font = `700 ${12 * dpr}px system-ui`; g.textAlign = "left"; g.lineWidth = 3 * dpr; g.strokeStyle = "rgba(0,0,0,.7)"; g.strokeText(NAME(), x + 9 * dpr, y + 4 * dpr); g.fillStyle = "#c8fff8"; g.fillText(NAME(), x + 9 * dpr, y + 4 * dpr); } }
+}
+let miniAt = 0;
+function drawMini() {
+  const now = performance.now(); if (now - miniAt < 200) return; miniAt = now;
+  const cv = $("#mini"), dpr = Math.min(2, devicePixelRatio || 1), W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr); if (!W) return;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const g = cv.getContext("2d"); g.fillStyle = "#0e1420"; g.fillRect(0, 0, W, H);
+  const ci = vox?.camInfo(), a = vox?.agentPos() || (S.agent.x != null ? S.agent : null);
+  const c = S.mode === "visit" && ci?.me ? ci.me : a || ci || { x: 0, z: 0 };
+  const s = S.mini.s * dpr;
+  drawTiles(g, W, H, c.x, c.z, s);
+  drawMarkers(g, W, H, c.x, c.z, s, dpr, false);
+  g.fillStyle = "rgba(255,255,255,.85)"; g.font = `700 ${10 * dpr}px system-ui`; g.textAlign = "center"; g.fillText("N", W / 2, 12 * dpr);
+  setText($("#mmCoords"), `${Math.round(c.x)}, ${Math.round(c.z)}`);
+}
+$$("[data-mm]").forEach((b) => b.onclick = () => { const k = b.dataset.mm; if (k === "map") showView("map"); else { S.mini.s = clamp(S.mini.s * (k === "in" ? 1.5 : 1 / 1.5), 0.5, 8); miniAt = 0; drawMini(); } });
+setInterval(() => { if (S.view === "home" && !document.hidden) drawMini(); }, 250);
+
+// ================================================================== Mind tab
+function percentile(arr, p) { if (!arr.length) return null; const a = [...arr].sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(a.length * p))]; }
+function renderMind() {
+  const m = S.mind, st = m.stats || {}, ds = decList(), lat = ds.map((d) => d.latency).filter((x) => x != null);
+  const obs = ds.map((d) => d.obs_chars).filter(Boolean), L = m.learning || {}, rate = L.rate;
+  const rated = ds.filter((d) => d.rating).length;
+  setHTML($("#mindTiles"), [
+    ["Decisions", big(st.decisions ?? ds.length), st.errors ? `${st.errors} errors` : "since it started"],
+    ["Median latency", msTxt(percentile(lat, 0.5)), `p95 ${msTxt(percentile(lat, 0.95))}`],
+    ["To first action", msTxt(st.action_ms ?? percentile(ds.map((d) => d.ms?.action_ms).filter((x) => x != null), 0.5)), "streamed: it starts acting early"],
+    ["It sees", obs.length ? `${big(obs.reduce((a, b) => a + b, 0) / obs.length)} ch` : "–", "average observation"],
+    ["Judged good", rate != null ? pct(rate) : "–", `${rated} rated by you · ${L.judged_since ?? 0} by itself`],
+  ].map(([k, v, n]) => `<div class="tile"><span>${k}</span><b>${v}</b><small>${esc(n)}</small></div>`).join(""));
+  setText($("#btnPause"), m.paused ? "▶ Resume" : "⏸ Pause"); $("#btnPause").dataset.agent = m.paused ? "resume" : "pause";
+  drawLatency(lat.slice(-120));
+  renderPractice($("#practiceMini"), false);
+  renderDecLog();
+  const notes = m.notes || [];
+  setHTML($("#notes"), notes.length ? notes.map((n) => `<li>${esc(typeof n === "string" ? n : n.text)}</li>`).join("") : '<li class="muted empty">No notes yet. It writes its own when something is worth remembering.</li>');
+  const lessons = m.lessons || [];
+  setHTML($("#lessons"), lessons.length ? lessons.slice().reverse().map((l) => `<div class="lesson ${l.by === "visitor" ? "you" : ""}"><span>${l.by === "visitor" ? "🧍 from you" : "🪞 its own"}${l.t ? ` · ${ago(l.t)}` : ""}</span>${esc(l.text)}</div>`).join("") : '<div class="muted">Nothing learned by looking back yet.</div>');
+  const pl = placesList();
+  setHTML($("#places"), pl.length ? pl.map((p) => `<button class="place" data-goto="${p.x},${p.z}"><span>📍</span><b>${esc(p.name)}</b><small>${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}</small></button>`).join("") : '<div class="muted">It hasn\'t named a place yet.</div>');
+  setHTML($("#goals"), S.goals.length ? S.goals.slice().reverse().slice(0, 12).map((g, i) => `<div class="goal${i === 0 ? " now" : ""}"><b>${esc(g.goal)}</b><small>${i === 0 ? "now" : clock(g.t)}</small></div>`).join("") : `<div class="muted">${esc(m.goal || "No goal yet.")}</div>`);
+}
+$$("[data-agent]").forEach((b) => b.onclick = async () => {
+  const action = b.dataset.agent;
+  try { const r = await api("agent", { action }); toast(typeof r === "string" && r ? r : { pause: "Paused.", resume: "Resumed.", stop: "Stopped its skill.", reflect: "It is looking back…" }[action] || "Done."); } catch (e) { toast(e.message); }
+});
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-goto]"); if (!b) return;
+  const [x, z] = b.dataset.goto.split(",").map(Number); S.mapView.x = x; S.mapView.z = z; S.mapView.init = true; showView("map");
+});
+function decFilterOK(d) {
+  const f = S.decFilter || "";
+  return !f || (f === "said" && d.say) || (f === "failed" && d.outcome?.ok === false) || (f === "rated" && (d.rating || d.correction));
+}
+$$("#decFilter button").forEach((b) => b.onclick = () => { $$("#decFilter button").forEach((x) => x.classList.toggle("on", x === b)); S.decFilter = b.dataset.f; $("#decLog").innerHTML = ""; renderDecLog(); });
+function renderDecLog() {
+  const box = $("#decLog"), list = decList().filter(decFilterOK).reverse().slice(0, 150);
+  if (!list.length) { setHTML(box, '<div class="muted empty">No decisions yet.</div>'); return; }
+  if (box.querySelector(".empty")) box.innerHTML = "";
+  box._h = null;
+  const have = new Map([...box.children].map((el) => [el.dataset.id, el]));
+  let prev = null;
+  for (const d of list) {
+    const id = String(d.id); let el = have.get(id); const sig = decSig(d);
+    if (!el) { el = document.createElement("article"); el.className = "dec"; el.dataset.id = id; }
+    if (el._sig !== sig && !el.contains(document.activeElement) && !el.querySelector("details[open]")) { el._sig = sig; el.innerHTML = decHTML(d); el.classList.toggle("failed", d.outcome?.ok === false); }
+    if (prev ? prev.nextSibling !== el : box.firstChild !== el) prev ? prev.after(el) : box.prepend(el);
+    prev = el; have.delete(id);
+  }
+  for (const el of have.values()) el.remove();
+}
+function drawLatency(vals) {
+  const cv = $("#latChart"), dpr = devicePixelRatio || 1, W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr); if (!W || !H) return;
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
   const g = cv.getContext("2d"); g.clearRect(0, 0, W, H);
-  if (!vals.length) { g.fillStyle = css("--muted"); g.font = `${11 * dpr}px system-ui`; g.fillText("no deeds yet", 4 * dpr, H / 2); return; }
-  const sorted = vals.map(Math.abs).sort((a, b) => a - b), mx = Math.max(0.05, sorted[Math.floor(sorted.length * 0.9)] * 1.6), mid = H / 2, bw = W / Math.max(40, vals.length);
-  g.fillStyle = css("--line"); g.fillRect(0, mid, W, Math.max(1, dpr * 0.6));
-  const good = css("--good"), bad = css("--bad");
-  vals.forEach((v, i) => { const h = Math.max(1, Math.min(1, Math.abs(v) / mx) * (H / 2 - 2 * dpr)); g.fillStyle = v >= 0 ? good : bad; g.globalAlpha = 0.75; g.fillRect(W - (vals.length - i) * bw, v >= 0 ? mid - h : mid, Math.max(1, bw - dpr), h); });
-  g.globalAlpha = 1; g.strokeStyle = css("--accent"); g.lineWidth = 1.6 * dpr; g.beginPath();
-  let ema = 0; vals.forEach((v, i) => { ema = i ? ema * 0.9 + v * 0.1 : v; const x = W - (vals.length - i - 0.5) * bw, y = mid - Math.max(-1, Math.min(1, ema / mx)) * (H / 2 - 2 * dpr); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
-}
-
-function tokHTML(tokens) {
-  if (!tokens || !tokens.length) return '<span class="muted">(silence)</span>';
-  return tokens.map(([s, p]) => `<span class="tk c${p < .05 ? 0 : p < .2 ? 1 : p < .45 ? 2 : p < .75 ? 3 : 4}" title="${(p * 100).toFixed(1)}%">${esc(s)}</span>`).join("");
-}
-function prepend(box, html, max = 120, cls = "") {
-  const d = document.createElement("div"); d.className = "item" + (cls ? " " + cls : ""); d.innerHTML = html; box.prepend(d);
-  while (box.children.length > max) box.lastChild.remove();
-  return d;
-}
-function addThought(e) { prepend($("#thoughts"), `${tokHTML(e.tokens || (e.text ? [[e.text, 0.5]] : null))}<div class="meta">brain v${e.brain ?? "?"} · ${clock(e.t)}</div>`); }
-function deedHTML(e) {
-  const r = +e.reward || 0, rc = r > 0.005 ? "pos" : r < -0.005 ? "neg" : "zero";
-  return `<span class="actk ${e.ok === false ? "fail" : ""}" title="${esc(e.action)}">${MOTOR_ICON[e.action] || "•"} ${esc(e.action || "")}</span><span class="dtext">${esc(e.text || "")}</span><span class="rw ${rc}" title="reward">${fmtR(r)}</span>`;
-}
-function addDeed(e) {
-  S.lastDid = e; S.dids.push(e); if (S.dids.length > 200) S.dids.shift();
-  S.rewards.push(+e.reward || 0); if (S.rewards.length > 200) S.rewards.shift();
-  prepend($("#diary"), deedHTML(e) + `<span class="when">${clock(e.t)}</span>`, 200, "deed");
-  if (S.view === "zen") prepend($("#actionStream"), deedHTML(e), 40, "deed");
-}
-// Zen & the Sprite: only what they say to each other
-function bubble(who, text, cls, note = "") {
-  const d = document.createElement("div");
-  d.className = `bub ${cls}${!text || text === "…" ? " quiet" : ""}`;
-  d.innerHTML = `<b>${esc(who)}</b>${note ? `<span class="note">${esc(note)}</span>` : ""}<div>${!text || text === "…" ? "…" : esc(text)}</div>`;
-  return d;
-}
-function addDialogue(e) {
-  const box = $("#dialogue"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30, add = [];
-  if (e.kind === "answer" || e.question != null) {
-    if (e.by === "you") return;
-    if (e.by === "critique") add.push(bubble("The Sprite", e.text, "sprite", e.question || "about Zen's work"));
-    else add.push(bubble(SYNTH(), e.question, "zen", "asks"), bubble("The Sprite", e.text, "sprite", "answers"));
-  } else if (e.kind === "ada_says" && e.text) add.push(bubble(SYNTH(), e.text, "zen", "to the Sprite"));
-  for (const d of add) box.append(d);
-  while (box.children.length > 300) box.firstChild.remove();
-  if (stick) box.scrollTop = box.scrollHeight;
-}
-function chatLine(c) {
-  const d = document.createElement("div");
-  d.className = `msg ${c.role === "user" ? "user" : "mind"}`;
-  d.innerHTML = c.role === "user" ? esc(c.text) : c.asleep ? `<span class="muted">💤 ${esc(SYNTH())} is asleep.</span>` : tokHTML(c.tokens || [[c.text, .5]]);
-  $("#chat").append(d); while ($("#chat").children.length > 150) $("#chat").firstChild.remove();
-  $("#chat").scrollTop = $("#chat").scrollHeight;
-}
-$$("#adaTabs button").forEach((b) => b.onclick = () => {
-  $$("#adaTabs button").forEach((x) => x.classList.toggle("on", x === b));
-  $$(".below .pane").forEach((p) => p.classList.toggle("on", p.id === `pane-${b.dataset.pane}`));
-});
-async function sayToSynth(text) {
-  S.pendingChat = document.createElement("div"); S.pendingChat.className = "msg mind pending"; S.pendingChat.textContent = "…";
-  $("#chat").append(S.pendingChat);
-  try { await api("chat", { text }); } catch (e) { toast(e.message); if (S.pendingChat) { S.pendingChat.remove(); S.pendingChat = null; } }
-}
-$("#sayForm").onsubmit = async (ev) => {
-  ev.preventDefault();
-  const text = $("#sayText").value.trim(); if (!text) return;
-  $("#sayText").value = "";
-  if (S.mode === "you" && MapView.st.world?.visitor) { try { const r = await api("visitor", { action: "say", text }); if (typeof r === "string" && r) toast(r); } catch (e) { toast(e.message); } }
-  sayToSynth(text);
-  $("#sayText").blur();
-};
-$("#chatForm").onsubmit = (ev) => { ev.preventDefault(); const text = $("#chatText").value.trim(); if (!text) return; $("#chatText").value = ""; sayToSynth(text); };
-
-// ------------------------------------------------------------------ modes: follow, free, visit
-async function setMode(mode) {
-  const was = S.mode;
-  S.mode = mode;
-  $$("#modes button[data-mode]").forEach((x) => x.classList.toggle("on", x.dataset.mode === mode));
-  $("#mode-you").hidden = mode !== "you";
-  if (mode === "you" && !MapView.st.world?.visitor) { try { toast(await api("visitor", { action: "join" })); } catch (e) { toast(e.message); } }
-  if (was === "you" && mode !== "you" && MapView.st.world?.visitor) { try { await api("visitor", { action: "leave" }); } catch { /* fine */ } }
-  if (W3.api) { W3.api.setMode(mode === "you" ? "visit" : mode === "free" ? "free" : "watch"); if (mode === "watch") W3.api.focusOn("synth"); }
-}
-$$("#modes button[data-mode]").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
-$("#uiToggle").onclick = () => $("#stage").classList.toggle("bare");
-$$("[data-mm]").forEach((b) => b.onclick = () => { const k = b.dataset.mm; if (k === "atlas") showView("atlas"); else MapView.zoom(k === "in" ? 1.4 : 1 / 1.4); });
-for (const k of PORTABLE) {
-  const b = document.createElement("button"); b.textContent = GLYPH[k] || "❔"; b.title = `Put down ${k}`; b.setAttribute("aria-label", `Put down ${k}`);
-  b.onclick = async () => {
-    const v = MapView.st.world?.visitor; if (!v) return;
-    const f = [[0, -1], [1, 0], [0, 1], [-1, 0]][(typeof v.facing === "number" ? v.facing : { north: 0, east: 1, south: 2, west: 3 }[v.facing] ?? 2) % 4];
-    try { toast(await api("visitor", { action: "place", kind: k, x: v.x + f[0], y: v.y + f[1] })); } catch (e) { toast(e.message); }
-  };
-  $("#placePalette").append(b);
-}
-function tileWords(x, y) {
-  const t = Chunks.tile(x, y); if (!t) return "";
-  const B = Chunks.st.meta?.BIOMES || [], F = Chunks.st.meta?.FEATURES || [];
-  return [Chunks.label(B[t.biome]), t.water ? ["", "shallow water", "deep water", "a river"][t.water] : "", t.feat ? String(F[t.feat] || "").replace(/_/g, " ") : "", `${(t.h / 10).toFixed(0)} m`].filter(Boolean).join(" · ");
-}
-MapView.st.onClick = ({ x, y }) => {
-  if (W3.api) { W3.api.flyTo(x, y); S.mode = "free"; $$("#modes button[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === "free")); $("#mode-you").hidden = true; }
-  const place = (MapView.st.world?.places || []).find((p) => Math.abs(p.x - x) <= 3 && Math.abs(p.y - y) <= 3);
-  toast([place?.name, tileWords(x, y)].filter(Boolean).join(" · ") || "Not seen yet.");
-};
-Community.st.onSelect = (name) => {
-  if (!W3.api) return;
-  if (S.mode === "free") setMode("watch");
-  W3.api.focusOn(name === "sprite" ? "sprite" : "synth");
-};
-
-// ------------------------------------------------------------------ the 3D world
-let moveBusy = false;
-window.addEventListener("world3d", (ev) => {
-  const api3 = ev.detail;
-  if (!api3) { $("#stage").classList.add("no3d"); return; }
-  let q = "high"; try { q = localStorage.getItem("quality3d") || "high"; } catch { /* fine */ }
-  try { api3.init($("#stage3d"), { quality: q }); } catch (e) { console.warn("3D view failed:", e); $("#stage").classList.add("no3d"); return; }
-  W3.api = api3; W3.ready = true;
-  api3.setName?.(SYNTH());
-  if (MapView.st.world?.zen) api3.full({ ...MapView.st.world, full: true, ents: [...MapView.st.ents.values()] });
-  api3.setMode(S.mode === "you" ? "visit" : S.mode === "free" ? "free" : "watch");
-  api3.pause(S.view !== "world" || document.hidden);
-  api3.onMove = (fx, fy, facing) => {
-    if (moveBusy) return;
-    moveBusy = true;
-    api("visitor", { action: "move", fx, fy, facing }).catch(() => {}).finally(() => { moveBusy = false; });
-  };
-  api3.onAction = async (a) => {
-    try {
-      if (a.type === "take") { const r = await api("visitor", { action: "take", id: a.id }); if (r) toast(r); }
-      else if (a.type === "give") { const r = await api("visitor", { action: "give" }); if (r) toast(r); }
-      else if (a.type === "talk") $("#sayText").focus();
-    } catch (e) { toast(e.message); }
-  };
-  api3.onPick = (info) => {
-    if (info.kind === "synth") { Community.st.selected = SYNTH(); if (S.mode === "free") setMode("watch"); api3.focusOn("synth"); renderAll(); }
-    else if (info.kind === "sprite") { api3.focusOn("sprite"); const s = MapView.st.world?.sprite; toast(`🌟 The Sprite of All Knowing ${s?.state === "listening" ? "is listening" : s?.state === "answering" ? "is answering" : "floats beside " + SYNTH()}.${s?.said ? ` “${s.said}”` : ""}`, 4200); }
-    else if (info.kind === "animal") toast(`${GLYPH[info.animal] || "🐾"} a ${info.animal}`);
-    else if (info.kind === "entity") {
-      const e = MapView.st.ents.get(info.id);
-      if (e) toast(`${GLYPH[e.kind] || ""} ${e.title ? `“${e.title}”` : e.kind}${e.lit ? " (lit)" : ""}${e.contents?.length ? ": " + e.contents.join(", ") : ""}`, 4200);
-    } else if (info.kind === "tile") {
-      const place = (MapView.st.world?.places || []).find((p) => Math.abs(p.x - info.x) <= 4 && Math.abs(p.y - info.y) <= 4);
-      toast([place?.name, tileWords(info.x, info.y)].filter(Boolean).join(" · "));
-    }
-  };
-  document.addEventListener("visibilitychange", () => api3.pause(document.hidden || S.view !== "world"));
-});
-
-// ================================================================== Zen tab
-function renderZen() {
-  const w = MapView.st.world; if (!w?.zen) return;
-  const z = w.zen, m = w.mind || {}, mo = m.motor || {}, me = Community.st.minds[0] || {};
-  setText($("#jName"), SYNTH());
-  const done = S.journey || [];
-  const next = ["first word", "first question to the Sprite", "first sentence", "first painting", "first song", "first sculpture", "found a named place"]
-    .filter((x) => !done.some((ms) => String(ms.title).toLowerCase().includes(x.replace("found a named place", "found"))));
-  setHTML($("#journey"), done.map((ms) => `<div class="ms"><b>${esc(ms.title)}</b><span>${ms.day ? "Day " + ms.day + " · " : ""}${esc(ms.detail || "")}</span></div>`).join("")
-    + next.slice(0, 3).map((x) => `<div class="ms next"><b>Next: ${esc(x)}</b><span>not yet</span></div>`).join(""));
-  const [face, why] = Community.mood(me);
-  setHTML($("#zenBody"), `<div class="body-head"><span class="big-face">${face}</span><div><b>${esc(why)}</b><div class="muted">${esc(me.doing || "")}</div></div></div>
-    <div class="needs">${needsHTML(z.needs)}</div>
-    <dl class="facts" style="margin-top:12px">
-      <dt>Where</dt><dd>${esc(whereWords(z) || "–")} <span class="muted">(${z.x}, ${z.y})</span></dd>
-      <dt>Holds</dt><dd>${z.hands?.length ? z.hands.map((k) => `${GLYPH[k] || ""} ${esc(k)}`).join(", ") : '<span class="muted">nothing</span>'}</dd>
-      <dt>Feels</dt><dd>${(z.feelings || []).map(esc).join(", ") || "–"}${z.wet > 0.4 ? " · wet" : ""}</dd>
-      <dt>Wellbeing</dt><dd>${z.wellbeing != null ? pct(z.wellbeing / (z.wellbeing > 1 ? 100 : 1)) : "–"}</dd>
-      <dt>Air</dt><dd>${Math.round(w.temperature)}°C · ${esc(w.weather)} · ${esc(w.time)}</dd></dl>`);
-  const ent = mo.entropy != null ? (+mo.entropy).toFixed(2) : "–";
-  setHTML($("#motorStats"), `<div class="mstats">
-    <div><small>Last deed</small><b>${MOTOR_ICON[mo.last] || ""} ${esc(mo.last || "–")}</b></div>
-    <div title="How spread out its choices are: high = trying many things, low = sure of itself (max ${Math.log(14).toFixed(2)})"><small>Choice entropy</small><b>${ent}</b></div>
-    <div title="Average reward of its recent deeds, per minute"><small>Reward rate</small><b class="${(mo.reward_rate || 0) >= 0 ? "pos" : "neg"}">${fmtR(mo.reward_rate)}</b></div>
-    <div><small>Deeds</small><b>${big(mo.steps)}</b></div></div>`);
-  spark($("#sparkZen"), S.rewards);
-  const share = mo.share || (() => { const c = {}; for (const d of S.dids) c[d.action] = (c[d.action] || 0) + 1; for (const k in c) c[k] /= S.dids.length; return c; })();
-  const probs = S.lastDid?.probs;
-  setHTML($("#motorShare"), MOTOR.map((k, i) => { const v = share[k] || 0, p = probs?.[i];
-    return `<div class="bar${S.lastDid?.action === k ? " chosen" : ""}"><span>${MOTOR_ICON[k]} ${k}</span><div><i style="width:${Math.round(v * 100)}%"></i>${p != null ? `<u title="its last choice: ${(p * 100).toFixed(1)}% sure" style="left:${Math.min(99, p * 100)}%"></u>` : ""}</div><b>${pct(v)}</b></div>`; }).join("")
-    + (probs ? '<div class="muted" style="margin-top:4px">The thin marks show how likely each word was at its last deed.</div>' : ""));
-  const as = $("#actionStream");
-  if (!as.children.length) for (const d of S.dids.slice(-40)) prepend(as, deedHTML(d), 40, "deed");
-  setHTML($("#zenArt"), Community.artSkills(m.art || (w.skills || {})[SYNTH()] || w.skills?.Zen));
-  const made = [...Community.st.works.values()].sort((a, b) => (b.t || b.id) - (a.t || a.id)).slice(0, 6);
-  setHTML($("#zenMade"), made.length ? made.map((c) => `<span class="chip work" data-work="${c.id}">${Community.KIND_ICON[c.kind] || "✨"} ${esc(c.title || c.kind)}${c.critique?.score != null ? ` · 🌟 ${(+c.critique.score).toFixed(1)}` : ""}</span>`).join("") : '<span class="muted">Nothing yet.</span>');
-}
-
-// ================================================================== health view
-let healthAt = 0;
-async function pollHealth(force) {
-  if (!force && performance.now() - healthAt < 4000) return;
-  healthAt = performance.now();
-  try { renderHealth(await (await fetch("/api/health")).json()); } catch { /* the Hub will be back */ }
-}
-function perfTable(p, keep = 8) {
-  if (!p || !p.timings) return '<div class="muted">No measurements yet.</div>';
-  const rows = Object.entries(p.timings).sort((a, b) => b[1].share - a[1].share).slice(0, keep);
-  return `<div class="muted" style="margin-bottom:6px">CPU ${p.cpu_percent}% of a core${p.gauges?.memory_mb ? ` · ${Math.round(p.gauges.memory_mb)} MB` : ""}</div>`
-    + `<div class="scroll-x"><table class="perf"><tr><th>Activity</th><th>time share</th><th>avg ms</th><th>max ms</th><th>/s</th></tr>`
-    + rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td><span class="share" style="width:${Math.round(Math.min(1, v.share) * 40)}px"></span>${pct(v.share)}</td><td>${v.avg_ms}</td><td>${v.max_ms}</td><td>${v.per_s}</td></tr>`).join("")
-    + `</table></div>` + (p.gauges ? `<div class="muted" style="margin-top:6px">${Object.entries(p.gauges).filter(([k]) => k !== "memory_mb").map(([k, v]) => `${esc(k.replace(/_/g, " "))}: <b>${esc(v)}</b>`).join(" · ")}</div>` : "");
-}
-function dl(rows) { return rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join(""); }
-function renderHealth(h) {
-  setText($("#logPath"), `minds/${SYNTH()}/logs/`);
-  const f = h.findings || [];
-  setHTML($("#findings"), f.length ? f.map((x) => `<div class="finding ${x.level}"><b>${esc(x.where)}</b> · ${esc(x.text)}</div>`).join("") : '<div class="finding ok">Nothing looks wrong right now.</div>');
-  const proc = (n) => { const p = h.processes?.[n]; return p ? `<div class="muted" style="margin-bottom:4px">${p.alive ? "running" : "stopped"} · pid ${p.pid}${p.restarts ? ` · <b style="color:var(--bad)">restarted ${p.restarts}×</b>` : ""}</div>` : ""; };
-  setHTML($("#hAcademy"), proc("academy") + perfTable(h.perf?.academy));
-  setHTML($("#hWorld"), proc("world") + perfTable(h.perf?.world));
-  setHTML($("#hHub"), `<div class="muted" style="margin-bottom:4px">up ${dur(h.uptime_s)}</div>` + perfTable(h.perf?.hub));
-  const g = (h.gpu || [])[0];
-  setHTML($("#hGpu"), g ? dl([["Card", esc(g.name)], ["Busy", `${g.util_percent}%`], ["Memory", `${Math.round(g.mem_used_mb)} / ${Math.round(g.mem_total_mb)} MB`],
-    ["Temperature", `${g.temp_c}°C`], ["Power", `${g.power_w} W`], ["Clock", `${g.sm_clock_mhz} MHz`], ["Driver", esc(g.driver)]]) : '<dd class="muted">No NVIDIA GPU readings (nvidia-smi not found).</dd>');
-  const b = S.clientPerf || h.browser || {};
-  setHTML($("#hBrowser"), b.fps != null ? dl([["Frames per second", `${b.fps} <span class="muted">(capped at 60; worst gap ${b.worst_frame_gap_ms} ms)</span>`],
-    ["3D world", b.chunks_3d >= 0 ? `${b.chunks_3d} chunks, ${b.draw_ms_3d} ms a frame (max ${b.draw_max_ms_3d}), building ≤ ${b.chunk_build_max_ms} ms` : "not on screen"],
-    ["Frozen moments", `${b.longtasks} (${b.longtask_ms} ms total, longest ${b.longtask_max_ms} ms)`],
-    ["Updates", `${b.msgs_per_s}/s, ${b.kb_per_s} KB/s, ${b.msg_avg_ms} ms each (max ${b.msg_max_ms})`],
-    ["Screen", `${b.window} window, scale ${b.dpr}`], ["Script errors", `${b.js_errors}${b.last_error ? ` · ${esc(b.last_error)}` : ""}`]])
-    : '<dd class="muted">Measuring… (the first numbers arrive after 15 seconds)</dd>');
-  const box = $("#hLog"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
-  setText(box, (h.log || []).join("\n") || "No warnings or errors so far.");
-  if (stick) box.scrollTop = box.scrollHeight;
-}
-
-// ================================================================== academy view
-function renderAcademy() {
-  const a = S.academy;
-  if (!a.stages) { setHTML($("#acStatus"), "The Academy is starting…"); return; }
-  const st = $("#acStatus"); st.className = "status " + (a.paused ? "off" : "on");
-  setText(st, a.paused ? `Resting: ${a.pause_reason}` : `Studying (${a.intensity}) · ${big(a.tps)} tokens/s`);
-  setHTML($("#ladder"), a.stages.map((n, i) => `<span class="${i < a.stage ? "done" : i === a.stage ? "now" : ""}">${esc(n)}</span>`).join(""));
-  setText($("#stageBlurb"), a.stage_blurb || "");
-  setHTML($("#acFacts"), dl([
-    ["Brain", `${big(a.params)} parameters (${big(a.trunk_params)} outside the word table) · ${a.layers} layers × ${a.d_model} wide · ${a.seq_len}-token memory${a.growths ? ` · grew ${a.growths}×` : ""}`],
-    ["Device", `${esc(a.device)} · ${esc(a.precision)} · ${esc(a.tokenizer)} tokens`],
-    ["Progress", `step ${big(a.step)} · ${big(a.tokens)} tokens studied`],
-    ["Loss", `${a.loss?.toFixed(3) ?? "–"} training · ${a.val?.toFixed(3) ?? "–"} held-out · ${a.bpb?.toFixed(3) ?? "–"} bits per byte`],
-    ["Concepts", a.concepts?.accuracy != null ? `${pct(a.concepts.accuracy)} of ${a.concepts.n} facts (chance 25%)` : "not tested yet"],
-    ["Published", a.last_publish ? `brain v${a.version}, ${ago(a.last_publish)}` : `brain v${a.version}`],
-    ["Stability", a.skipped ? `${a.skipped} unstable steps skipped` : "no unstable steps"],
-  ]));
-  const mix = a.mix || {}, names = { fineweb: "Web text (FineWeb)", experience: "Its experience (deeds)", journal: "Its journal", concepts: "Concept drills" };
-  setHTML($("#mix"), Object.keys(names).map((k) => `<div class="bar"><span>${names[k]}</span><div><i style="width:${Math.round((mix[k] || 0) * 100)}%"></i></div><b>${pct(mix[k] || 0)}</b></div>`).join("")
-    + `<div class="muted" style="margin-top:4px">${big(a.pools?.journal_added)} journal entries · ${big(a.pools?.experience ?? a.pools?.experience_added)} experience segments · ${a.pools?.facts ?? "–"} facts known to the graph</div>`);
-  const mo = a.motor || {}, n = (v, d = 3) => v == null ? "–" : (+v).toFixed(d);
-  setHTML($("#lifeFacts"), dl([["Policy loss", n(mo.pg_loss)], ["Choice entropy", `${n(mo.entropy, 2)} <span class="muted">(of ${Math.log(14).toFixed(2)} at most)</span>`],
-    ["Mean return", n(mo.return)], ["Windows studied", big(mo.windows)], ["Experience kept", big(a.pools?.experience)]]));
-  const f = a.fineweb || {};
-  setHTML($("#fwFacts"), dl([["Status", esc(f.status) + (f.error ? ` <span class="muted">(${esc(f.error)})</span>` : "")],
-    ["Reading", `<span class="muted">${esc(f.source || "–")}</span>`], ["Documents", big(f.docs)], ["Bytes per token", f.bytes_per_token ?? "–"]]));
-}
-$$("[data-ac]").forEach((b) => b.onclick = async () => {
-  if (b.dataset.ac === "grow" && !confirm(`Add a layer to ${SYNTH()}'s brain? What it knows is kept; it gains room to learn more.`)) return;
-  try { await api(b.dataset.ac); toast("Done."); } catch (e) { toast(e.message); }
-});
-$("#probeForm").onsubmit = async (ev) => {
-  ev.preventDefault();
-  try {
-    const r = await api("probe", { text: $("#probeText").value });
-    const mx = r.next[0]?.[1] || 1;
-    setHTML($("#probeOut"), `<div style="line-height:1.9">${r.tokens.map(([s, b]) => `<span class="tk" style="background:rgba(255,107,122,${Math.min(.7, b / 20)})" title="${b} bits of surprise">${esc(s)}</span>`).join("")}</div>`
-      + `<div class="bars" style="margin-top:6px">${r.next.map(([s, p]) => `<div class="bar"><span class="tk">${esc(JSON.stringify(s).slice(1, -1))}</span><div><i style="width:${p / mx * 100}%"></i></div><b>${(p * 100).toFixed(1)}%</b></div>`).join("")}</div>`);
-  } catch (e) { toast(e.message); }
-};
-let chartTimer;
-function chartsDue() { if (!chartTimer) chartTimer = setTimeout(() => { chartTimer = null; drawCharts(); }, 1500); }
-function series(...keys) {
-  const out = []; for (const p of S.metrics) { const k = keys.find((x) => p[x] != null); if (k) out.push([p.step, p[k]]); }
-  if (out.length > 600) { const k = Math.ceil(out.length / 600); return out.filter((_, i) => i % k === 0 || i === out.length - 1); }
-  return out;
-}
-function chart(cv, lines, opt = {}) {
-  const dpr = devicePixelRatio || 1, W = cv.clientWidth * dpr, H = cv.clientHeight * dpr; if (!W) return;
-  cv.width = W; cv.height = H; const g = cv.getContext("2d"), pts = lines.flatMap((l) => l.data);
-  g.font = `${10 * dpr}px system-ui`; g.fillStyle = css("--muted");
-  if (pts.length < 2) { g.fillText(opt.empty || `waiting for ${SYNTH()} to study…`, 8 * dpr, H / 2); return; }
-  const x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
-  let y0 = opt.min ?? Math.min(...pts.map((p) => p[1])), y1 = opt.max ?? Math.max(...pts.map((p) => p[1]));
-  if (y1 - y0 < 1e-9) { y1 += 1; if (opt.min == null) y0 -= 1; }
-  const L = 42 * dpr, R = 6 * dpr, T = 6 * dpr, B = 16 * dpr, X = (x) => L + (x - x0) / (x1 - x0 || 1) * (W - L - R), Y = (y) => H - B - (y - y0) / (y1 - y0) * (H - T - B);
+  g.font = `${11 * dpr}px system-ui`; g.fillStyle = css("--muted");
+  if (vals.length < 2) { g.fillText("Waiting for its first decisions…", 8 * dpr, H / 2); return; }
+  const mx = Math.max(300, percentile(vals, 0.97) * 1.15), L = 44 * dpr, R = 8 * dpr, T = 8 * dpr, B = 18 * dpr;
+  const X = (i) => L + (i / Math.max(1, vals.length - 1)) * (W - L - R), Y = (v) => H - B - (Math.min(v, mx) / mx) * (H - T - B);
   g.strokeStyle = css("--line"); g.lineWidth = 1;
-  for (let i = 0; i <= 3; i++) { const y = y0 + (y1 - y0) * i / 3; g.beginPath(); g.moveTo(L, Y(y)); g.lineTo(W - R, Y(y)); g.stroke();
-    g.fillText(opt.fmt ? opt.fmt(y) : Math.abs(y) >= 100 ? big(y) : y.toFixed(2), 2 * dpr, Y(y) + 3 * dpr); }
-  g.fillText(`step ${big(x1)}`, W - R - 62 * dpr, H - 3 * dpr);
-  if (opt.chance != null) { g.setLineDash([4 * dpr, 4 * dpr]); g.beginPath(); g.moveTo(L, Y(opt.chance)); g.lineTo(W - R, Y(opt.chance)); g.stroke(); g.setLineDash([]); }
-  for (const l of lines) {
-    if (!l.data.length) continue;
-    g.strokeStyle = l.color; g.lineWidth = 1.6 * dpr; g.beginPath();
-    l.data.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))); g.stroke();
-    if (l.dots) { g.fillStyle = l.color; for (const [x, y] of l.data) { g.beginPath(); g.arc(X(x), Y(y), 2.4 * dpr, 0, 7); g.fill(); } }
-  }
+  const step = mx > 2000 ? 1000 : mx > 800 ? 250 : 100;
+  for (let v = 0; v <= mx; v += step) { g.beginPath(); g.moveTo(L, Y(v)); g.lineTo(W - R, Y(v)); g.stroke(); g.fillText(v >= 1000 ? `${v / 1000}s` : `${v}`, 4 * dpr, Y(v) + 4 * dpr); }
+  g.setLineDash([5 * dpr, 4 * dpr]); g.strokeStyle = css("--good"); g.beginPath(); g.moveTo(L, Y(250)); g.lineTo(W - R, Y(250)); g.stroke(); g.setLineDash([]);
+  const med = percentile(vals, 0.5); g.strokeStyle = css("--warm"); g.lineWidth = 1.5 * dpr; g.beginPath(); g.moveTo(L, Y(med)); g.lineTo(W - R, Y(med)); g.stroke();
+  g.strokeStyle = css("--accent"); g.lineWidth = 1.6 * dpr; g.beginPath(); vals.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v))); g.stroke();
+  g.fillStyle = css("--accent"); vals.forEach((v, i) => { g.beginPath(); g.arc(X(i), Y(v), (v > mx ? 3 : 2) * dpr, 0, 7); g.fill(); });
+  g.fillStyle = css("--muted"); g.textAlign = "right"; g.fillText(`median ${msTxt(med)}`, W - R, T + 10 * dpr); g.textAlign = "left";
 }
-function drawCharts() {
-  if (S.view !== "academy") return;
-  const c = (k) => $(`canvas[data-chart=${k}]`), A = css("--accent"), B = css("--warn"), G = css("--good"), P2 = css("--accent-2");
-  chart(c("loss"), [{ data: series("loss_ema"), color: A }, { data: series("val"), color: B, dots: true }]);
-  chart(c("concepts"), [{ data: series("concepts"), color: G, dots: true }], { min: 0, max: 1, chance: .25, fmt: (v) => pct(v) });
-  chart(c("bpb"), [{ data: series("bpb"), color: P2 }]);
-  chart(c("tps"), [{ data: series("tps"), color: A }], { min: 0 });
-  chart(c("policy"), [{ data: series("pg", "policy_loss"), color: P2 }, { data: series("ent", "entropy"), color: G }, { data: series("ret", "return"), color: B }],
-    { empty: "waiting for its first deeds to be studied…" });
-}
-addEventListener("resize", () => drawCharts());
+addEventListener("resize", () => { if (S.view === "mind") renderMind(); if (S.view === "map") drawBigMap(); });
 
-// ================================================================== concepts view
-const REL = { "is a": "What it is", color: "Colors", is: "What it's like", "made of": "What it's made of", "used for": "What it's for", "found in": "Where it is", can: "What it can do" };
-function renderConcepts() {
-  const c = S.concepts || {};
-  const bars = (obj, label) => Object.entries(obj || {}).map(([k, v]) => `<div class="bar"><span>${esc(label(k))}</span><div><i style="width:${Math.round(v * 100)}%;background:${v > .5 ? "var(--good)" : v > .3 ? "var(--accent)" : "var(--warn)"}"></i></div><b>${pct(v)}</b></div>`).join("");
-  setHTML($("#byRel"), bars(c.by_relation, (k) => REL[k] || k) || '<div class="muted">Not tested yet.</div>');
-  setHTML($("#bySrc"), bars(c.by_source, (k) => k === "built-in" ? "Facts of the world" : k === "oracle" ? "Told by the Sprite" : k) || '<div class="muted">Not tested yet.</div>');
-  const filter = $("#factFilter").value, term = $("#factSearch").value.toLowerCase();
-  const rows = (c.results || []).filter((r) => (filter === "all" || (filter === "wrong" && !r.ok) || (filter === "right" && r.ok)) && (!term || `${r.s} ${r.r} ${r.o}`.includes(term)));
-  setHTML($("#factRows"), rows.slice(0, 400).map((r) => `<tr><td class="${r.ok ? "ok" : "no"}">${r.ok ? "✓" : "✗"}</td><td>${esc(r.s)} <span class="muted">${esc(r.r)}</span> ${esc(r.o)}</td><td>${r.ok ? "" : esc(r.chose)}</td><td class="muted">${esc(r.src)}</td></tr>`).join(""));
+// ------------------------------------------------------------------ practice (Mind tab card and Settings)
+const PR_STATE = { off: "Not started", needs_tools: "Needs its training tools", installing: "Installing the training tools…", ready: "Ready", preparing: "Preparing examples…", training: "Practising…", exporting: "Saving the new adapter…", error: "Something went wrong", done: "Done" };
+function renderPractice(el, full) {
+  const pr = S.model.practice || {}, L = S.mind.learning || {}, cnt = L.counts || {};
+  const state = pr.state || "off", busy = ["preparing", "training", "exporting", "installing"].includes(state);
+  const ex = pr.examples ?? cnt.examples, good = pr.good ?? cnt.good ?? L.good, bad = pr.bad ?? cnt.bad ?? L.bad;
+  const ads = pr.adapters || [], active = pr.active ?? S.model.adapter ?? ads.find((a) => a.active)?.name ?? null;
+  const prog = clamp(+pr.progress || (pr.steps ? (pr.step || 0) / pr.steps : 0), 0, 1);
+  const html = `<div class="row"><h2 style="margin:0">🎓 Practice</h2><span class="badge st-${esc(state)}">${esc(PR_STATE[state] || state)}</span></div>
+    <p class="muted pr-line">Teaches its model from its own best decisions and your feedback; runs on the GPU while it rests.</p>
+    <div class="pr-counts"><div><b>${ex ?? "–"}</b><span>examples</span></div><div><b>${good ?? "–"}</b><span>👍 good</span></div><div><b>${bad ?? "–"}</b><span>👎 poor</span></div>${full && L.practices != null ? `<div><b>${L.practices}</b><span>practices</span></div>` : ""}</div>
+    ${L.need && !busy ? `<div class="pr-need">⏳ ${esc(L.need)}</div>` : ""}
+    ${pr.detail || pr.error ? `<div class="pr-detail ${state === "error" ? "bad" : ""}">${esc(pr.error || pr.detail)}</div>` : ""}
+    ${busy ? `<div class="pr-prog"><div class="meter big"><i style="width:${Math.round(prog * 100)}%"></i></div>
+      <div class="muted">${pr.steps ? `step ${pr.step || 0} of ${pr.steps}` : pct(prog)}${pr.loss != null ? ` · loss ${(+pr.loss).toFixed(3)}` : ""}${pr.eta ? ` · about ${dur(pr.eta)} left` : ""}</div></div>` : ""}
+    <div class="row pr-actions">
+      ${state === "needs_tools" ? `<button class="primary" data-practice="install">⬇️ Install training tools</button>` : ""}
+      ${busy && state !== "installing" ? `<button data-practice="stop">⏹ Stop</button>` : ""}
+      ${!busy && state !== "needs_tools" ? `<button class="primary" data-practice="start">▶ Start practice</button>` : ""}
+      <label class="switch"><input type="checkbox" data-practice-auto ${pr.auto ?? S.settings["mind.practice_auto"] ? "checked" : ""}><span></span><span class="sw-text">Practise automatically each night</span></label>
+    </div>
+    ${full || ads.length ? `<h3>Adapters</h3><div class="adapters">
+      <div class="adapter${!active ? " on" : ""}"><div><b>Base model</b><small>as downloaded, no practice</small></div>${!active ? '<span class="badge on">in use</span>' : '<button data-practice="use" data-name="">Use the base model</button>'}</div>
+      ${ads.slice().reverse().slice(0, full ? 20 : 3).map((a) => `<div class="adapter${a.name === active ? " on" : ""}"><div><b>${esc(a.name)}</b><small>${a.created ? ago(a.created) + " · " : ""}${a.examples ?? "?"} examples${a.loss != null ? ` · loss ${(+a.loss).toFixed(3)}` : ""}${a.liked ? ` · ${a.liked} 👍` : ""}${a.corrected ? ` · ${a.corrected} ✏️` : ""}</small></div>${a.name === active ? '<span class="badge on">in use</span>' : `<button data-practice="use" data-name="${esc(a.name)}">Use</button>`}</div>`).join("")}</div>` : ""}
+    ${full && (L.history || []).length ? `<h3>What practice changed</h3><div class="pr-hist">${L.history.slice().reverse().slice(0, 6).map((h) => `<div><b>${esc(h.adapter)}</b> <span class="muted">${h.t ? ago(h.t) : ""} · ${h.examples ?? "?"} examples</span>${h.before != null ? `<span>judged good ${pct(h.before)} → ${h.after != null ? pct(h.after) : "measuring…"}</span>` : ""}${h.rolled_back ? '<span class="bad">rolled back</span>' : ""}</div>`).join("")}</div>` : ""}
+    ${full ? `<details class="pr-adv"><summary>Practice settings</summary><div class="sliders">
+      <label>Examples needed before practising <input type="range" min="10" max="400" step="10" data-set="mind.practice_min"><output></output></label>
+      <label>Steps per practice <input type="range" min="50" max="2000" step="50" data-set="mind.practice_steps"><output></output></label>
+      <label>Adapter rank <select data-set="mind.practice_rank"><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="64">64</option></select><output></output></label>
+      </div></details>` : ""}`;
+  if (el._h === html || el.contains(document.activeElement) && document.activeElement.tagName !== "BUTTON") return;
+  const open = el.querySelector("details[open]");
+  setHTML(el, html);
+  if (open) el.querySelector("details")?.setAttribute("open", "");
+  bindSettings(el); syncSettings();
 }
-$("#factFilter").onchange = renderConcepts; $("#factSearch").oninput = renderConcepts;
-
-// ================================================================== the Sprite
-const gb = (n) => n ? `${(n / 1e9).toFixed(1)} GB` : "";
-function renderSprite() {
-  const o = S.oracle, st = $("#orStatus"), b = o.builtin || {}, builtin = (o.backend || S.settings["oracle.backend"] || "builtin") === "builtin";
-  const setup = builtin && (b.status === "downloading" || b.status === "starting");
-  $("#orMeter").hidden = !setup; $("#orBar").style.width = `${Math.round((b.progress || 0) * 100)}%`;
-  const ok = o.enabled && !!o.active;
-  st.className = "status " + (ok ? "on" : "off");
-  setText(st, !o.enabled ? "The Sprite's mind is switched off: Zen's questions go unanswered."
-    : setup ? `${b.detail || "Getting the Sprite's mind ready"}… ${b.progress ? pct(b.progress) : ""}`
-    : o.error ? o.error
-    : ok ? `${o.active} · ${o.answers ?? o.answered ?? 0} answer${(o.answers ?? o.answered) === 1 ? "" : "s"} given this session` : "The Sprite's mind is getting ready…");
-  $("#orOllamaRow").hidden = builtin;
-  const cat = b.catalog || [], choice = b.choice || S.settings["oracle.builtin_model"];
-  setHTML($("#orModels"), builtin ? cat.map((m) => `<button class="model${m.name === choice ? " on" : ""}" data-model="${esc(m.name)}" aria-pressed="${m.name === choice}">
-      <b>${esc(m.label || m.name)}</b>${m.senses ? '<span class="senses">👁️ 👂 sees and hears</span>' : ""}
-      <small>${gb(m.size)}${m.downloaded ? " · downloaded" : " · downloads when chosen"}</small></button>`).join("") || '<div class="muted">No models listed.</div>'
-    : '<div class="muted">Using a model from Ollama.</div>');
-  if (!builtin) {
-    const sel = $("#orModel"), sig = (o.models || []).map((m) => m.name).join("|") + o.model;
-    if (sel._sig !== sig && document.activeElement !== sel) {
-      sel._sig = sig;
-      sel.innerHTML = (o.models || []).length ? o.models.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("") : "<option value=''>No Ollama models found</option>";
-      sel.value = o.model || "";
-    }
-  }
-}
-document.addEventListener("click", async (ev) => {
-  const b = ev.target.closest("[data-model]"); if (!b) return;
-  try { await api("set", { key: "oracle.builtin_model", value: b.dataset.model }); S.settings["oracle.builtin_model"] = b.dataset.model; if (S.oracle.builtin) S.oracle.builtin.choice = b.dataset.model; renderSprite(); toast("The Sprite will use that model."); }
-  catch (e) { toast(e.message); }
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-practice]"); if (!b) return;
+  const action = b.dataset.practice, body = { action };
+  if (action === "use") body.name = b.dataset.name || null;
+  b.disabled = true;
+  try { const r = await api("practice", body); toast(typeof r === "string" && r ? r : action === "use" ? (body.name ? `Using ${body.name}.` : "Using the base model.") : action === "start" ? "Practice will start." : action === "install" ? "Installing the training tools…" : "Stopping."); }
+  catch (er) { toast(er.message); }
+  b.disabled = false;
 });
-$("#orModel").onchange = (e) => api("set", { key: "oracle.model", value: e.target.value }).catch((er) => toast(er.message));
-$("#btnModels").onclick = async () => { try { S.oracle = await api("models"); renderSprite(); } catch (e) { toast(e.message); } };
-$("#askForm").onsubmit = async (ev) => {
-  ev.preventDefault(); const q = $("#askText").value.trim(); if (!q) return;
-  setHTML($("#askOut"), `<div class="item muted sprite-thinking">🌟 The Sprite is thinking…</div>`);
-  try { const a = await api("oracle_ask", { question: q }); setHTML($("#askOut"), `<div class="item sprite-answer"><b class="t">The Sprite answers</b>${esc(a)}</div>`); $("#askText").value = ""; }
-  catch (e) { setHTML($("#askOut"), `<div class="item">${esc(e.message)}</div>`); }
-};
-function addQA(e) {
-  const who = e.by === "critique" ? "🌟 On Zen's work" : e.by === "you" ? "You asked" : `${esc(SYNTH())} asked`;
-  prepend($("#qa"), `<b class="t">${who}</b>${e.question ? `<i>${esc(e.question)}</i>\n` : ""}${esc(e.text)}<div class="meta">${clock(e.t)}</div>`, 80, e.by === "critique" ? "crit" : "");
+document.addEventListener("change", async (e) => {
+  const c = e.target.closest("[data-practice-auto]"); if (!c) return;
+  try { await api("practice", { action: "auto", value: c.checked }); } catch (er) { toast(er.message); c.checked = !c.checked; }
+});
+
+// ================================================================== Map tab
+function drawBigMap() {
+  if (S.view !== "map") return;
+  const cv = $("#bigMap"), dpr = Math.min(2, devicePixelRatio || 1), W = Math.round(cv.clientWidth * dpr), H = Math.round(cv.clientHeight * dpr); if (!W || !H) return;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const mv = S.mapView;
+  if (!mv.init) { const a = vox?.agentPos() || (S.agent.x != null ? S.agent : null); if (a) { mv.x = a.x; mv.z = a.z; mv.init = true; } }
+  const g = cv.getContext("2d"); g.fillStyle = css("--map-fog") || "#1a2030"; g.fillRect(0, 0, W, H);
+  const s = mv.s * dpr;
+  // a faint grid of chunks for orientation
+  const n = drawTiles(g, W, H, mv.x, mv.z, s);
+  g.strokeStyle = "rgba(255,255,255,.06)"; g.lineWidth = 1;
+  if (s >= 2) { const x0 = Math.floor((mv.x - W / 2 / s) / 16) * 16; for (let x = x0; x < mv.x + W / 2 / s; x += 16) { const px = (x - mv.x) * s + W / 2; g.beginPath(); g.moveTo(px, 0); g.lineTo(px, H); g.stroke(); } const z0 = Math.floor((mv.z - H / 2 / s) / 16) * 16; for (let z = z0; z < mv.z + H / 2 / s; z += 16) { const py = (z - mv.z) * s + H / 2; g.beginPath(); g.moveTo(0, py); g.lineTo(W, py); g.stroke(); } }
+  drawMarkers(g, W, H, mv.x, mv.z, s, dpr, true);
+  if (!vox?.tiles?.size) { g.fillStyle = "#cfd6e4"; g.font = `${13 * dpr}px system-ui`; g.textAlign = "center"; g.fillText("Nothing explored yet: the map fills in as the world loads on Home.", W / 2, H / 2); g.textAlign = "left"; }
+  S.mapTiles = vox?.tiles?.size || 0;
+}
+function renderMapSide() {
+  const tiles = vox?.tiles; let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  if (tiles) for (const t of tiles.values()) { minX = Math.min(minX, t.cx); maxX = Math.max(maxX, t.cx); minZ = Math.min(minZ, t.cz); maxZ = Math.max(maxZ, t.cz); }
+  const a = vox?.agentPos() || S.agent;
+  setHTML($("#mapStats"), [
+    ["Chunks seen", tiles ? big(tiles.size) : "–", tiles?.size ? `${(maxX - minX + 1) * 16} × ${(maxZ - minZ + 1) * 16} blocks` : "load the world on Home"],
+    [NAME(), a?.x != null ? `${Math.round(a.x)}, ${Math.round(a.z)}` : "–", a?.y != null ? `height ${Math.round(a.y)}` : ""],
+    ["Places named", String(placesList().length), ""],
+    ["Zoom", `${S.mapView.s.toFixed(1)} px/block`, ""],
+  ].map(([k, v, n]) => `<div class="tile"><span>${esc(k)}</span><b>${esc(v)}</b><small>${esc(n)}</small></div>`).join(""));
+  const pl = placesList();
+  setHTML($("#mapPlaces"), pl.length ? pl.map((p) => `<button class="place" data-goto="${p.x},${p.z}"><span>📍</span><b>${esc(p.name)}</b><small>${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}</small></button>`).join("") : '<div class="muted">No named places yet.</div>');
+}
+{
+  const cv = $("#bigMap"); let drag = null;
+  cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", (e) => {
+    const r = cv.getBoundingClientRect(), mv = S.mapView;
+    if (drag) { mv.x -= (e.clientX - drag.x) / mv.s; mv.z -= (e.clientY - drag.y) / mv.s; drag = { x: e.clientX, y: e.clientY }; mv.init = true; drawBigMap(); }
+    const wx = mv.x + (e.clientX - r.left - r.width / 2) / mv.s, wz = mv.z + (e.clientY - r.top - r.height / 2) / mv.s, tip = $("#mapTip");
+    tip.hidden = false; tip.style.transform = `translate(${e.clientX - r.left + 12}px, ${e.clientY - r.top + 12}px)`; tip.textContent = `${Math.floor(wx)}, ${Math.floor(wz)}`;
+  });
+  cv.addEventListener("pointerup", () => { drag = null; });
+  cv.addEventListener("pointerleave", () => { $("#mapTip").hidden = true; });
+  cv.addEventListener("wheel", (e) => { e.preventDefault(); S.mapView.s = clamp(S.mapView.s * (e.deltaY > 0 ? 0.85 : 1.18), 0.5, 16); drawBigMap(); renderMapSide(); }, { passive: false });
+  $$("[data-map]").forEach((b) => b.onclick = () => {
+    const k = b.dataset.map, mv = S.mapView;
+    if (k === "in" || k === "out") mv.s = clamp(mv.s * (k === "in" ? 1.4 : 1 / 1.4), 0.5, 16);
+    else { const p = k === "agent" ? vox?.agentPos() || S.agent : vox?.camInfo()?.me || S.visitor; if (p?.x != null) { mv.x = p.x; mv.z = p.z; } else toast(k === "you" ? "You aren't in the world: Visit from Home." : "Not seen yet."); }
+    drawBigMap(); renderMapSide();
+  });
+  setInterval(() => { if (S.view === "map" && !document.hidden) drawBigMap(); }, 1000);
 }
 
 // ================================================================== settings
+function renderSettings() {
+  const m = S.model, st = $("#modelStatus"), busy = m.status === "downloading" || m.status === "starting";
+  st.className = "status " + (m.status === "ready" ? "on" : m.status === "error" ? "bad" : "off");
+  setHTML(st, `${m.status === "ready" ? `<b>${esc(m.label || m.model || "ready")}</b> is ready` : m.status === "error" ? esc(m.error || "error") : esc(m.status ? `${m.status}${m.detail ? ": " + m.detail : ""}` : "…")}
+    ${m.device ? ` <span class="badge dev ${m.device === "cpu" ? "cpu" : "gpu"}">${deviceText(m)}</span>` : ""}${m.gpu?.name ? ` <span class="muted">${esc(m.gpu.name)}${m.gpu.memory ? ` · ${(m.gpu.memory / 1024).toFixed(0)} GB` : ""}</span>` : ""}${m.threads ? ` <span class="muted">· ${m.threads} threads</span>` : ""}`);
+  $("#modelMeter").hidden = !busy; $("#modelBar").style.width = `${Math.round((m.progress || 0) * 100)}%`;
+  const cat = m.catalog || [], choice = m.choice || S.settings["mind.model"];
+  setHTML($("#models"), cat.length ? cat.map((c) => `<button class="model${c.name === choice ? " on" : ""}" data-model="${esc(c.name)}" aria-pressed="${c.name === choice}">
+      <b>${esc(c.label || c.name)}</b>${c.family ? `<span class="fam">${esc(c.family)}</span>` : ""}<small>${c.size ? (c.size / 1e9).toFixed(1) + " GB" : ""}${c.downloaded ? " · downloaded" : " · downloads when chosen"}</small>
+      ${c.name === choice && busy ? `<div class="meter"><i style="width:${Math.round((m.progress || 0) * 100)}%"></i></div>` : ""}</button>`).join("") : '<div class="muted">No models listed.</div>');
+  renderPractice($("#practiceCard"), true);
+}
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-model]"); if (!b) return;
+  try { await api("set", { key: "mind.model", value: b.dataset.model }); S.settings["mind.model"] = b.dataset.model; S.model.choice = b.dataset.model; renderSettings(); toast("It will think with that model."); }
+  catch (e) { toast(e.message); }
+});
 function syncSettings() {
   const s = S.settings;
   for (const el of $$("[data-set]")) {
     const k = el.dataset.set; if (!(k in s) || el === document.activeElement || el._busy) continue;
-    if (el.type === "checkbox") el.checked = !!s[k]; else el.value = s[k];
+    const v = el.dataset.invert ? !s[k] : s[k];
+    if (el.type === "checkbox") el.checked = !!v; else el.value = v;
     const out = el.parentElement.querySelector("output"); if (out) out.textContent = el.type === "range" ? el.value : "";
   }
-  for (const r of $$("input[name=schedule]")) r.checked = r.value === s["schedule.mode"];
-  $("#dayGentle").checked = s["schedule.day_training"] === "gentle";
+  if (vox && s["world.view_chunks"] && !store.get("renderDist", null)) vox.setRenderDistance(+s["world.view_chunks"]);
 }
-for (const el of $$("[data-set]")) {
-  el.addEventListener("input", () => { const o = el.parentElement.querySelector("output"); if (o && el.type === "range") o.textContent = el.value; el._busy = 1; });
-  el.addEventListener("change", async () => {
-    const v = el.type === "checkbox" ? el.checked : el.type === "range" ? parseFloat(el.value) : el.value;
-    try { await api("set", { key: el.dataset.set, value: v }); S.settings[el.dataset.set] = v; syncSettings(); } catch (e) { toast(e.message); }
-    setTimeout(() => delete el._busy, 500);
-  });
+function bindSettings(root = document) {
+  for (const el of $$("[data-set]", root)) {
+    if (el._bound) continue; el._bound = true;
+    el.addEventListener("input", () => { const o = el.parentElement.querySelector("output"); if (o && el.type === "range") o.textContent = el.value; el._busy = 1; });
+    el.addEventListener("change", async () => {
+      const key = el.dataset.set;
+      let v = el.type === "checkbox" ? el.checked : el.type === "range" ? parseFloat(el.value) : /^\d+$/.test(el.value) ? +el.value : el.value;
+      if (el.dataset.invert) v = !v;
+      try { await api("set", { key, value: v }); S.settings[key] = v; if (key === "world.view_chunks") { vox?.setRenderDistance(v); store.set("renderDist", null); } syncSettings(); }
+      catch (e) { toast(e.message); }
+      setTimeout(() => delete el._busy, 500);
+    });
+  }
 }
-for (const r of $$("input[name=schedule]")) r.onchange = () => api("set", { key: "schedule.mode", value: r.value }).then(() => toast("Schedule changed.")).catch((e) => toast(e.message));
-$("#dayGentle").onchange = (e) => api("set", { key: "schedule.day_training", value: e.target.checked ? "gentle" : "pause" }).catch((er) => toast(er.message));
-try { $("#quality3d").value = localStorage.getItem("quality3d") || "high"; $("#themeSel").value = localStorage.getItem("theme") || ""; } catch { /* fine */ }
-$("#quality3d").onchange = (e) => { try { localStorage.setItem("quality3d", e.target.value); } catch { /* fine */ } if (W3.api) W3.api.setQuality(e.target.value); toast(`3D quality: ${e.target.value}.`); };
-$("#themeSel").onchange = (e) => {
-  const v = e.target.value; try { localStorage.setItem("theme", v); } catch { /* fine */ }
-  if (v) document.documentElement.dataset.theme = v; else delete document.documentElement.dataset.theme;
-  drawCharts(); Atlas.st.dirty = true;
-};
+bindSettings();
+$("#creative").checked = S.creative;
+$("#creative").onchange = (e) => { S.creative = e.target.checked; store.set("creative", S.creative); renderHotbar(); if (!$("#invPanel").hidden) renderInvPanel(); toast(S.creative ? "Creative: any block, instant digging." : "Creative off: you carry what you gather."); };
+{
+  const ms = $("#mouseSens"); ms.value = store.get("mouseSens", 1); ms.nextElementSibling.textContent = ms.value;
+  ms.oninput = () => { ms.nextElementSibling.textContent = ms.value; store.set("mouseSens", +ms.value); vox?.setSensitivity(+ms.value); };
+}
+$("#themeSel").value = store.get("theme", "");
+$("#themeSel").onchange = (e) => { const v = e.target.value; store.set("theme", v); if (v) document.documentElement.dataset.theme = v; else delete document.documentElement.dataset.theme; renderAll(); };
 
-connect();
+// ================================================================== health
+let healthAt = 0;
+async function pollHealth(force) {
+  if (!force && performance.now() - healthAt < 4000) return; healthAt = performance.now();
+  try { renderHealth(await (await fetch("/api/health")).json()); } catch { /* back soon */ }
+}
+function perfTable(p, keep = 8) {
+  if (!p || !p.timings) return '<div class="muted">No measurements yet.</div>';
+  const rows = Object.entries(p.timings).sort((a, b) => b[1].share - a[1].share).slice(0, keep);
+  return `<div class="muted" style="margin-bottom:6px">CPU ${p.cpu_percent ?? "–"}% of a core${p.gauges?.memory_mb ? ` · ${Math.round(p.gauges.memory_mb)} MB` : ""}</div>`
+    + `<div class="scroll-x"><table class="perf"><tr><th>Activity</th><th>share</th><th>avg ms</th><th>max ms</th><th>/s</th></tr>`
+    + rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td><span class="share" style="width:${Math.round(Math.min(1, v.share) * 40)}px"></span>${pct(v.share)}</td><td>${v.avg_ms}</td><td>${v.max_ms}</td><td>${v.per_s}</td></tr>`).join("")
+    + `</table></div>` + (p.gauges ? `<div class="muted" style="margin-top:6px">${Object.entries(p.gauges).filter(([k]) => k !== "memory_mb").map(([k, v]) => `${esc(k.replace(/_/g, " "))}: <b>${esc(v)}</b>`).join(" · ")}</div>` : "");
+}
+const dl = (rows) => rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+const PROC_ICON = { hub: "🧭", world: "🌍", model: "🧩", mind: "🧠", practice: "🎓" };
+function renderHealth(h) {
+  setText($("#logPath"), `minds/${NAME()}/logs/`);
+  const f = h.findings || [];
+  setHTML($("#findings"), f.length ? f.map((x) => `<div class="finding ${esc(x.level)}"><b>${esc(x.where)}</b> · ${esc(x.text)}</div>`).join("") : '<div class="finding ok">Nothing looks wrong right now.</div>');
+  const names = [...new Set([...Object.keys(h.processes || {}), ...Object.keys(h.perf || {})])];
+  setHTML($("#hProcs"), names.map((n) => { const p = h.processes?.[n];
+    return `<div class="card"><h2>${PROC_ICON[n] || "⚙️"} ${esc(label(n))}</h2>${p ? `<div class="muted" style="margin-bottom:4px">${p.alive ? "running" : "stopped"}${p.pid ? ` · pid ${p.pid}` : ""}${p.restarts ? ` · <b class="bad">restarted ${p.restarts}×</b>` : ""}</div>` : n === "hub" && h.uptime_s ? `<div class="muted">up ${dur(h.uptime_s)}</div>` : ""}${perfTable(h.perf?.[n])}</div>`; }).join(""));
+  const g = (h.gpu || [])[0];
+  setHTML($("#hGpu"), g ? dl([["Card", esc(g.name)], ["Busy", `${g.util_percent}%`], ["Memory", `${Math.round(g.mem_used_mb)} / ${Math.round(g.mem_total_mb)} MB`], ["Temperature", `${g.temp_c}°C`], ["Power", `${g.power_w} W`], ["Driver", esc(g.driver)]]) : '<dd class="muted">No GPU readings.</dd>');
+  const v = vox ? vox.stats() : null, b = S.clientPerf || {};
+  setHTML($("#hBrowser"), dl([
+    ["Frames per second", v ? `${v.fps} <span class="muted">(capped at 60, ${v.ms} ms a frame, max ${v.frameMax})</span>` : b.fps != null ? String(b.fps) : "–"],
+    ["3D world", v ? `${v.chunks} chunks drawn, ${big(v.triangles)} triangles, ${v.calls} draw calls` : "not running"],
+    ["Chunk meshing", v?.meshCount ? `${v.meshAvg} ms average, ${v.meshMax} ms at most (in a worker)` : "–"],
+    ["Block edit to screen", v?.editLatLast != null ? `${v.editLatLast} ms (max ${v.editLatMax})` : "no edits yet"],
+    ["Frozen moments", b.longtasks != null ? `${b.longtasks} (${b.longtask_ms} ms, longest ${b.longtask_max_ms} ms)` : "measuring…"],
+    ["Updates", b.msgs_per_s != null ? `${b.msgs_per_s}/s, ${b.kb_per_s} KB/s, ${b.msg_avg_ms} ms each` : "measuring…"],
+    ["Screen", `${innerWidth}×${innerHeight}, scale ${devicePixelRatio}`], ["Script errors", `${b.js_errors ?? 0}${b.last_error ? ` · ${esc(b.last_error)}` : ""}`]]));
+  const box = $("#hLog"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  setText(box, (h.log || []).join("\n") || "No warnings or errors so far."); if (stick) box.scrollTop = box.scrollHeight;
+}
 
-// ================================================================== Thoughts and Conversations: everything, whole
-// The Hub keeps every thought, deed and conversation of Zen on disk; these tabs read it a page at a time
-// (newest first) and add new ones as they happen.
+// ================================================================== Thoughts and Conversations: the archives
 const Journal = (() => {
-  const K = {
-    thoughts: { list: "#thList", more: "#thMore", end: "#thEnd", search: "#thSearch" },
-    conversations: { list: "#tkList", more: "#tkMore", end: "#tkEnd", search: "#tkSearch" },
-  };
+  const K2 = { thoughts: { list: "#thList", more: "#thMore", end: "#thEnd", search: "#thSearch" }, conversations: { list: "#tkList", more: "#tkMore", end: "#tkEnd", search: "#tkSearch" } };
   const st = { thoughts: { loaded: false, oldest: null, busy: false, q: "", who: "" }, conversations: { loaded: false, oldest: null, busy: false, q: "", who: "" } };
-  const dayKey = (e) => `Day ${e.day ?? "?"}`;
-  const CHAT_GAP = 600;
-
+  const dayKey = (e) => e.day != null ? `Day ${e.day}` : new Date((e.t || 0) * 1000).toLocaleDateString();
   function place(box, el, e, atTop) {
     el.dataset.day = dayKey(e);
-    if (atTop) {
-      const top = box.firstElementChild;
-      if (top?.classList.contains("arch-day") && top.dataset.day === dayKey(e)) top.after(el);
-      else { const h = document.createElement("div"); h.className = "arch-day"; h.dataset.day = dayKey(e); h.textContent = dayKey(e); box.prepend(h); h.after(el); }
-    } else {
-      const last = box.lastElementChild;
-      if (!last || last.dataset.day !== dayKey(e)) { const h = document.createElement("div"); h.className = "arch-day"; h.dataset.day = dayKey(e); h.textContent = dayKey(e); box.append(h); }
-      box.append(el);
-    }
+    const mk = () => { const h = document.createElement("div"); h.className = "arch-day"; h.dataset.day = dayKey(e); h.textContent = dayKey(e); return h; };
+    if (atTop) { const top = box.firstElementChild; if (top?.classList.contains("arch-day") && top.dataset.day === dayKey(e)) top.after(el); else { const h = mk(); box.prepend(h); h.after(el); } }
+    else { const last = box.lastElementChild; if (!last || last.dataset.day !== dayKey(e)) box.append(mk()); box.append(el); }
   }
   function thoughtEl(e) {
-    const d = document.createElement("article");
-    if (e.kind === "act") {       // a deed: one compact line
-      const r = +e.reward || 0;
-      d.className = `arch-item act${e.ok === false ? " fail" : ""}`;
-      d.innerHTML = `<span class="arr">→</span><b>${MOTOR_ICON[e.action] || ""} ${esc(e.action || "")}</b><span class="atext">${esc(e.text || "")}</span><span class="rw ${r > 0.005 ? "pos" : r < -0.005 ? "neg" : "zero"}">${fmtR(r)}</span><span class="arch-meta">${esc(e.time || "")}</span>`;
-    } else {
-      d.className = "arch-item thought";
-      const shade = $("#thShade").checked && e.tokens?.length;
-      d.innerHTML = `<div class="arch-text">${shade ? tokHTML(e.tokens) : esc(e.text || "") || '<span class="muted">(silence)</span>'}</div>
-        <div class="arch-meta">its own words · ${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)} · brain v${e.brain ?? "?"}</div>`;
-    }
-    d._e = e;
-    return d;
+    const d = document.createElement("article"), ms = typeof e.ms === "object" && e.ms ? e.ms.total_ms ?? e.ms.action_ms : e.ms;
+    d.className = `arch-item thought k-${esc(e.kind || "thought")}`;
+    const act = e.action ? `<div class="arch-act">${skillIcon(e.action)} ${esc(actionText(e.action))}</div>` : "";
+    d.innerHTML = `${e.kind === "reflection" ? '<div class="arch-kind">🪞 Looking back</div>' : ""}<div class="arch-text">${esc(e.text || "") || '<span class="muted">(no words)</span>'}</div>${act}
+      <div class="arch-meta">${e.time ? esc(typeof e.time === "number" ? "" : e.time) + " · " : ""}${clock(e.t)}${ms != null ? ` · ${msTxt(ms)}` : ""}${e.reason ? ` · because ${esc(e.reason)}` : ""}${e.adapter ? ` · 🎓 ${esc(e.adapter)}` : ""}</div>`;
+    d._e = e; return d;
   }
   function lineEl(who, text) {
-    const zen = who === SYNTH(), spr = /sprite/i.test(who), quiet = !text || text === "…";
-    const d = document.createElement("div");
-    d.className = `bub ${zen ? "zen" : who === "you" ? "you" : spr ? "sprite" : "other"}${quiet ? " quiet" : ""}`;
-    d.innerHTML = `<b>${esc(who === "you" ? "You" : spr ? "The Sprite" : who)}</b><div>${quiet ? "…" : esc(text)}</div>`;
-    return d;
+    const me = who === "you", d = document.createElement("div");
+    d.className = `bub ${me ? "you" : who === NAME() || who === "it" ? "zen" : "other"}`;
+    d.innerHTML = `<b>${esc(me ? "You" : who)}</b><div>${esc(text || "…")}</div>`; return d;
   }
   function talkEl(e) {
-    const d = document.createElement("article"); d.className = `arch-item talk with-${esc(e.with || "you")} k-${esc(e.kind || "")}`;
-    const what = e.kind === "question" ? (e.asker === "you" ? "You ask the Sprite" : `${esc(SYNTH())} asks the Sprite`)
-      : e.kind === "critique" ? `🌟 The Sprite on ${esc(SYNTH())}'s work` : e.kind === "said" ? `${esc(SYNTH())} says aloud` : e.with === "you" ? "With you" : `With ${esc(e.with)}`;
-    const about = e.kind === "critique" ? String(e.about || "").replace(/^\(|\)$/g, "") : (e.topic || "").replace(/^(talk|chat) (with|to) \S+ (about )?/i, "").replace(/^about /i, "");
-    d.innerHTML = `<header><b>${what}</b>${about ? `<span class="muted"> · ${esc(about)}</span>` : ""}
-      <span class="arch-meta">${esc(e.time || "")}${e.time ? " · " : ""}${clock(e.t)}</span></header><div class="dialogue"></div>`;
-    const box = d.querySelector(".dialogue");
-    for (const [who, text] of e.lines || []) box.append(lineEl(who, text));
-    d._e = e;
-    return d;
+    const d = document.createElement("article"); d.className = `arch-item talk with-${esc(e.with || "you")}`;
+    const what = e.kind === "said" ? (e.with === "you" ? `${esc(NAME())} to you` : `${esc(NAME())} says aloud`) : e.with === "you" ? "With you" : `With ${esc(e.with)}`;
+    d.innerHTML = `<header><b>${what}</b><span class="arch-meta">${clock(e.t)}</span></header><div class="dialogue"></div>`;
+    const box = d.querySelector(".dialogue"); for (const [who, text] of e.lines || []) box.append(lineEl(who, text));
+    d._e = e; return d;
   }
   const make = (kind, e) => kind === "thoughts" ? thoughtEl(e) : talkEl(e);
   const matches = (kind, e) => {
     const s = st[kind];
     if (s.who && (kind === "thoughts" ? e.kind || "thought" : e.with) !== s.who) return false;
     if (!s.q) return true;
-    const text = kind === "thoughts" ? `${e.text || ""} ${e.action || ""}` : (e.lines || []).map((l) => l[1] || "").join(" ");
+    const text = kind === "thoughts" ? `${e.text || ""} ${actionText(e.action)}` : (e.lines || []).map((l) => l[1] || "").join(" ");
     return text.toLowerCase().includes(s.q.toLowerCase());
   };
-  function mergeChat(box, e, atTop) {
+  function mergeChat(box, e, atTop) {     // lines with you a few minutes apart read as one conversation
     if (e.with !== "you") return false;
-    const items = [...box.querySelectorAll(".arch-item.talk")];
-    const near = atTop ? items[0] : items.at(-1);
+    const items = [...box.querySelectorAll(".arch-item.talk")], near = atTop ? items[0] : items.at(-1);
     if (!near || near._e.with !== "you") return false;
     const gap = atTop ? e.t - near._e.t : (near._e.t0 ?? near._e.t) - e.t;
-    if (gap < 0 || gap > CHAT_GAP || dayKey(near._e) !== dayKey(e)) return false;
+    if (gap < 0 || gap > 600 || dayKey(near._e) !== dayKey(e)) return false;
     const dlg = near.querySelector(".dialogue"), els = (e.lines || []).map(([w, t]) => lineEl(w, t));
     if (atTop) { dlg.append(...els); near._e = { ...near._e, t: e.t, lines: [...near._e.lines, ...e.lines] }; }
     else { dlg.prepend(...els); near._e = { ...near._e, t0: e.t, lines: [...e.lines, ...near._e.lines] }; }
     return true;
   }
-  function add(kind, e, atTop) {
-    const box = $(K[kind].list);
-    if (kind === "conversations" && mergeChat(box, e, atTop)) return;
-    place(box, make(kind, e), e, atTop);
-  }
+  function add(kind, e, atTop) { const box = $(K2[kind].list); if (kind === "conversations" && mergeChat(box, e, atTop)) return; place(box, make(kind, e), e, atTop); }
   async function load(kind, reset) {
-    const s = st[kind], k = K[kind];
-    if (s.busy) return;
-    s.busy = true;
+    const s = st[kind], k = K2[kind]; if (s.busy) return; s.busy = true;
     if (reset) { $(k.list).innerHTML = ""; s.oldest = null; }
-    const p = new URLSearchParams({ limit: kind === "thoughts" ? 150 : 40 });
-    if (s.oldest != null) p.set("before", s.oldest);
-    if (s.q) p.set("q", s.q);
-    if (s.who) p.set("who", s.who);
+    const p = new URLSearchParams({ limit: kind === "thoughts" ? 120 : 40 });
+    if (s.oldest != null) p.set("before", s.oldest); if (s.q) p.set("q", s.q); if (s.who) p.set("who", s.who);
     try {
       const r = await fetch(`/api/archive/${kind}?${p}`).then((x) => x.json());
       for (const e of r.items || []) { add(kind, e, false); s.oldest = e.t; }
       $(k.more).hidden = !r.more;
       const n = $(k.list).querySelectorAll(".arch-item").length;
-      setText($(k.end), r.more ? "" : n ? `That's all of them${s.q ? ` with “${s.q}”` : ""}.` :
-        s.q ? `None with “${s.q}”.` : kind === "thoughts" ? (s.who === "thought" ? `No words of its own yet: while its brain is new, ${SYNTH()}'s monologue is mostly silence.` : `Nothing yet. ${SYNTH()}'s thoughts start once it is awake.`) : `No conversations yet.`);
+      setText($(k.end), r.more ? "" : n ? `That's all of them${s.q ? ` with “${s.q}”` : ""}.` : s.q ? `None with “${s.q}”.` : kind === "thoughts" ? "No thoughts yet." : "No conversations yet.");
       s.loaded = true;
     } catch (err) { setText($(k.end), `Couldn't load: ${err.message}`); }
     s.busy = false;
@@ -774,35 +879,53 @@ const Journal = (() => {
   function open(kind) { if (!st[kind].loaded) load(kind, true); }
   function live(kind, ev) {
     if (!st[kind].loaded) return;
-    let e;
-    const ws = MapView.st.world || {}, when = { t: ev.t || Date.now() / 1000, day: ws.day, time: ws.time };
-    if (kind === "thoughts") {
-      if (ev.kind === "did") e = { ...when, kind: "act", action: ev.action, text: ev.text, ok: ev.ok, reward: ev.reward };
-      else { if (!(ev.text || "").trim()) return; e = { ...when, kind: "thought", text: ev.text, tokens: ev.tokens, brain: ev.brain }; }
-    } else if (ev.kind === "chat") {
-      if (ev.asleep || !(ev.user || ev.text)) return;
-      e = { ...when, with: "you", kind: "chat", lines: [["you", ev.user || ""], [SYNTH(), ev.text || ""]] };
-    } else if (ev.kind === "answer") {
-      e = ev.by === "critique" ? { ...when, with: "sprite", kind: "critique", about: ev.question || "", lines: [["Sprite", ev.text || ""]] }
-        : { ...when, with: "sprite", kind: "question", asker: ev.by === "you" ? "you" : SYNTH(), lines: [[ev.by === "you" ? "you" : SYNTH(), ev.question || ""], ["Sprite", ev.text || ""]] };
-    } else if (ev.kind === "ada_says" && ev.to !== "sprite" && (ev.text || "").trim()) {
-      e = { ...when, with: "world", kind: "said", lines: [[SYNTH(), ev.text]] };
-    } else return;
+    const e = { day: S.world.day, ...ev, t: ev.t || Date.now() / 1000 };
+    if (kind === "thoughts" && !(e.text || "").trim() && !e.action) return;
     if (!matches(kind, e)) return;
-    const box = $(K[kind].list);
-    const stick = box.getBoundingClientRect().top > -40;
     add(kind, e, true);
-    if (!stick) window.scrollBy(0, box.firstElementChild?.nextElementSibling?.offsetHeight || 0);
-    while (kind === "thoughts" && box.children.length > 1500) box.lastChild.remove();
+    const box = $(K2[kind].list); while (box.children.length > 1500) box.lastChild.remove();
   }
-  const timers = {};
   for (const kind of ["thoughts", "conversations"]) {
-    const k = K[kind];
+    const k = K2[kind]; let tmr;
     $(k.more).onclick = () => load(kind, false);
-    $(k.search).oninput = (ev) => { clearTimeout(timers[kind]); timers[kind] = setTimeout(() => { st[kind].q = ev.target.value.trim(); load(kind, true); }, 300); };
+    $(k.search).oninput = (ev) => { clearTimeout(tmr); tmr = setTimeout(() => { st[kind].q = ev.target.value.trim(); load(kind, true); }, 300); };
   }
-  $("#thShade").onchange = () => { for (const el of $$("#thList .arch-item.thought")) { const n = thoughtEl(el._e); n.dataset.day = el.dataset.day; el.replaceWith(n); } };
   $$("#thKind button").forEach((b) => b.onclick = () => { $$("#thKind button").forEach((x) => x.classList.toggle("on", x === b)); st.thoughts.who = b.dataset.kind; load("thoughts", true); });
   $$("#tkWho button").forEach((b) => b.onclick = () => { $$("#tkWho button").forEach((x) => x.classList.toggle("on", x === b)); st.conversations.who = b.dataset.who; load("conversations", true); });
-  return { open, live, load, st };
+  return { open, live, load };
 })();
+
+// ================================================================== the 3D world
+async function startWorld() {
+  try {
+    const [blocks, items] = await Promise.all([fetch("/api/blocks").then((r) => r.json()), fetch("/api/items").then((r) => r.ok ? r.json() : null).catch(() => null)]);
+    loadRegistry(blocks, items); buildTextures(); clearIcons(); $("#agentInv")._h = null;
+    renderAgentInv(true); renderHotbar();
+  } catch (e) { console.error(e); banner("Couldn't load the block registry: " + e.message); return; }
+  try {
+    const mod = await import("./vox.js");
+    const rd = store.get("renderDist", null) ?? S.settings["world.view_chunks"] ?? 6;
+    vox = await mod.createVox($("#world3d"), {
+      renderDistance: rd,
+      onCommand: voxCommand,
+      onSelect: (i) => selectSlot(i),
+      onStatus: (t) => stageToast(t),
+      onKey: (k) => { if (k === "inventory") toggleInv(true); else if (k === "talk") $("#chatText").focus(); else if (k === "hud") $("#stage").classList.toggle("locked", vox.isLocked()); },
+    });
+    window.vox = vox;
+    vox.setSensitivity(store.get("mouseSens", 1));
+    for (const w of S.voxBacklog || []) vox.update(w);
+    S.voxBacklog = null;
+    vox.update({ agent: { ...S.agent, thinking: S.mind.thinking }, visitor: S.visitor, time: S.world.time, day: S.world.day, weather: S.world.weather });
+    vox.pause(S.view !== "home" || document.hidden);
+    renderHotbar();
+  } catch (e) {
+    console.warn("3D view unavailable:", e);
+    $("#stage").classList.add("no3d"); setHTML($("#world3d"), `<div class="no3d-note">The 3D world needs WebGL 2, which this browser can't provide here (${esc(e.message)}). The panels still work.</div>`);
+  }
+}
+window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (v && $(`#view-${v}`)) showView(v); });
+{ const v = location.hash.slice(1); if (v && $(`#view-${v}`)) showView(v); }
+connect();
+startWorld();
+window.__app = { S, api, showView, setMode, toggleInv };

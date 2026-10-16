@@ -263,9 +263,9 @@ function meshChunk(c) {
     if (id === 0) continue;
     const kind = kindOf(id);
     if (kind === K.OPAQUE || kind === K.CUTOUT || kind === K.TRANSLUCENT) cube(x, y, z, p, id, kind);
-    else if (kind === K.LIQUID) liquid(x, y, z, p, id, c.b[x + (z << 4) + (y << 8)] >> 12);
+    else if (kind === K.LIQUID) liquid(x, y, z, p, id, T.lvl[id] || (c.b[x + (z << 4) + (y << 8)] >> 12));
     else if (kind === K.CROSS) cross(x, y, z, p, id);
-    else if (kind === K.TORCH) box(x, y, z, p, id, 7 / 16, 0, 7 / 16, 9 / 16, 10 / 16, 9 / 16, 1);
+    else if (kind === K.TORCH) { if (T.layer[id * 3 + 1] && T.h[id] < 1) box(x, y, z, p, id, 5 / 16, 0, 5 / 16, 11 / 16, T.h[id], 11 / 16, 1); else box(x, y, z, p, id, 7 / 16, 0, 7 / 16, 9 / 16, 10 / 16, 9 / 16, 1); }
     else if (kind === K.POST) box(x, y, z, p, id, 6 / 16, 0, 6 / 16, 10 / 16, 1, 10 / 16, 0);
     else if (kind === K.FLAT) box(x, y, z, p, id, 0, 0, 0, 1, 1 / 16, 1, 1);
     else if (kind === K.SLAB) box(x, y, z, p, id, 0, 0, 0, 1, T.h[id], 1, 0);

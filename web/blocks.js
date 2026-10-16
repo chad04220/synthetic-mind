@@ -44,7 +44,13 @@ const RX = {
 function classify(b) {
   const n = b.key;
   if (b.id === 0 || n === "air" || n === "void" || n === "cave_air") return K.AIR;
-  if (b.shape) return { cube: b.transparent ? (RX.translucent.test(n) ? K.TRANSLUCENT : K.CUTOUT) : K.OPAQUE, cross: K.CROSS, torch: K.TORCH, post: K.POST, flat: K.FLAT, slab: K.SLAB }[b.shape] ?? K.OPAQUE;
+  if (b.shape) {
+    const cube = b.transparent ? (RX.translucent.test(n) ? K.TRANSLUCENT : K.CUTOUT) : K.OPAQUE;
+    const k = { none: K.AIR, cube, liquid: K.LIQUID, cross: K.CROSS, crop: K.CROSS, fire: K.CROSS, torch: K.TORCH, lever: K.TORCH,
+      post: K.POST, fence: K.POST, flat: K.FLAT, wire: K.FLAT, plate: K.FLAT, button: K.FLAT, slab: K.SLAB, bed: K.SLAB,
+      door: K.CUTOUT, ladder: K.CUTOUT, pane: K.CUTOUT }[b.shape];
+    if (k != null) return k === K.SLAB && b.height != null && +b.height >= 1 ? cube : k;
+  }
   if (b.liquid || n === "steam") return n === "steam" ? K.CROSS : K.LIQUID;
   if (RX.torch.test(n)) return K.TORCH;
   if (RX.flat.test(n)) return K.FLAT;
@@ -85,7 +91,7 @@ export function loadRegistry(json, itemsJson) {
     b.emit = clamp(+b.light || 0, 0, 15) | 0;
     b.isLava = b.kind === K.LIQUID && /lava/.test(b.key);
     b.usable = b.use != null ? !!b.use : RX.usable.test(b.key);
-    b.h = b.kind === K.SLAB ? slabHeight(b) : 1;
+    b.h = b.kind === K.SLAB ? slabHeight(b) : b.kind === K.TORCH && /lantern/.test(b.key) ? 0.5625 : 1;
     b.label = label(b.label || b.name || b.key);
     Reg.list.push(b); Reg.byId.set(b.id, b); Reg.byName.set(b.key, b);
   }
@@ -122,9 +128,9 @@ export function itemName(ref) {
 export function workerTables() {
   const n = Reg.maxId + 1;
   const t = { n, kind: new Uint8Array(n), opaque: new Uint8Array(n), emit: new Uint8Array(n), layer: new Uint16Array(n * 3),
-    h: new Float32Array(n).fill(1), atten: new Uint8Array(n), cullSame: new Uint8Array(n), lava: new Uint8Array(n), sway: new Uint8Array(n) };
+    h: new Float32Array(n).fill(1), atten: new Uint8Array(n), cullSame: new Uint8Array(n), lava: new Uint8Array(n), sway: new Uint8Array(n), lvl: new Uint8Array(n) };
   for (const b of Reg.list) {
-    const i = b.id; t.kind[i] = b.kind; t.opaque[i] = b.opaque ? 1 : 0; t.emit[i] = b.emit; t.h[i] = b.h; t.lava[i] = b.isLava ? 1 : 0;
+    const i = b.id; t.lvl[i] = b.kind === K.LIQUID ? clamp(+b.state || 0, 0, 7) : 0; t.kind[i] = b.kind; t.opaque[i] = b.opaque ? 1 : 0; t.emit[i] = b.emit; t.h[i] = b.h; t.lava[i] = b.isLava ? 1 : 0;
     const L = Tex.layerOf.get(b.id) || [0, 0, 0];
     t.layer[i * 3] = L[0]; t.layer[i * 3 + 1] = L[1]; t.layer[i * 3 + 2] = L[2];
     // sky light dims a little through leaves and water, fully through other non-opaque blocks
@@ -308,7 +314,9 @@ const PAT = {
 };
 function patternFor(b, face) {
   const n = b.key;
-  if (b.kind === K.TORCH) return "torch";
+  if (b.kind === K.TORCH) return /lantern/.test(n) ? "lamp" : /lever/.test(n) ? "planks" : "torch";
+  if (/vine/.test(n)) return "leaves";
+  if (/wire/.test(n)) return "plain";
   if (b.kind === K.CROSS) return "cross";
   if (b.kind === K.LIQUID) return b.isLava ? "lava" : "water";
   if (/ladder|scaffold/.test(n)) return "ladder";

@@ -3,8 +3,9 @@
 // creatures, dropped items, and your body when you visit (pointer lock, WASD, dig, place, use).
 //
 // Coordinates are block units: block (x, y, z) fills [x, x+1) × [y, y+1) × [z, z+1); +y is up.
-// Entities: x, y, z are the feet (centre of the bottom of the body). yaw/pitch in radians, Minecraft style:
-// the facing direction is (-sin yaw · cos pitch, -sin pitch, cos yaw · cos pitch); yaw 0 faces +z, pitch > 0 looks down.
+// Entities: x, y, z are the feet (centre of the bottom of the body). yaw/pitch in radians, as ada/vox/body.py (the
+// three.js camera convention): forward = (-sin yaw · cos pitch, sin pitch, -cos yaw · cos pitch); yaw 0 looks north (-z),
+// yaw π/2 west (-x), pitch > 0 looks up.
 import * as THREE from "./vendor/three.module.min.js";
 import { Reg, Tex, K, blockOf, findBlock, breakTime, workerTables, toolInfo, iconURL, normName } from "./blocks.js";
 
@@ -19,7 +20,13 @@ function isTyping() { const a = document.activeElement; return !!a && (a.tagName
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function hash(a, b, c = 0) { let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 982451653)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16; return (h >>> 0) / 4294967296; }
 
-/** Parse the world `time` into a fraction of the day (0 = midnight, 0.25 = sunrise, 0.5 = noon). */
+/** The fraction of the day from midnight (0 = midnight, 0.25 = 06:00 sunrise, 0.5 = noon), from a world snapshot:
+ *  its `clock` ("HH:MM") and `time` (0 = sunrise, as ada/vox/sim.py) when both are there, else whichever there is. */
+export function worldDayFraction(w) {
+  if (typeof w.time === "number" && w.clock != null) return (w.time + 0.25) % 1;
+  if (w.clock != null) return dayFraction(String(w.clock));
+  return dayFraction(w.time);
+}
 export function dayFraction(t) {
   if (t == null) return 0.4;
   if (typeof t === "string") { const m = t.match(/(\d+):(\d+)/); return m ? ((+m[1] + +m[2] / 60) / 24) % 1 : 0.4; }
@@ -50,7 +57,7 @@ void main() {
 const CHUNK_FS = `
 precision highp float; precision highp sampler2DArray;
 uniform sampler2DArray uTex;
-uniform float uDay, uTime, uAlphaTest, uOpacity, uFogNear, uFogFar, uFlash;
+uniform float uDay, uTime, uAlphaTest, uOpacity, uFogNear, uFogFar, uFlash, uMinLight;
 uniform vec3 uSkyTint, uFogColor;
 varying vec3 vUv; varying vec4 vLt; varying float vDist;
 void main() {
@@ -62,7 +69,7 @@ void main() {
   if (tex.a < uAlphaTest) discard;
   float sky = vLt.y * (uDay + uFlash);
   vec3 light = max(vec3(sky) * uSkyTint, vec3(vLt.z) * vec3(1.0, 0.85, 0.62));
-  light = pow(clamp(light, 0.0, 1.2), vec3(1.3)) * 0.95 + 0.045;
+  light = max(pow(clamp(light, 0.0, 1.2), vec3(1.3)) * 0.95 + 0.045, vec3(uMinLight));
   vec3 col = tex.rgb * vLt.x * light;
   float a = tex.a;
   if (fl == 4.0) { col = tex.rgb * (1.05 + 0.1 * sin(uTime * 2.0 + uv.x * 6.0)); a = 1.0; }
@@ -155,15 +162,16 @@ export async function createVox(container, opts = {}) {
     uTex: { value: tex }, uTime: { value: 0 }, uDay: { value: 1 }, uFlash: { value: 0 }, uSkyTint: { value: new THREE.Color(1, 1, 1) },
     uFogColor: { value: new THREE.Color(0.7, 0.8, 0.95) }, uFogNear: { value: 60 }, uFogFar: { value: 120 },
   };
-  const mk = (alphaTest, opacity, extra) => new THREE.ShaderMaterial(Object.assign({
+  const mk = (alphaTest, opacity, extra, minLight = 0) => new THREE.ShaderMaterial(Object.assign({
     vertexShader: CHUNK_VS, fragmentShader: CHUNK_FS,
-    uniforms: { ...U, uAlphaTest: { value: alphaTest }, uOpacity: { value: opacity } },
+    uniforms: { ...U, uAlphaTest: { value: alphaTest }, uOpacity: { value: opacity }, uMinLight: { value: minLight } },
   }, extra));
   S.mat = [
     mk(0.5, 1, {}),
     mk(0.5, 1, { side: THREE.DoubleSide }),
     mk(0.02, 0.74, { transparent: true, depthWrite: false, side: THREE.DoubleSide }),
   ];
+  S.itemMat = mk(0.5, 1, { side: THREE.DoubleSide }, 0.42);   // items, held blocks, the hand: never pitch black
 
   buildSky(); buildWeather(); buildOverlays(); buildLights();
 
@@ -239,30 +247,32 @@ function buildLights() {
 
 // ───────────────────────────────────────────── weather particles
 function buildWeather() {
-  const N = 1400, pos = new Float32Array(N * 6), seed = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) { seed[i * 3] = hash(i, 7) * 48 - 24; seed[i * 3 + 1] = hash(i, 8) * 34; seed[i * 3 + 2] = hash(i, 9) * 48 - 24; }
+  const N = 2600, pos = new Float32Array(N * 3), seed = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) { const r = 1.5 + Math.sqrt(hash(i, 6)) * 22, a = hash(i, 7) * 6.283; seed[i * 3] = Math.cos(a) * r; seed[i * 3 + 1] = hash(i, 8) * 34; seed[i * 3 + 2] = Math.sin(a) * r; }
   const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  S.rain = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xa8c0e0, transparent: true, opacity: 0.5, depthWrite: false }));
+  const rc = document.createElement("canvas"); rc.width = rc.height = 32; const rx = rc.getContext("2d");
+  const grad = rx.createLinearGradient(0, 0, 0, 32); grad.addColorStop(0, "rgba(255,255,255,0)"); grad.addColorStop(1, "rgba(255,255,255,.95)");
+  rx.fillStyle = grad; rx.fillRect(15, 0, 2, 32);
+  S.rain = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xb4c8e6, size: 0.9, map: new THREE.CanvasTexture(rc), transparent: true, opacity: 0.75, depthWrite: false }));
   S.rain.frustumCulled = false; S.rain.visible = false; S.scene.add(S.rain); S.rainSeed = seed;
-  const M = 1200, sp = new Float32Array(M * 3), ss = new Float32Array(M * 3);
-  for (let i = 0; i < M; i++) { ss[i * 3] = hash(i, 17) * 48 - 24; ss[i * 3 + 1] = hash(i, 18) * 30; ss[i * 3 + 2] = hash(i, 19) * 48 - 24; }
+  const M = 2000, sp = new Float32Array(M * 3), ss = new Float32Array(M * 3);
+  for (let i = 0; i < M; i++) { ss[i * 3] = hash(i, 17) * 36 - 18; ss[i * 3 + 1] = hash(i, 18) * 30; ss[i * 3 + 2] = hash(i, 19) * 36 - 18; }
   const sg = new THREE.BufferGeometry(); sg.setAttribute("position", new THREE.BufferAttribute(sp, 3));
-  S.snow = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xffffff, size: 0.13, transparent: true, opacity: 0.9, depthWrite: false }));
+  S.snow = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xffffff, size: 0.16, transparent: true, opacity: 0.95, depthWrite: false }));
   S.snow.frustumCulled = false; S.snow.visible = false; S.scene.add(S.snow); S.snowSeed = ss;
 }
 function updateWeather(dt, t) {
   const cam = S.camera.position, raining = S.rainAmt > 0.02, snowing = S.snowAmt > 0.02;
   S.rain.visible = raining; S.snow.visible = snowing;
   if (raining) {
-    const p = S.rain.geometry.attributes.position.array, sd = S.rainSeed, n = Math.floor((sd.length / 3) * S.rainAmt);
-    for (let i = 0; i < sd.length / 3; i++) {
-      const o = i * 6;
-      if (i >= n) { p[o + 1] = p[o + 4] = -999; continue; }
-      const x = Math.floor(cam.x) + sd[i * 3], z = Math.floor(cam.z) + sd[i * 3 + 2];
-      let y = cam.y + 18 - ((sd[i * 3 + 1] + t * 24) % 34);
-      const ground = surfaceY(Math.floor(x), Math.floor(z));
-      if (y < ground) y = -999;
-      p[o] = x + 0.5; p[o + 1] = y; p[o + 2] = z + 0.5; p[o + 3] = x + 0.5 - 0.05; p[o + 4] = y + 0.7; p[o + 5] = z + 0.5;
+    const p = S.rain.geometry.attributes.position.array, sd = S.rainSeed, total = sd.length / 3, n = Math.floor(total * S.rainAmt);
+    for (let i = 0; i < total; i++) {
+      const o = i * 3;
+      if (i >= n) { p[o + 1] = -999; continue; }
+      const x = Math.floor(cam.x + sd[o]), z = Math.floor(cam.z + sd[o + 2]);
+      let y = cam.y + 18 - ((sd[o + 1] + t * 24) % 34);
+      if (y < surfaceY(x, z)) y = -999;
+      p[o] = x + 0.5; p[o + 1] = y; p[o + 2] = z + 0.5;
     }
     S.rain.geometry.attributes.position.needsUpdate = true;
     S.rain.material.color.setRGB(0.55 + 0.25 * S.daylight, 0.62 + 0.25 * S.daylight, 0.75 + 0.2 * S.daylight);
@@ -377,7 +387,7 @@ function onWorker(ev) {
   const m = ev.data;
   if (m.type === "data") {
     const c = S.chunks.get(m.key); if (!c) return;
-    c.data = m.blocks; c.hmap = m.hmap; c.top = m.top; c.depth = m.depth; c.maxY = m.maxY; c.state = "ready";
+    c.data = m.blocks; c.hmap = m.hmap; c.top = m.top; c.depth = m.depth; c.maxY = m.maxY; c.state = "ready"; c.meshReq = false;
     if (c.edits.length) { const list = c.edits; c.edits = []; applyEditsLocal(list, true); }
     drawTile(c);
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) { const n = S.chunks.get(kk(c.cx + dx, c.cz + dz)); if (n && n.data) tryMesh(n); }
@@ -525,7 +535,7 @@ function itemObject(ref, size = 0.25) {
   const b = findBlock(ref);
   const o = new THREE.Group();
   if (b && b.kind !== K.AIR) {
-    const m = new THREE.Mesh(blockGeometry(b.id), S.mat[1]); m.scale.setScalar(size); m.position.y = -size / 2; o.add(m); o.userData.block = b.id;
+    const m = new THREE.Mesh(blockGeometry(b.id), S.itemMat); m.scale.setScalar(size); m.position.y = -size / 2; o.add(m); o.userData.block = b.id;
   } else {
     const t = toolInfo(typeof ref === "object" ? ref.item ?? ref.name : ref);
     if (t) {
@@ -660,6 +670,7 @@ function upsertEntity(e) {
   const d = rec.data;
   rec.tgt.set(+d.x || 0, +d.y || 0, +d.z || 0);
   if (rec.pos.distanceToSquared(rec.tgt) > 400) rec.pos.copy(rec.tgt);   // a jump, not a walk
+  if (!("said" in e) && e.kind && e.x != null) rec.said = "";
   if ("said" in e) {
     const s = String(e.said ?? "").trim();
     if (s && s !== rec.said) { rec.said = s; rec.saidAt = performance.now(); } else if (!s) rec.said = "";
@@ -684,7 +695,7 @@ function animateEntities(dt, t) {
     const sp = before.distanceTo(rec.pos) / Math.max(dt, 1e-3);
     rec.speed = lerp(rec.speed, Math.min(sp, 6), damp(8, dt));
     const yaw = +d.yaw || 0; rec.yaw += wrapAngle(yaw - rec.yaw) * damp(10, dt);
-    o.position.copy(rec.pos); o.rotation.y = -rec.yaw;
+    o.position.copy(rec.pos); o.rotation.y = rec.yaw + Math.PI;
     if (o.userData.spin) { o.rotation.y = t * 1.6 + (typeof rec.id === "number" ? rec.id : 0); o.position.y += 0.2 + Math.sin(t * 2.4 + rec.pos.x) * 0.06; continue; }
     if (o.userData.fly) o.position.y += 0.15 + Math.sin(t * 3 + rec.pos.x) * 0.1;
     const anim = normName(d.anim || "");
@@ -697,13 +708,13 @@ function animateEntities(dt, t) {
         p.legL.rotation.x = lerp(p.legL.rotation.x, sw, 0.5); p.legR.rotation.x = lerp(p.legR.rotation.x, -sw, 0.5);
         let ar = -sw * 0.8, al = sw * 0.8;
         if (/mine|dig|attack|chop|break|hit/.test(anim)) { ar = -1.2 - Math.abs(Math.sin(t * 9)) * 1.1; }
-        else if (/place|use|build|give|plant/.test(anim)) { rec.swing = (rec.swing + dt * 4) % 1; ar = -0.6 - Math.sin(rec.swing * Math.PI) * 0.9; }
+        else if (/place|use|build|give|plant|till/.test(anim)) { rec.swing = (rec.swing + dt * 4) % 1; ar = -0.6 - Math.sin(rec.swing * Math.PI) * 0.9; }
         else if (/eat|drink/.test(anim)) { ar = -1.7 + Math.sin(t * 10) * 0.15; }
         else if (/craft|smelt/.test(anim)) { ar = -0.9 + Math.sin(t * 7) * 0.3; al = -0.9 + Math.cos(t * 7) * 0.3; }
         else if (rec.data.held && !walking) ar = -0.25;
         p.armR.rotation.x = lerp(p.armR.rotation.x, ar, damp(18, dt)); p.armL.rotation.x = lerp(p.armL.rotation.x, al, damp(18, dt));
         p.armL.rotation.z = 0.05; p.armR.rotation.z = -0.05;
-        const pitch = clamp(+d.pitch || 0, -1, 1); p.head.rotation.x = lerp(p.head.rotation.x, pitch * 0.8, damp(8, dt));
+        const pitch = clamp(+d.pitch || 0, -1, 1); p.head.rotation.x = lerp(p.head.rotation.x, -pitch * 0.8, damp(8, dt));
         p.body.position.y = walking ? Math.abs(Math.sin(rec.walk * 2.2)) * 0.03 : Math.sin(t * 1.5) * 0.008;
         if (/sleep/.test(anim)) { o.rotation.z = Math.PI / 2; o.position.y += 0.3; } else o.rotation.z = 0;
         if (/sneak|crouch/.test(anim)) p.body.rotation.x = 0.3; else p.body.rotation.x = 0;
@@ -730,7 +741,7 @@ function updateLabels() {
     const name = d.name || (isAgent ? S.agentName : "");
     const showTag = person && name && rec.obj.visible;
     const dist = rec.obj.position.distanceTo(cam.position);
-    const ttl = Math.max(4500, Math.min(12000, rec.said.length * 75));
+    const ttl = Math.max(9000, Math.min(20000, rec.said.length * 110));   // shown while the server reports it, at most this long
     const bubbleText = rec.said && now - rec.saidAt < ttl ? rec.said : isAgent && S.agent?.thinking ? "…" : "";
     tmpV.copy(rec.obj.position); tmpV.y += (rec.obj.userData.height || 1) + 0.25;
     tmpV.project(cam);
@@ -775,7 +786,7 @@ function setHandItem() {
   const it = S.hot.slots[S.hot.selected], key = it ? JSON.stringify(it.item ?? it.id ?? it.name) : "";
   if (key === S.handKey) return; S.handKey = key;
   S.hand.clear();
-  if (!it) { const arm = boxMesh(0.14, 0.42, 0.14, PEOPLE.you.skin, 0.21); arm.rotation.x = -1.1; arm.position.set(0.04, -0.06, 0.05); S.hand.add(arm); }
+  if (!it) { const arm = boxMesh(0.1, 0.34, 0.1, PEOPLE.you.skin, 0.17); arm.rotation.set(-1.15, 0, -0.15); arm.position.set(0.1, -0.1, 0.02); S.hand.add(arm); }
   else { const o = itemObject(it.id ?? it.item ?? it.name, 0.3); o.rotation.set(0.15, 0.75, 0); S.hand.add(o); }
   const fig = S.myFig.userData.parts.handPt; fig.clear();
   if (it) { const o = itemObject(it.id ?? it.item ?? it.name, 0.22); o.rotation.set(-0.4, 0.6, 0); fig.add(o); }
@@ -798,7 +809,7 @@ function bindInput() {
   el.addEventListener("pointermove", (e) => {
     if (S.mode === "visit" && S.locked) {
       const k = 0.0024 * (S.sens || 1);
-      S.me.yaw = wrapAngle(S.me.yaw + e.movementX * k); S.me.pitch = clamp(S.me.pitch + e.movementY * k, -1.55, 1.55); return;
+      S.me.yaw = wrapAngle(S.me.yaw - e.movementX * k); S.me.pitch = clamp(S.me.pitch - e.movementY * k, -1.55, 1.55); return;
     }
     if (S.drag && S.drag.id === e.pointerId) {
       const dx = e.clientX - S.drag.x, dy = e.clientY - S.drag.y; S.drag.x = e.clientX; S.drag.y = e.clientY;
@@ -827,7 +838,7 @@ function bindInput() {
     if (code === "F5" || code === "KeyV") { e.preventDefault(); S.cam.third = !S.cam.third; hud(); return; }
     if (code === "KeyE") { e.preventDefault(); if (document.pointerLockElement) document.exitPointerLock(); S.cb.key?.("inventory"); return; }
     if (code === "KeyT" || code === "Enter") { e.preventDefault(); if (document.pointerLockElement) document.exitPointerLock(); S.cb.key?.("talk"); return; }
-    if (code === "KeyQ") { const it = S.hot.slots[S.hot.selected]; if (it) S.cb.command?.({ action: "drop", slot: S.hot.selected, count: e.ctrlKey ? it.count || 1 : 1 }); return; }
+    if (code === "KeyQ") { const it = S.hot.slots[S.hot.selected]; if (it) S.cb.command?.({ action: "drop", slot: S.hot.selected, item: it.item ?? it.name, count: e.ctrlKey ? it.count || 1 : 1 }); return; }
     if (code === "KeyG") { give(); return; }
     S.keys.add(code);
     if (e.ctrlKey && code !== "ControlLeft") e.preventDefault();
@@ -872,8 +883,8 @@ function updateVisit(dt) {
   const liquid = inLiquid(me.pos.x, me.pos.y + 0.4, me.pos.z); me.inWater = !!liquid;
   S.underwater = !!inLiquid(S.camera.position.x, S.camera.position.y, S.camera.position.z) && S.mode === "visit" && !S.cam.third;
   const speed = me.sneak ? 1.4 : me.sprint ? 5.7 : 4.3, sy = Math.sin(me.yaw), cy = Math.cos(me.yaw);
-  // forward = (-sin yaw, cos yaw); right = (-cos yaw, -sin yaw)
-  let wx = -sy * fwd - cy * str, wz = cy * fwd - sy * str; const wl = Math.hypot(wx, wz); if (wl > 0) { wx /= wl; wz /= wl; }
+  // forward = (-sin yaw, -cos yaw); right = (cos yaw, -sin yaw)
+  let wx = -sy * fwd + cy * str, wz = -cy * fwd - sy * str; const wl = Math.hypot(wx, wz); if (wl > 0) { wx /= wl; wz /= wl; }
   const sp = liquid ? speed * 0.55 : speed, acc = me.onGround ? 14 : liquid ? 6 : 3.2;
   me.vel.x = lerp(me.vel.x, wx * sp, damp(acc, dt)); me.vel.z = lerp(me.vel.z, wz * sp, damp(acc, dt));
   if (liquid) {
@@ -917,7 +928,7 @@ function updateVisit(dt) {
   }
 }
 function eyePos() { return new THREE.Vector3(S.me.pos.x, S.me.pos.y + (S.me.sneak ? 1.32 : 1.62), S.me.pos.z); }
-function lookDir(yaw, pitch) { return new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)); }
+function lookDir(yaw, pitch) { return new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)); }
 /** Voxel DDA: the first non-air, non-liquid cell along the ray. */
 function raycast(o, d, reach) {
   let x = Math.floor(o.x), y = Math.floor(o.y), z = Math.floor(o.z);
@@ -984,7 +995,7 @@ function rightClick() {
   }
   S.swing = 0.01;
   localEdit(x, y, z, b.id);
-  S.cb.command?.({ action: "place", x, y, z, id: b.id, item: it.item ?? it.name ?? b.key }).catch?.(() => reloadAround(x, z));
+  S.cb.command?.({ action: "place", x, y, z, id: b.id, block: b.id, item: it.item ?? it.name ?? b.key }).catch?.(() => reloadAround(x, z));
 }
 function localEdit(x, y, z, v) { S.lastLocalEdit = performance.now(); applyEditsLocal([[x, y, z, v]]); }
 function reloadAround(x, z) {   // the server said no: get the truth again
@@ -1007,11 +1018,11 @@ function updateCamera(dt) {
     const bob = Math.hypot(S.me.vel.x, S.me.vel.z) > 0.5 && S.me.onGround ? Math.sin(performance.now() / 120) * 0.015 : 0;
     S.hand.position.set(0.42, -0.36 + bob - Math.abs(sw) * 0.08, -0.62 + Math.abs(sw) * 0.1); S.hand.rotation.set(-Math.abs(sw) * 0.6, 0, 0);
     // your figure, for the third-person view
-    S.myFig.visible = c.third; S.myFig.position.copy(S.me.pos); S.myFig.rotation.y = -S.me.yaw;
+    S.myFig.visible = c.third; S.myFig.position.copy(S.me.pos); S.myFig.rotation.y = S.me.yaw + Math.PI;
     const p = S.myFig.userData.parts, walk = Math.hypot(S.me.vel.x, S.me.vel.z), ph = performance.now() / 160;
     p.legL.rotation.x = Math.sin(ph) * Math.min(0.8, walk * 0.18); p.legR.rotation.x = -p.legL.rotation.x;
     p.armL.rotation.x = -p.legL.rotation.x * 0.8; p.armR.rotation.x = S.mouse.left ? -1.2 - Math.abs(Math.sin(ph * 2)) : p.legL.rotation.x * 0.8;
-    p.head.rotation.x = S.me.pitch * 0.8; p.body.rotation.x = S.me.sneak ? 0.3 : 0;
+    p.head.rotation.x = -S.me.pitch * 0.8; p.body.rotation.x = S.me.sneak ? 0.3 : 0;
     return;
   }
   S.hand.visible = false; S.myFig.visible = false;
@@ -1023,9 +1034,17 @@ function updateCamera(dt) {
     c.tYaw += r * dt * 1.4; c.tDist = clamp(c.tDist - f * dt * 10, 3, 60);
   }
   c.yaw += (c.tYaw - c.yaw) * damp(8, dt); c.pitch += (c.tPitch - c.pitch) * damp(8, dt); c.dist += (c.tDist - c.dist) * damp(6, dt);
-  const off = new THREE.Vector3(Math.sin(c.yaw) * Math.cos(c.pitch), Math.sin(c.pitch), Math.cos(c.yaw) * Math.cos(c.pitch));
-  const want = c.target.clone().addScaledVector(off, c.dist);
-  const d = clearDistance(c.target, want);
+  // a wall or a roof in the way: rise over it rather than end up in the inhabitant's face
+  let pitch = c.pitch, off, d;
+  for (let i = 0; i < 8; i++) {
+    off = new THREE.Vector3(Math.sin(c.yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(c.yaw) * Math.cos(pitch));
+    d = clearDistance(c.target, c.target.clone().addScaledVector(off, c.dist));
+    if (d >= Math.min(c.dist, 3.5) || pitch >= 1.4) break;
+    pitch = Math.min(1.4, pitch + 0.16);
+  }
+  c.lift = lerp(c.lift || 0, pitch - c.pitch, damp(4, dt)); pitch = c.pitch + c.lift;
+  off = new THREE.Vector3(Math.sin(c.yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(c.yaw) * Math.cos(pitch));
+  d = clearDistance(c.target, c.target.clone().addScaledVector(off, c.dist));
   cam.position.copy(c.target).addScaledVector(off, d); cam.lookAt(c.target);
   S.underwater = !!inLiquid(cam.position.x, cam.position.y, cam.position.z);
 }
@@ -1038,7 +1057,7 @@ function clearDistance(from, to) {
 function raycastSolid(o, d, reach) {
   for (let t = 0; t < reach; t += 0.2) {
     const x = Math.floor(o.x + d.x * t), y = Math.floor(o.y + d.y * t), z = Math.floor(o.z + d.z * t);
-    const v = rawAt(x, y, z); if (v > 0) { const b = blockOf(v); if (b && b.opaque) return t; }
+    const v = rawAt(x, y, z); if (v > 0) { const b = blockOf(v); if (b && (b.opaque || b.kind === K.CUTOUT)) return t; }
   }
   return null;
 }
@@ -1085,7 +1104,7 @@ function frame(now) {
 // ───────────────────────────────────────────── public API
 function update(w) {
   if (!w) return;
-  if (w.time != null) S.time = dayFraction(w.time);
+  if (w.time != null || w.clock != null) S.time = worldDayFraction(w);
   if (w.day != null) S.day = w.day;
   if (w.weather != null) S.weather = String(w.weather).toLowerCase();
   if (w.light != null && typeof w.light === "number") S.lightOverride = w.light > 1 ? w.light / 15 : w.light;
@@ -1096,14 +1115,24 @@ function update(w) {
     if (w.agent.x != null) upsertEntity({ id: S.agentId ?? "agent", kind: "agent", ...pick(w.agent, ["x", "y", "z", "yaw", "pitch", "name", "said", "held", "health", "anim"]) });
   }
   if (Array.isArray(w.blocks) && w.blocks.length) applyEditsLocal(w.blocks.map((b) => [b[0] | 0, b[1] | 0, b[2] | 0, b[3] | 0]));
+  if (w.full && S.gotFull) {   // the page fell behind: block changes before this aren't resent, so fetch the chunks again
+    for (const c of S.chunks.values()) if (c.state !== "loading") { c.state = "new"; c.fails = 0; }
+    S.lastCenter = null;
+  }
+  if (w.full) S.gotFull = true;
+  for (const r of w.reload || []) { const c = S.chunks.get(kk(r[0], r[1])); if (c && c.state !== "loading") { c.state = "new"; c.fails = 0; S.lastCenter = null; } }
   if (w.full) for (const id of [...S.ents.keys()]) if (!(w.entities || []).some((e) => e.id === id) && id !== (S.agentId ?? "agent")) removeEntity(id);
   for (const e of w.entities || []) upsertEntity(e);
   for (const id of w.removed || []) removeEntity(id);
   if ("visitor" in w) {
     const v = w.visitor; S.visitor = v || null;
     if (v && v.x != null && S.mode === "visit") {
-      const far = !S.me.init || Math.hypot(v.x - S.me.pos.x, v.y - S.me.pos.y, v.z - S.me.pos.z) > 8 || v.teleport;
-      if (far) { S.me.pos.set(+v.x, +v.y, +v.z); S.me.vel.set(0, 0, 0); if (!S.me.init) { S.me.yaw = +v.yaw || 0; S.me.pitch = +v.pitch || 0; } S.me.init = true; }
+      // the server is authoritative for blocks, not for where you walk: snap only on a teleport, or when it has
+      // disagreed by more than 8 blocks for 1.5 s (a respawn, or a move it refused)
+      const off = Math.hypot(v.x - S.me.pos.x, v.y - S.me.pos.y, v.z - S.me.pos.z) > 8, now = performance.now();
+      if (!off) S.me.farSince = 0; else if (!S.me.farSince) S.me.farSince = now;
+      const far = !S.me.init || v.teleport || (off && now - S.me.farSince > 1500);
+      if (far) { S.me.farSince = 0; S.me.pos.set(+v.x, +v.y, +v.z); S.me.vel.set(0, 0, 0); if (!S.me.init) { S.me.yaw = +v.yaw || 0; S.me.pitch = +v.pitch || 0; } S.me.init = true; }
     }
   }
 }
@@ -1117,7 +1146,7 @@ function setMode(mode) {
     const v = S.visitor, ag = agentRec();
     if (v && v.x != null) { S.me.pos.set(+v.x, +v.y, +v.z); S.me.init = true; }
     else if (ag) { S.me.pos.set(ag.pos.x + 2, ag.pos.y + 1, ag.pos.z + 2); S.me.init = true; }
-    S.me.yaw = S.cam.yaw + Math.PI; S.me.pitch = 0.1;
+    S.me.yaw = S.cam.yaw; S.me.pitch = -0.1;
     setHandItem();
   } else if (document.pointerLockElement) document.exitPointerLock();
   hud();
@@ -1140,7 +1169,7 @@ function stats() {
 }
 function camInfo() {
   const p = S.mode === "visit" && S.me.init ? S.me.pos : S.cam.target;
-  return { x: p.x, y: p.y, z: p.z, yaw: S.mode === "visit" ? S.me.yaw : S.cam.yaw + Math.PI, mode: S.mode, me: S.me.init && S.mode === "visit" ? { x: S.me.pos.x, z: S.me.pos.z, yaw: S.me.yaw } : null };
+  return { x: p.x, y: p.y, z: p.z, yaw: S.mode === "visit" ? S.me.yaw : S.cam.yaw, mode: S.mode, me: S.me.init && S.mode === "visit" ? { x: S.me.pos.x, z: S.me.pos.z, yaw: S.me.yaw } : null };
 }
 const API = {
   update, setMode, setHotbar, setRenderDistance, pause, stats, camInfo,
