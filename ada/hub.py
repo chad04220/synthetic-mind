@@ -2,11 +2,9 @@
 it serves stays responsive whatever the Academy and the World are doing.
 
 It starts both worker processes (and restarts either if it crashes), carries messages between
-them and the browser, runs the schedule, and runs the one language model: Wren's mind. Wren
-chooses what to do and what to say in the World, talks with the synth, answers its questions and
-tells it bedtime stories; here the same model also writes the Academy's lessons from the days the
-two of them spent together, suggests the replies the synth should have given you, and assesses
-how the synth uses language.
+them and the browser, runs the schedule, and runs the one language model: the Sprite of All
+Knowing, which answers when Zen asks it something (and when you ask it on its tab). It is used for
+nothing else, so it costs CPU only when it is asked.
 """
 from __future__ import annotations
 
@@ -29,7 +27,7 @@ from .localllm import LocalLLM
 from .journey import Journey
 from .oracle import Oracle
 from .proc import append_jsonl
-from .wren import TOPICS, WrenVoice
+from .sprite import SpriteVoice
 
 CHILDREN = {"academy": academy.run, "world": life.run}
 
@@ -72,36 +70,29 @@ class Hub:
         self.metrics: deque = deque(maxlen=20000)
         self.assessments: deque = deque(maxlen=500)
         self.feeds = {k: deque(maxlen=n) for k, n in
-                      (("thought", 80), ("chat", 200), ("answer", 60), ("lesson", 60), ("npc", 60), ("deed", 80),
-                       ("talk", 160), ("talk_start", 40), ("wren_says", 160), ("wren_did", 160), ("wren_thought", 80),
-                       ("wren_intent", 80), ("ada_says", 60),
-                       ("happening", 120), ("story", 60))}
+                      (("thought", 80), ("chat", 200), ("answer", 80), ("did", 200), ("ada_says", 80),
+                       ("happening", 120))}
         self.gallery: dict[int, dict] = {}            # every work made at the homestead, by id
-        self.stories: dict[float, dict] = {}          # Wren's bedtime stories, by time
         self.journey = Journey(self.folder, cfg.name)
         self.archive = Archive(self.folder)           # every thought and conversation of the synth, whole
         self.concept_report: dict = {}
         self._load_history()
 
-        # Wren's mind: one language model (a llama.cpp server on the CPU, or Ollama)
+        # The Sprite's mind: one language model (a llama.cpp server on the CPU, or Ollama)
         voices = Path(__file__).resolve().parent.parent / "oracle"
-        self.local = LocalLLM(voices, self._local_log, "wren")
-        self.local.name = f"{cfg.companion}'s mind"
+        self.local = LocalLLM(voices, self._local_log, "sprite")
+        self.local.name = "the Sprite's mind"
         self.oracle = Oracle(cfg.oracle.url, cfg.oracle.model, self.local)
         self.oracle.backend = cfg.oracle.backend
         self.oracle.name = cfg.name
         self.oracle.cpu_threads = cpu_threads(cfg)["oracle"]
-        self.wren = WrenVoice(self.oracle, cfg.companion, cfg.name)
+        self.sprite = SpriteVoice(self.oracle, cfg.name)
         self.voice_was_ready = None
-        self.voice_busy = 0                            # Wren's requests in flight (lessons wait for them)
-        self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lessons")   # lessons and assessments
-        self.voice_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wren")   # Wren in the World
-        self.teaching = False
-        self.last_teach = 0.0
-        self.last_assess = time.time()
+        self.voice_busy = 0                            # questions in flight
+        self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hub-jobs")
+        self.voice_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sprite")   # one question at a time
         self.last_refresh = time.time()
-        self.topics: deque = deque()               # topics you asked Wren to teach
-        self.lessons_written = 0
+        self.answers_given = 0
         self.graph = ConceptGraph(self.folder / "concepts.json")
 
         self.waiters: dict[str, Future] = {}
@@ -164,11 +155,6 @@ class Hub:
                     and time.time() - self.last_refresh > 30):
                 self.last_refresh = time.time()      # Ollama may have been started after us
                 self.pool.submit(self._refresh_oracle)
-            try:
-                self._teach_tick()
-                self._assess_tick()
-            except Exception as e:  # never let the model take the Hub down
-                self.event("error", text=f"{self.cfg.companion}'s mind: {type(e).__name__}: {e}")
 
     # ------------------------------------------------------------------ messaging
     def send(self, child: str, cmd: str, rid: str | None = None, **args):
@@ -206,9 +192,9 @@ class Hub:
                 self.event("milestone", **m)
 
     def keep(self, ev: dict):
-        """Zen's thoughts and conversations go to the archive in full (the live feeds keep only the latest)."""
-        kind, ws, z, wren = ev["kind"], self.world_state, self.cfg.name, self.cfg.companion
-        if kind not in ("thought", "intent", "talk_end", "chat", "answer"):
+        """Zen's thoughts, deeds and conversations go to the archive in full (the live feeds keep only the latest)."""
+        kind, ws, z = ev["kind"], self.world_state, self.cfg.name
+        if kind not in ("thought", "did", "chat", "answer", "ada_says"):
             return
         t = self.archive_t = max(ev["t"], getattr(self, "archive_t", 0.0) + 1e-6)   # unique: pages never skip one
         when = {"t": round(t, 6), "day": ws.get("day"), "time": ws.get("time", "")}
@@ -217,24 +203,25 @@ class Hub:
                 return                                     # a silent moment: nothing to read
             self.archive.add("thoughts", when | {"kind": "thought", "text": ev.get("text", ""),
                                                  "tokens": ev.get("tokens") or [], "brain": ev.get("brain")})
-        elif kind == "intent":                             # what it decides to do, and why
-            if (ev.get("text") or "").strip():
-                self.archive.add("thoughts", when | {"kind": "intent", "text": ev["text"], "reason": ev.get("reason") or "",
-                                                     "source": ev.get("source") or ""})
-        elif kind == "talk_end":
-            lines = [[w, l] for w, l in ev.get("lines") or []]
-            if lines:
-                other = next((m for m in ev.get("members", []) if m != z), wren)
-                self.archive.add("conversations", when | {"with": "companion" if other == wren else other,
-                                                          "kind": "talk", "members": ev.get("members", []),
-                                                          "topic": ev.get("topic", ""), "lines": lines})
+        elif kind == "did":                                # what its brain chose to do, and what happened
+            self.archive.add("thoughts", when | {"kind": "act", "action": ev.get("action", ""), "text": ev.get("text", ""),
+                                                 "ok": ev.get("ok", True), "reward": ev.get("reward", 0)})
+        elif kind == "ada_says" and ev.get("to") != "sprite" and (ev.get("text") or "").strip():
+            self.archive.add("conversations", when | {"with": "world", "kind": "said", "members": [z],
+                                                      "lines": [[z, ev.get("text", "")]]})
         elif kind == "chat" and (ev.get("user") or ev.get("text")) and not ev.get("asleep"):
             self.archive.add("conversations", when | {"with": "you", "kind": "chat", "members": ["you", z],
                                                       "lines": [["you", ev.get("user") or ""], [z, ev.get("text") or ""]],
                                                       "tokens": ev.get("tokens") or []})
-        elif kind == "answer" and ev.get("by") == z:
-            self.archive.add("conversations", when | {"with": "companion", "kind": "question", "members": [z, wren],
-                                                      "lines": [[z, ev.get("question", "")], [wren, ev.get("text", "")]]})
+        elif kind == "answer" and ev.get("by") == "critique":
+            self.archive.add("conversations", when | {"with": "sprite", "kind": "critique", "members": ["Sprite"],
+                                                      "about": ev.get("question", ""),
+                                                      "lines": [["Sprite", ev.get("text", "")]]})
+        elif kind == "answer":
+            asker = z if ev.get("by") == z else "you"
+            self.archive.add("conversations", when | {"with": "sprite", "kind": "question", "asker": asker,
+                                                      "members": [asker, "Sprite"],
+                                                      "lines": [[asker, ev.get("question", "")], ["Sprite", ev.get("text", "")]]})
 
     def events_since(self, eid: int) -> list[dict]:
         with self.lock:
@@ -290,13 +277,7 @@ class Hub:
             self.apply_schedule()
         elif t == "event":
             kind = m["kind"]
-            if kind == "story":
-                self.stories[m.get("t", time.time())] = {k: v for k, v in m.items() if k not in ("src", "type", "kind")}
             self.event(kind, **{k: v for k, v in m.items() if k not in ("src", "type", "t", "kind")})
-            also = {"did": "deed", "intent": "deed", "tutor": "chat"}.get(kind)   # feeds shown on load
-            if also:
-                with self.lock:
-                    self.feeds[also].append(self.events[-1])
         elif t == "history":
             for th in m.get("thoughts", []):
                 self.feeds["thought"].append({"id": 0, "kind": "thought", **th})
@@ -314,23 +295,22 @@ class Hub:
         works = snap.pop("creations", None)
         for h in snap.pop("happenings", None) or []:
             self.event("happening", **({k: v for k, v in h.items() if k not in ("t", "kind")} | {"what": h.get("kind")}))
-        for st in snap.pop("stories", None) or []:
-            self.stories[st["t"]] = st
         with self.lock:
             for c in works or []:
                 self.gallery[c["id"]] = c
             if works and not snap.get("full"):
                 snap["creations"] = works
+            skip = ("ents", "removed", "creations")
             if snap.get("full"):
-                self.world_ents = {e["id"]: e for e in snap["ents"]}
-                self.world_state = {k: v for k, v in snap.items() if k not in ("ents", "removed", "creations")}
+                self.world_ents = {e["id"]: e for e in snap.get("ents", [])}
+                self.world_state = {k: v for k, v in snap.items() if k not in skip}
             else:
-                for e in snap["ents"]:
+                for e in snap.get("ents", []):
                     self.world_ents[e["id"]] = e
-                for i in snap["removed"]:
+                for i in snap.get("removed", []):
                     self.world_ents.pop(i, None)
                 for k, v in snap.items():
-                    if k not in ("ents", "removed", "creations"):
+                    if k not in skip:
                         self.world_state[k] = v
             self.world_seq += 1
             self.world_msgs.append((self.world_seq, snap))
@@ -480,7 +460,7 @@ class Hub:
         w = self.world_state
         out.append(block("World", {"day": w.get("day"), "phase": w.get("phase"), "mind": w.get("mind"),
                                    "ada": {k: (w.get("ada") or {}).get(k) for k in ("place", "needs", "sleeping")}}))
-        out.append(block("Wren's mind (language model)", {k: v for k, v in self.oracle_info().items() if k != "models"} |
+        out.append(block("The Sprite's mind (language model)", {k: v for k, v in self.oracle_info().items() if k != "models"} |
                          {"models": [m["name"] for m in self.oracle.models], "runs_on_gpu": self.oracle.use_gpu,
                           "loaded_in_ollama": self.ollama_loaded}))
         out.append(block("Settings", self.cfg.to_dict()))
@@ -533,13 +513,13 @@ class Hub:
         return int(self.academy_status.get("stage", 0) or 0)
 
     def _local_tick(self):
-        """Keep Wren's language model running (or stopped), and tell the World whether it is up."""
+        """Keep the Sprite's language model running (or stopped), and tell the World whether it is up."""
         o = self.cfg.oracle
         if o.enabled and o.backend == "builtin":
             threads = cpu_threads(self.cfg)["oracle"]
             if not self.local.busy and self.local.wants(o.builtin_model, threads):
                 threading.Thread(target=self.local.ensure, args=(o.builtin_model, threads, 6144, 2),
-                                 name="voice-setup-wren", daemon=True).start()
+                                 name="voice-setup-sprite", daemon=True).start()
             if not getattr(self, "_ollama_released", False):
                 self._ollama_released = True
                 self.pool.submit(self._release_ollama)
@@ -562,7 +542,7 @@ class Hub:
     def _local_log(self, text: str, level: str = "info"):
         if level == "warning":
             self.log.warning(text)
-            self.event("error", text=f"{self.cfg.companion}'s mind: {text}", src="hub")
+            self.event("error", text=f"The Sprite's mind: {text}", src="hub")
         else:
             self.log.info(text)
             self.event("log", text=text, src="hub")
@@ -578,7 +558,7 @@ class Hub:
         if self.oracle.model and self.oracle.model != self.cfg.oracle.model:
             self.set("oracle.model", self.oracle.model)
         if self.oracle.models and not before:
-            self.event("log", text=f"{self.cfg.companion}'s mind is here: {self.oracle.model}", src="hub")
+            self.event("log", text=f"The Sprite's mind is here: {self.oracle.model}", src="hub")
 
     def oracle_ready(self) -> bool:
         return self.cfg.oracle.enabled and self.oracle.ready
@@ -588,141 +568,38 @@ class Hub:
                                                         "parts": [[r, t] for r, t in parts if t],
                                                         "weight": weight, "priority": priority})
 
-    def memories(self) -> list[str]:
-        """What Wren and the synth did lately (Wren's deeds, in its words)."""
-        return [e["text"] for e in list(self.feeds["wren_did"])[-12:] if e.get("ok") and e.get("text")]
-
-    def teach(self, topic: str, priority: bool = False, focus: list[str] | None = None) -> dict:
-        """Ask Wren for a lesson pack and hand it to the Academy. Returns the pack."""
-        pack = self.wren.lesson_pack(topic, self.stage, focus, self.memories())
-        if pack["lesson"]:
-            self._curriculum("lesson", [("<|oracle|>", pack["lesson"])], 1.0, priority, topic)
-        for q, a in pack["qa"]:
-            self._curriculum("qa", [("<|user|>", q), ("<|oracle|>", a)], 1.5, priority, topic)
-            self._curriculum("qa", [("<|user|>", q), ("<|mind|>", a)], 1.0, priority, topic)
-        pack["new_facts"] = self.graph.add(pack["facts"], "oracle")
-        self.lessons_written += 1
-        self.event("lesson", topic=topic, text=pack["lesson"], qa=pack["qa"], facts=pack["facts"],
-                   new_facts=pack["new_facts"], priority=priority)
-        return pack
-
-    def _teach_tick(self):
-        """Keep lessons flowing while the Academy studies: your topics first, then what Ada gets wrong."""
-        o = self.cfg.oracle
-        studying = self.academy_wanted is not None and self.academy_wanted[0] == "resume"
-        if self.teaching or not self.oracle_ready() or self.voice_busy:
-            return                                     # Wren's life first; lessons when the model is free
-        if not self.topics and not (o.background_teaching and studying and time.time() - self.last_teach >= o.lesson_seconds):
-            return
-        if self.topics:
-            topic, priority, focus = self.topics.popleft(), True, None
-        else:
-            wrong = [r for r in self.concept_report.get("results", []) if not r["ok"]]
-            if wrong and random.random() < 0.6:
-                pick = random.choice(wrong)
-                topic = pick["s"]
-                focus = [f"{x['s']} {x['r']} {x['o']}" for x in wrong if x["s"] == topic][:4]
-            else:
-                topic, focus = random.choice(TOPICS), None
-            priority = False
-        self.teaching = True
-        self.last_teach = time.time()
-
-        def job():
-            try:
-                self.teach(topic, priority, focus)
-            except Exception as e:
-                self.event("error", text=f"{self.cfg.companion}'s lesson on {topic}: {type(e).__name__}: {e}")
-            finally:
-                self.teaching = False
-
-        self.pool.submit(job)
-
-    def _assess_tick(self):
-        if not self.oracle_ready() or time.time() - self.last_assess < self.cfg.oracle.assess_minutes * 60:
-            return
-        thoughts = [e["text"] for e in self.feeds["thought"] if e.get("text", "").strip()]
-        if len(thoughts) < 5:
-            return
-        self.last_assess = time.time()
-        rate = (self.world_state.get("mind") or {}).get("self_rate", 0)
-
-        def job():
-            a = self.wren.assess(thoughts, rate)
-            if a:
-                a.update(step=self.academy_status.get("step", 0), t=time.time(), self_rate=rate)
-                self.assessments.append(a)
-                append_jsonl(self.folder / "assessments.jsonl", a)
-                self.event("assessment", **a)
-
-        self.pool.submit(job)
-
     def _world_oracle(self, m: dict):
-        """The World needs Wren's words or choices: ask the model and send the answer back."""
+        """Zen asked the Sprite something: ask the model and send the answer back to the World."""
         purpose, p, st = m["purpose"], m["payload"], int(m.get("stage", self.stage) or 0)
         text, extra = "", {}
         t0 = time.perf_counter()
         waited = time.time() - m.get("queued", time.time())
-        stale = waited > {"wren_decide": 60, "wren_turn": 90}.get(purpose, 600)
         try:
-            if stale:
-                self.perf.add(f"{self.cfg.companion}: dropped (waited too long)", waited)
-            elif self.oracle_ready():
-                if purpose == "wren_decide":
-                    extra["decision"] = self.wren.decide(p["situation"], p["synth"], p.get("memory", []), p["options"],
-                                                         st, p.get("near", False))
-                elif purpose == "wren_turn":
-                    text = self.wren.turn(p["history"], p.get("topic", ""), st, p.get("opening", False),
-                                          p.get("closing", False), p.get("situation", ""))
-                elif purpose == "wren_answer":
-                    text = self.wren.answer(p["question"], st, p.get("situation", ""))
-                elif purpose == "wren_story":
-                    text = self.wren.story(p["day"], p.get("diary", []), st)
-                elif purpose == "wren_book":
-                    text = self.wren.book(st)
-                elif purpose == "wren_star":
-                    text = self.wren.star_fact(st)
-                elif purpose == "wren_name":
-                    text = self.wren.name_work(p.get("work") or {}, (p.get("work") or {}).get("author", ""))
-                elif purpose == "wren_create":
-                    from .world import art
-                    c = p.get("ctx") or {}
-                    raw = self.wren.art_plan(p.get("kind", "painting"), c, st)
-                    extra["plan"] = art.clean_plan(p.get("kind", "painting"), raw, c.get("place", ""),
-                                                   c.get("time", "noon"), c.get("season", "spring"),
-                                                   c.get("weather", "clear"))
-                elif purpose == "wren_critique":
-                    text = self.wren.critique(p.get("work", ""), p.get("kind", ""), p.get("title", ""),
-                                              p.get("text", ""), float(p.get("skill", 0) or 0), st)
-                elif purpose == "wren_visitor":
-                    text = self.wren.to_visitor(p["said"], p.get("situation", ""), p.get("about", ""))
-                elif purpose == "tutor" and self.cfg.oracle.tutor_replies:
-                    text = self.wren.tutor(p["history"], p["user"], p["mind"], st)
+            if waited > 600:
+                self.perf.add("the Sprite: dropped (waited too long)", waited)
+            elif purpose == "sprite_answer" and self.oracle_ready():
+                text = self.sprite.answer(p.get("question", ""), p.get("situation", ""), st)
+                self.answers_given += 1
+            elif purpose == "sprite_critique" and self.oracle_ready():
+                extra = self.sprite.critique(p.get("kind", ""), p.get("image"), p.get("audio"), p.get("text", ""),
+                                             int(p.get("marks", 0) or 0), st)
         except Exception as e:
-            self.event("error", text=f"{self.cfg.companion}'s mind ({purpose}): {type(e).__name__}: {e}")
+            self.event("error", text=f"The Sprite's mind: {type(e).__name__}: {e}")
         self.voice_busy = max(0, self.voice_busy - 1)
-        if not stale:
-            self.perf.add(f"{self.cfg.companion}: {purpose.replace('wren_', '')}", time.perf_counter() - t0)
-        if not text and purpose == "wren_book":
-            facts = self.graph.drill(random.Random())
-            text = " ".join(t for _, t in facts)
-        self.send("world", "oracle_reply", req=m["rid"], text=text, **extra)
+        self.perf.add(f"the Sprite: {purpose.replace('sprite_', '')}", time.perf_counter() - t0)
+        self.send("world", "oracle_reply", req=m["rid"], text=text, critique=extra)
 
     def ask(self, question: str) -> str:
-        """You ask Wren something (on the Wren tab)."""
+        """You ask the Sprite something (on its tab)."""
         ws = self.world_state
-        about = f"{self.cfg.name}'s language stage: {self.academy_status.get('stage_name', 'Static')}."
-        answer = self.wren.to_visitor(question, f"It is day {ws.get('day', 1)}, {ws.get('time', '')}.", about)
+        z = ws.get("zen") or {}
+        about = (f"Day {ws.get('day', 1)}, {ws.get('time', '')}. {self.cfg.name} is in the {z.get('biome', 'wild')}"
+                 f"{(' at ' + z['place']) if z.get('place') else ''}; it feels {', '.join(z.get('feelings') or []) or 'fine'}. "
+                 f"Its language stage: {self.academy_status.get('stage_name', 'Static')}.")
+        answer = self.sprite.to_visitor(question, about)
         self.event("answer", question=question, text=answer, by="you")
         return answer
 
-    def learn_answer(self, question: str, answer: str):
-        """Give an Oracle answer to Ada to study."""
-        self._curriculum("qa", [("<|user|>", question), ("<|oracle|>", answer)], 2.0, True, question[:60])
-        self._curriculum("qa", [("<|user|>", question), ("<|mind|>", answer)], 1.5, True, question[:60])
-        self.event("lesson", topic=question[:80], text=answer, qa=[], facts=[], new_facts=0, priority=True)
-
-    # ------------------------------------------------------------------ history across restarts
     def _load_history(self):
         path = self.folder / "metrics.jsonl"
         if path.exists():
@@ -752,7 +629,6 @@ class Hub:
                 "academy": self.academy_status, "world": self.world_full(), "world_seq": self.world_seq,
                 "metrics": list(self.metrics)[-4000:], "assessments": list(self.assessments),
                 "feeds": {k: list(v) for k, v in self.feeds.items()}, "journey": self.journey.items,
-                "stories": sorted(self.stories.values(), key=lambda x: x.get("t", 0))[-80:],
                 "concepts": self.concept_report, "event_id": self.event_id,
                 "oracle": self.oracle_info(), "events": [e for e in self.events if e["kind"] in ("error", "log")][-20:],
             }
@@ -763,5 +639,4 @@ class Hub:
                 "builtin": self.local.info() | {"catalog": self.local.catalog(), "choice": self.cfg.oracle.builtin_model},
                 "models": self.oracle.models, "model": self.oracle.model,
                 "error": (self.local.error if builtin else self.oracle.error),
-                "teaching": self.teaching, "lessons": self.lessons_written, "queued": list(self.topics),
-                "enabled": self.cfg.oracle.enabled, "companion": self.cfg.companion}
+                "answers": self.answers_given, "enabled": self.cfg.oracle.enabled, "companion": "the Sprite"}

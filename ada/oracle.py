@@ -1,4 +1,4 @@
-"""The language model behind Wren: how to reach it, whichever backend runs it.
+"""The language model behind the Sprite of All Knowing: how to reach it, whichever backend runs it.
 
 Two backends: "builtin" (a llama.cpp server the Hub runs on the CPU, see localllm.py) and
 "ollama" (any model in a local Ollama). What the model is asked, and in whose voice, is in
@@ -72,6 +72,16 @@ class Oracle:
             self.models = []
             self.error = f"Ollama isn't reachable at {self.url} ({type(e).__name__}). Is it running?"
         return self.models
+
+    @property
+    def senses(self) -> bool:
+        """Can the model see pictures and hear sounds? (The built-in one, with its projector.)"""
+        return self.builtin and self.local.senses
+
+    def look_listen(self, system: str, prompt: str, images=(), audio=()) -> str:
+        if not self.senses:
+            raise RuntimeError("this model can't see or hear")
+        return clean(self.local.look_listen(system, prompt, list(images), list(audio)))
 
     def chat(self, system: str, prompt: str, temperature: float = 0.7, max_tokens: int = 400,
              as_json: bool = False) -> str:

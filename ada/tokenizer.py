@@ -12,10 +12,12 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-# Role tokens mark who is speaking or what kind of text follows. <|intent|> is what Ada decides to
-# do; the World parses it into an action, so her own words steer her body.
+# Role tokens mark who is speaking or what kind of text follows: <|world|> what the synth perceives
+# and what happens, <|thought|> its inner voice, <|mind|> what it says, <|user|> you, <|oracle|> the
+# Sprite of All Knowing, and <|act|> the motor word its brain chooses (see motor.py). <|intent|> is
+# no longer used. <|act|> took the place (and the id) of v3's <|npc|>, which still names it.
 SPECIALS = ["<|endoftext|>", "<|thought|>", "<|user|>", "<|mind|>", "<|oracle|>", "<|world|>",
-            "<|intent|>", "<|npc|>"]
+            "<|intent|>", "<|act|>"]
 
 
 def _pad64(n: int) -> int:
@@ -63,6 +65,7 @@ class ByteTokenizer(Tokenizer):
         self.special = {s: 256 + i for i, s in enumerate(SPECIALS)}
         self._special_ids = set(self.special.values())
         self.n_real = 256 + len(SPECIALS)
+        self.special["<|npc|>"] = self.special["<|act|>"]   # v3 journals
         self.vocab_size = _pad64(self.n_real)
 
     def encode(self, text: str) -> list[int]:
@@ -91,6 +94,7 @@ class GPT2Tokenizer(Tokenizer):
             special_tokens=self.special,
         )
         self.n_real = n + len(SPECIALS) - 1
+        self.special["<|npc|>"] = self.special["<|act|>"]   # v3 journals
         self.vocab_size = _pad64(self.n_real)
 
     def encode(self, text: str) -> list[int]:
@@ -126,6 +130,7 @@ class FineWeb32kTokenizer(Tokenizer):
         self._enc = tiktoken.Encoding(name="fineweb32k", pat_str=FW32_PATTERN, mergeable_ranks=ranks,
                                       special_tokens=self.special)
         self.n_real = n + len(SPECIALS)
+        self.special["<|npc|>"] = self.special["<|act|>"]   # v3 journals
         self.vocab_size = _pad64(self.n_real)
 
     def encode(self, text: str) -> list[int]:

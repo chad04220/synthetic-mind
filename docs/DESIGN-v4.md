@@ -217,7 +217,14 @@ At the desk Zen's brain writes freely (`<|mind|>` text, up to 120 tokens): a poe
 
 ### What Zen learns from it
 Each word in a session is an action in the experience stream (vocabulary recorded with it). At the end
-the studio scores the piece with intrinsic measures only (no notion of what a picture "should" be):
+**the Sprite judges the piece with its own eyes and ears**: its model (Qwen 2.5 Omni 3B through
+llama.cpp with its vision+audio projector, on the CPU) is shown the painting or the sculpture as a
+picture (`world/render.py` makes the PNG) or hears the song (a WAV), and replies with a score (0–10),
+what it sees or hears, and a few words to Zen. Zen hears those words (`<|oracle|>` in its stream), so it
+also learns how its work is described. The reward for every mark of the session is
+`2·(quality − Zen's running average for that medium)`, with `quality = 0.75·Sprite score/10 + 0.25·intrinsic`.
+Writing is judged from its text. When the Sprite is off, slow (> 10 min) or can't see, the studio's
+intrinsic measures stand in alone (no notion of what a picture "should" be):
 - painting: coverage in a pleasant range, colour variety and harmony, contrast, balance, structure
   (edges, connected shapes, some symmetry or repetition), difference from Zen's earlier paintings;
 - music: melodic steps mostly small with some leaps, motifs that repeat and vary, a home note, a

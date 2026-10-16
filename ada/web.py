@@ -17,8 +17,8 @@ from .hub import Hub
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 
-WORLD = {"chat": ["text"], "suggest": ["text"], "visitor": ["action", "kind", "text", "fx", "fy", "facing", "target", "to"],
-         "place": ["kind", "x", "y", "text"], "commission": ["kind", "about"], "sleep_now": [], "wake_now": [], "think": []}
+WORLD = {"chat": ["text"], "visitor": ["action", "kind", "text", "fx", "fy", "x", "y", "id", "facing", "target", "to"],
+         "place": ["kind", "x", "y", "text"], "love": ["id"], "sleep_now": [], "wake_now": [], "think": []}
 ACADEMY = {"publish": [], "grow": [], "save": [], "evaluate": [], "probe": ["text"]}
 
 
@@ -92,6 +92,18 @@ def create_app(hub: Hub) -> FastAPI:
         page = await asyncio.to_thread(hub.archive.page, kind, before, limit, q, who)
         return clean(page)
 
+    @app.get("/api/chunk")
+    async def chunk(cx: int, cy: int):
+        return clean(await wait(hub.request("world", "chunk", cx=cx, cy=cy), 30))
+
+    @app.get("/api/world_meta")
+    async def world_meta():
+        return clean(await wait(hub.request("world", "world_meta"), 30))
+
+    @app.get("/api/atlas")
+    async def atlas():
+        return clean(await wait(hub.request("world", "atlas"), 30))
+
     @app.post("/api/client_perf")
     def client_perf(body: dict):
         hub.record_client_perf({k: v for k, v in body.items() if isinstance(v, (int, float, str, bool))})
@@ -113,18 +125,9 @@ def create_app(hub: Hub) -> FastAPI:
             except (KeyError, ValueError, TypeError) as e:
                 raise HTTPException(400, str(e))
         if name == "oracle_ask":
-            return {"result": await thread(hub.ask, str(b["question"]))}
-        if name == "oracle_teach":
-            topic = str(b["topic"]).strip()
-            if not topic:
-                raise HTTPException(400, "Name a topic to teach.")
             if not hub.oracle_ready():
-                raise HTTPException(409, hub.oracle.error or f"{hub.cfg.companion}'s mind is off or has no model.")
-            hub.topics.append(topic)
-            return {"result": f"{hub.cfg.companion} will teach {hub.cfg.name} about {topic}."}
-        if name == "oracle_learn":
-            hub.learn_answer(str(b["question"]), str(b["answer"]))
-            return {"result": f"{hub.cfg.name} will study it."}
+                raise HTTPException(409, hub.oracle.error or "The Sprite's mind is off or still starting.")
+            return {"result": await thread(hub.ask, str(b["question"]))}
         if name == "models":
             await thread(hub.oracle.refresh)
             return {"result": hub.oracle_info()}

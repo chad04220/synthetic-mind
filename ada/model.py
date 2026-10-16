@@ -68,6 +68,11 @@ class Attention(nn.Module):
             capture.setdefault("attn", []).append(att[0].float().mean(0).cpu())
         elif offset and T == 1:
             y = F.scaled_dot_product_attention(q, k, v)            # one new token sees everything
+        elif offset:
+            # several new tokens after a cache: each sees all of the past and the new ones up to itself
+            # (is_causal would align the mask to the top-left corner and hide the past from them)
+            mask = torch.ones(T, k.size(2), dtype=torch.bool, device=x.device).tril(k.size(2) - T)
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         else:
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.proj(y.transpose(1, 2).reshape(B, T, C))
@@ -163,6 +168,14 @@ class Brain(nn.Module):
         for i, b in enumerate(self.blocks):
             x = b(x, caches[i] if caches is not None else None, capture)
         return rms_norm(x)
+
+    def motor_logits(self, h, motor_ids):
+        """Logits over the motor words only: Zen's policy is its own language model, restricted to
+        the words that move its body."""
+        W = self.embed.weight[motor_ids]
+        z = F.linear(h, W).float()
+        c = self.cfg.logit_softcap
+        return c * torch.tanh(z / c)
 
     def logits(self, h):
         z = F.linear(h, self.embed.weight).float()

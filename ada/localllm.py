@@ -1,6 +1,8 @@
 """The built-in voices: llama.cpp servers with small models, running on the CPU.
 
-One server runs the companion's mind (Wren, see wren.py). The class can run several (one per role).
+One server runs the Sprite of All Knowing's mind (see sprite.py). The default model also sees and
+hears (images and audio, through its multimodal projector), so the Sprite can look at Zen's paintings
+and sculptures and listen to its songs. The class can run several servers (one per role).
 
 Nothing to install by hand. On first use the Hub downloads llama.cpp's prebuilt server for this
 computer (from llama.cpp's GitHub releases) and the chosen model (a GGUF file from Hugging Face)
@@ -27,7 +29,10 @@ import zipfile
 from pathlib import Path
 
 # key: (label, Hugging Face repo, file, size in bytes). All ungated, so no Hugging Face login.
+# key: (label, Hugging Face repo, model file, size, optional (projector file, size) for seeing and hearing)
 CATALOG = {
+    "qwen2.5-omni-3b": ("Qwen 2.5 Omni 3B (sees and hears)", "ggml-org/Qwen2.5-Omni-3B-GGUF",
+                        "Qwen2.5-Omni-3B-Q4_K_M.gguf", 2104931648, ("mmproj-Qwen2.5-Omni-3B-Q8_0.gguf", 1538031328)),
     "gemma-2-2b": ("Gemma 2 2B Instruct", "bartowski/gemma-2-2b-it-GGUF", "gemma-2-2b-it-Q4_K_M.gguf", 1708582752),
     "qwen2.5-1.5b": ("Qwen 2.5 1.5B Instruct (light)", "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
                      "qwen2.5-1.5b-instruct-q4_k_m.gguf", 1117320736),
@@ -36,7 +41,12 @@ CATALOG = {
     "llama-3.2-3b": ("Llama 3.2 3B Instruct (strongest, slowest)", "bartowski/Llama-3.2-3B-Instruct-GGUF",
                      "Llama-3.2-3B-Instruct-Q4_K_M.gguf", 2019377696),
 }
-DEFAULT_MODEL = "gemma-2-2b"
+DEFAULT_MODEL = "qwen2.5-omni-3b"
+
+
+def senses(key: str) -> bool:
+    """Can this model see images and hear audio?"""
+    return len(CATALOG.get(key, ())) > 4
 # llama.cpp publishes a release many times a day, and each one appears before its files have
 # finished uploading: look through the recent ones for the newest that has the file we need.
 RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20"
@@ -63,7 +73,7 @@ def free_port() -> int:
 
 
 class LocalLLM:
-    """One llama-server (Wren's mind). Each runs as its own process on its
+    """One llama-server (the Sprite's mind). Each runs as its own process on its
     own port; the program and the model files are shared (downloaded once), and several servers
     loading the same model file share its memory, because llama.cpp maps it rather than copying it."""
 
@@ -97,9 +107,12 @@ class LocalLLM:
 
     def catalog(self) -> list[dict]:
         out = []
-        for key, (label, _repo, file, size) in CATALOG.items():
-            out.append({"name": key, "label": label, "size": size,
-                        "downloaded": (self.folder / "models" / file).exists()})
+        for key, entry in CATALOG.items():
+            label, _repo, file, size = entry[:4]
+            extra = entry[4] if len(entry) > 4 else None
+            have = (self.folder / "models" / file).exists() and (extra is None or (self.folder / "models" / extra[0]).exists())
+            out.append({"name": key, "label": label, "size": size + (extra[1] if extra else 0), "downloaded": have,
+                        "senses": extra is not None})
         return out
 
     def info(self) -> dict:
@@ -216,10 +229,17 @@ class LocalLLM:
                            f"You can put llama-server and its files in {self.folder / 'llama.cpp'} yourself, or use Ollama")
 
     def _model(self, key: str) -> Path:
-        label, repo, file, _size = CATALOG[key]
+        label, repo, file, _size = CATALOG[key][:4]
         path = self.folder / "models" / file
         if not path.exists():
             self._download(f"https://huggingface.co/{repo}/resolve/main/{file}", path, label)
+        self.mmproj = None
+        if len(CATALOG[key]) > 4:
+            proj = self.folder / "models" / CATALOG[key][4][0]
+            if not proj.exists():
+                self._download(f"https://huggingface.co/{repo}/resolve/main/{proj.name}", proj,
+                               f"{label}: its eyes and ears")
+            self.mmproj = proj
         return path
 
     @staticmethod
@@ -264,6 +284,8 @@ class LocalLLM:
         port = free_port()
         args = [str(exe), "-m", str(model), "--host", "127.0.0.1", "--port", str(port),
                 "-t", str(threads), "-c", str(self.ctx), "-np", str(self.slots), "-ngl", "0", "--no-webui"]
+        if getattr(self, "mmproj", None):
+            args += ["--mmproj", str(self.mmproj), "--no-mmproj-offload"]   # its eyes and ears, on the CPU too
         if self.role != "oracle" and not getattr(self, "_no_extras", False):
             # Villagers share one copy of the model: without repacking, every server maps the same
             # file instead of keeping its own rearranged copy of the weights (about 1 GB each).
@@ -338,13 +360,37 @@ class LocalLLM:
         pid_file.unlink(missing_ok=True)
 
     # ------------------------------------------------------------------ talking to it
+    @property
+    def senses(self) -> bool:
+        return bool(getattr(self, "mmproj", None)) and self.ready
+
+    def look_listen(self, system: str, prompt: str, images: list[bytes] = (), audio: list[bytes] = (),
+                    temperature: float = 0.4, max_tokens: int = 200) -> str:
+        """Show the model pictures (PNG) and let it hear sounds (WAV), then ask about them."""
+        import base64
+
+        if not self.senses:
+            raise RuntimeError("this model can't see or hear")
+        content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(b).decode()}}
+                   for b in images]
+        content += [{"type": "input_audio", "input_audio": {"data": base64.b64encode(b).decode(), "format": "wav"}}
+                    for b in audio]
+        content.append({"type": "text", "text": f"{system}\n\n{prompt}"})
+        body = {"messages": [{"role": "user", "content": content}], "temperature": temperature,
+                "max_tokens": max_tokens, "stream": False}
+        req = urllib.request.Request(self.url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=600) as r:
+            d = json.loads(r.read().decode())
+        return ((d.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+
     def chat(self, system: str, prompt: str, temperature: float, max_tokens: int, as_json: bool) -> str:
         if not self.ready:
             raise RuntimeError(self.detail or self.error or f"{self.who} isn't running yet")
         # Some small models' chat templates (Gemma's) have no system role: put it in the message.
         body = {"messages": [{"role": "user", "content": f"{system}\n\n{prompt}"}],
                 "temperature": temperature, "max_tokens": max_tokens, "stream": False,
-                "cache_prompt": True}       # Wren's long fixed instructions come first: reuse them between requests
+                "cache_prompt": True}       # the long fixed instructions come first: reuse them between requests
         if as_json:
             body["response_format"] = {"type": "json_object"}
         req = urllib.request.Request(self.url + "/v1/chat/completions", data=json.dumps(body).encode(),

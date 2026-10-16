@@ -71,10 +71,18 @@ class Journey:
                 mark("first_sentence", f"{n}'s first sentence", f"{where}: {text[:160]}")
             if kind == "chat" and len(set(words)) >= 2:
                 mark("first_reply", f"{n} answered you in words", text[:160])
-        elif kind == "intent" and ev.get("source") == "self":
-            mark("first_own_action", f"{n} did something it chose in its own words", ev.get("text", ""))
-        if ev.get("kind") == "talk" and n in ev.get("members", []):
-            mark("first_conversation", f"{n}'s first conversation", f"with {[m for m in ev['members'] if m != n][0]} about {ev.get('topic', '')}")
+        elif kind == "did" and ev.get("ok"):
+            firsts = {"forward": "took its first step", "take": "picked something up for the first time",
+                      "eat": "ate for the first time", "drink": "drank for the first time",
+                      "use": "used something for the first time", "sleep": "lay down to sleep by itself",
+                      "look": "looked around for the first time", "ask": "asked the Sprite its first question",
+                      "speak": "spoke aloud for the first time"}
+            a = ev.get("action", "")
+            if a in firsts:
+                mark(f"first_{a}", f"{n} {firsts[a]}", ev.get("text", ""))
+        if kind == "answer" and ev.get("by") == n and len(set(_WORD.findall((ev.get("question") or "").lower()))
+                                                            & COMMON) >= 3:
+            mark("first_real_question", f"{n} asked the Sprite a question in words", ev.get("question", ""))
         elif kind == "created" and (ev.get("creation") or {}).get("author") == n:
             c = ev["creation"]
             mark(f"first_{c['kind']}", f"{n}'s first {c['kind'] if c['kind'] != 'music' else 'song'}", c.get("title", ""))

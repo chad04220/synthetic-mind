@@ -1,4 +1,4 @@
-"""Settings for the synth, the Academy, the World, Wren (the companion) and the schedule that ties them together.
+"""Settings for the synth, the Academy, the World, the Sprite of All Knowing and the schedule that ties them together.
 
 Plain dataclasses saved as minds/<name>/config.json. Only `LIVE` settings can change while
 running; the rest (network shape, tokenizer) are fixed when a mind is created.
@@ -60,10 +60,15 @@ class AcademyConfig:
     fineweb_config: str = "default"
     fineweb: bool = True
     # Share of each batch from each source (renormalised over the sources that have data).
-    mix_fineweb: float = 0.70
-    mix_lessons: float = 0.15        # Wren's lessons
-    mix_journal: float = 0.10        # Ada's own lived experience
+    mix_fineweb: float = 0.60
+    mix_lessons: float = 0.0         # lessons written into curriculum.jsonl (none by default in v4)
+    mix_journal: float = 0.10        # what it said and was told: talks with you, the Sprite's answers, books
     mix_concepts: float = 0.05       # concept drills generated from the concept graph
+    # Zen's own experience (experience.jsonl): every training step also learns from some of it, with
+    # the language-model loss (what follows what it does) and the policy-gradient loss on its actions.
+    mix_experience: float = 0.25
+    pg_coef: float = 1.0             # weight of the policy-gradient loss
+    entropy_coef: float = 0.01       # keeps it curious: a bonus for not being too sure of one action
 
 
 @dataclass
@@ -78,38 +83,34 @@ class WorldConfig:
     thought_seconds: float = 6.0
     thought_tokens: int = 40
     thought_temperature: float = 0.9
-    thoughts_grounded: bool = False  # sense the world before each thought (else: only past thoughts)
-    intent_temperature: float = 0.8
+    thoughts_grounded: bool = True   # (v4: thoughts always follow its lived stream)
+    intent_temperature: float = 0.8  # (unused since v4)
+    motor_seconds: float = 0.5       # one motor action every this many seconds while awake
+    motor_temperature: float = 1.0   # how adventurous its choice of action is (its brain's own odds at 1.0)
+    seed: int = 0                    # the world's seed (0: chosen when the mind is created)
     reply_tokens: int = 60
     reply_temperature: float = 0.8
 
 
 @dataclass
 class OracleConfig:
-    """Wren's mind: the one language model (the section keeps its old name, 'oracle')."""
+    """The Sprite of All Knowing: the one language model, which answers when Zen asks (the section
+    keeps its old name, 'oracle')."""
     # "builtin": a small model the program downloads and runs itself with llama.cpp, on the CPU.
     # "ollama": any model in your local Ollama (url, model and placement below).
     backend: str = "builtin"
-    builtin_model: str = "gemma-2-2b"  # see localllm.CATALOG
+    builtin_model: str = "qwen2.5-omni-3b"  # see localllm.CATALOG (this one sees and hears: it judges Zen's art)
     url: str = "http://localhost:11434"
     model: str = ""
     enabled: bool = True
-    background_teaching: bool = True   # keep the lesson queue topped up while the Academy studies
-    lesson_seconds: float = 120.0      # pause between background lessons (they share the model with Wren's life)
-    tutor_replies: bool = True         # suggest the reply the synth should have given you
-    assess_minutes: float = 10.0
     # Where Ollama runs the model. "cpu" (default): always on the CPU, so the GPU is kept for
     # training. "auto": on the CPU while the Academy studies and on the GPU otherwise. "gpu": always.
     placement: str = "cpu"
-    cpu_threads: int = 0             # Wren's threads on the CPU; 0 = the physical cores the synth's brain leaves free
-    # The companion. care: how much it does for the synth. "auto" follows the synth's stage
-    # (caretaker -> guide -> friend); or fix it at one of those.
-    care: str = "auto"
-    talkative: float = 0.6             # 0..1: how often it talks the synth through what it does
-    stories: bool = True               # a bedtime story about the day, every night
+    cpu_threads: int = 0             # the Sprite's threads on the CPU; 0 = the physical cores Zen's brain leaves free
 
 
-CONFIG_VERSION = 3   # 2: the brain and the Oracle default to the CPU, the schedule to "together". 3: the companion
+CONFIG_VERSION = 4   # 2: the brain and the Oracle default to the CPU, the schedule to "together". 3: the companion.
+#                      4: Zen alone, in an endless world, every deed its own; the Sprite answers its questions
 
 
 @dataclass
@@ -130,7 +131,7 @@ TOKENIZER_VOCAB = {"fineweb32k": 32768, "gpt2": 50304, "bytes": 320}
 class AdaConfig:
     version: int = CONFIG_VERSION
     name: str = "Zen"
-    companion: str = "Wren"
+    companion: str = "the Sprite"     # who answers Zen's questions
     tokenizer: str = "fineweb32k"
     preset: str = "small"
     brain: BrainConfig = field(default_factory=BrainConfig)
@@ -177,6 +178,14 @@ class AdaConfig:
                     d[section][key] = now
         if d.get("version", 1) < 3 and d.get("oracle", {}).get("lesson_seconds") == 30.0:
             d["oracle"]["lesson_seconds"] = 120.0     # one model now lives Wren's life too
+        if d.get("version", 1) < 4:
+            d["companion"] = "the Sprite"
+            ac = d.setdefault("academy", {})
+            ac["mix_lessons"] = 0.0               # no one writes lessons any more
+            if d.get("oracle", {}).get("builtin_model", "gemma-2-2b") == "gemma-2-2b":
+                d.setdefault("oracle", {})["builtin_model"] = "qwen2.5-omni-3b"   # the Sprite sees and hears
+            if ac.get("mix_fineweb") == 0.70:
+                ac["mix_fineweb"] = 0.60
         d["version"] = CONFIG_VERSION
         return cls.from_dict(d)
 
@@ -198,23 +207,22 @@ CHOICES = {
     "world.device": ("cpu", "cuda", "auto"),
     "oracle.placement": ("cpu", "auto", "gpu"),
     "oracle.backend": ("builtin", "ollama"),
-    "oracle.builtin_model": ("gemma-2-2b", "qwen2.5-1.5b", "qwen2.5-0.5b", "llama-3.2-3b"),
-    "oracle.care": ("auto", "caretaker", "guide", "friend"),
+    "oracle.builtin_model": ("qwen2.5-omni-3b", "gemma-2-2b", "qwen2.5-1.5b", "qwen2.5-0.5b", "llama-3.2-3b"),
 }
 
 LIVE = {
     "schedule.mode": str, "schedule.day_training": str,
     "academy.intensity": str, "academy.publish_minutes": float, "academy.fineweb": bool,
     "academy.mix_fineweb": float, "academy.mix_lessons": float, "academy.mix_journal": float,
-    "academy.mix_concepts": float, "academy.muon_lr": float, "academy.adam_lr": float,
+    "academy.mix_concepts": float, "academy.mix_experience": float, "academy.entropy_coef": float,
+    "academy.muon_lr": float, "academy.adam_lr": float,
     "academy.auto_grow": bool,
     "world.device": str, "world.cpu_threads": int, "oracle.cpu_threads": int, "world.day_minutes": float, "world.night_minutes": float, "world.thought_seconds": float,
     "world.thought_tokens": int, "world.thought_temperature": float, "world.thoughts_grounded": bool,
-    "world.intent_temperature": float, "world.reply_tokens": int, "world.reply_temperature": float,
-    "oracle.backend": str, "oracle.builtin_model": str, "oracle.care": str, "oracle.talkative": float,
-    "oracle.stories": bool, "oracle.url": str, "oracle.model": str, "oracle.enabled": bool,
-    "oracle.background_teaching": bool, "oracle.placement": str, "oracle.tutor_replies": bool,
-    "oracle.lesson_seconds": float,
+    "world.reply_tokens": int, "world.reply_temperature": float, "world.motor_seconds": float,
+    "world.motor_temperature": float,
+    "oracle.backend": str, "oracle.builtin_model": str, "oracle.url": str, "oracle.model": str,
+    "oracle.enabled": bool, "oracle.placement": str,
 }
 
 
@@ -246,11 +254,11 @@ def physical_cores() -> int:
 
 
 def cpu_threads(cfg: AdaConfig) -> dict:
-    """How the CPU's physical cores are shared. The synth's brain is small and thinks in short bursts:
-    a third of the cores (at most 2) is plenty. Wren's model, a 2B language model, gets the rest, so
-    the two never fight over the same cores. The Academy, on the GPU, needs almost no CPU."""
+    """How the CPU's physical cores are shared. Zen's brain runs all the time now (it chooses every
+    action), so it gets half the cores (at most 4). The Sprite's model, used only when Zen asks, gets
+    the rest. The Academy, on the GPU, needs almost no CPU."""
     cores = physical_cores()
-    world = cfg.world.cpu_threads or max(1, min(2, cores // 3))
+    world = cfg.world.cpu_threads or max(1, min(4, cores // 2))
     oracle = cfg.oracle.cpu_threads or max(1, cores - world)
     return {"cores": cores, "world": world, "oracle": oracle}
 

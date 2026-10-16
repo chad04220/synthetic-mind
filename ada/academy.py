@@ -24,6 +24,10 @@ from .config import AdaConfig
 from .proc import STAGES, FileTail, Link, pick_device, stage_of, write_json
 
 
+def _r(v, n: int = 4):
+    return None if v is None else round(float(v), n)
+
+
 class Pool:
     """Bounded replay pool of token sequences; recent and heavy items are drawn more often."""
 
@@ -101,8 +105,19 @@ class Academy:
         self.fineweb = FineWebStream(self.tok, self.cfg.academy.fineweb_repo, self.cfg.academy.fineweb_config, 2048)
         self.lessons = Pool(6000)
         self.journal = Pool(6000)
+        # Zen's lived experience: windows of its stream with its actions and how they turned out
+        from .motor import motor_ids
+        from .world.studio import vocab_ids
+
+        self.experience: deque = deque(maxlen=6000)    # (ids, acts [[pos, index, advantage, vocab]], ret)
+        self.motor = motor_ids(self.tok)
+        # the word sets Zen chooses from: its body, the brush, the piano, the clay
+        self.vocabs = [self.motor, vocab_ids(self.tok, "paint"), vocab_ids(self.tok, "compose"),
+                       vocab_ids(self.tok, "sculpt")]
+        self.pg_loss = self.motor_entropy = self.exp_ret = None
         self.concepts = ConceptGraph(folder / "concepts.json")
-        self.tails = {"lessons": FileTail(folder / "curriculum.jsonl"), "journal": FileTail(folder / "journal.jsonl")}
+        self.tails = {"lessons": FileTail(folder / "curriculum.jsonl"), "journal": FileTail(folder / "journal.jsonl"),
+                      "experience": FileTail(folder / "experience.jsonl")}
         self.rows_from: Counter = Counter()
 
         self.step = 0
@@ -132,7 +147,13 @@ class Academy:
         """Pick up new lessons and journal entries written by the other processes."""
         from .tokenizer import encode_parts
 
+        for rec in self.tails["experience"].read():
+            ids, acts = rec.get("ids") or [], rec.get("acts") or []
+            if len(ids) > 8 and acts:
+                self.experience.append((ids, acts, float(rec.get("ret", 0.0))))
         for name, tail in self.tails.items():
+            if name == "experience":
+                continue
             pool = self.lessons if name == "lessons" else self.journal
             for rec in tail.read():
                 parts = [(r, t) for r, t in rec.get("parts", []) if r in self.tok.special and t]
@@ -224,6 +245,9 @@ class Academy:
                     (loss / a.grad_accum).backward()
                 losses.append(loss.detach())
             ntok += x.numel()
+        if self.experience and a.mix_experience > 0:
+            with perf.time("learning from its experience"):
+                self.experience_step(max(1, B // 4), T)
         with perf.time("optimizer"):
             gnorm_t = torch.nn.utils.clip_grad_norm_(self.brain.parameters(), a.grad_clip)
         with perf.time("waiting for the GPU"):
@@ -264,6 +288,60 @@ class Academy:
             with perf.time("resting (intensity)"):
                 time.sleep(min(0.5, dt * rest))
         return True
+
+    def experience_step(self, B: int, T: int):
+        """Learn from Zen's own life: predict what follows what it did (language-model loss) and do
+        more of what turned out well, less of what didn't (policy gradient on its motor words)."""
+        torch, a = self.torch, self.cfg.academy
+        F = torch.nn.functional
+        rows, pos_b, pos_t, act, adv, voc, rets = [], [], [], [], [], [], []
+        recent = len(self.experience)
+        for b in range(B):
+            k = recent - 1 - self.rng.randrange(max(1, recent // 3)) if self.rng.random() < 0.6 else self.rng.randrange(recent)
+            ids, acts, ret = self.experience[k]
+            ids = ids[: T + 1]
+            ids = ids + [self.tok.eot] * (T + 1 - len(ids))
+            rows.append(ids)
+            rets.append(ret)
+            for a_ in acts:
+                p, i, ad = a_[0], a_[1], a_[2]
+                v = a_[3] if len(a_) > 3 else 0
+                if 1 <= p <= T and 0 <= v < len(self.vocabs) and 0 <= i < len(self.vocabs[v]):
+                    pos_b.append(b)                   # the action at p is predicted from position p-1
+                    pos_t.append(p - 1)
+                    act.append(int(i))
+                    adv.append(float(ad))
+                    voc.append(int(v))
+        if not act:
+            return
+        t = torch.tensor(rows, dtype=torch.long, device=self.device)
+        x, y = t[:, :-1], t[:, 1:]
+        with self.autocast():
+            h = self.brain.hidden(x)
+            lm = self.brain.chunked_loss(h, y, masked=False)
+            hp = h[torch.tensor(pos_b, device=self.device), torch.tensor(pos_t, device=self.device)]
+        chosen_all, ents, advs = [], [], []
+        for v, words in enumerate(self.vocabs):
+            sel = [k for k, vv in enumerate(voc) if vv == v]
+            if not sel:
+                continue
+            sel_t = torch.tensor(sel, device=self.device)
+            with self.autocast():
+                z = self.brain.motor_logits(hp[sel_t], torch.tensor(words, device=self.device))
+            logp = F.log_softmax(z.float(), -1)
+            a_t = torch.tensor([act[k] for k in sel], device=self.device)
+            chosen_all.append(logp.gather(1, a_t[:, None])[:, 0])
+            ents.append(-(logp.exp() * logp).sum(-1))
+            advs.append(torch.tensor([adv[k] for k in sel], device=self.device, dtype=torch.float32))
+        chosen, adv_t = torch.cat(chosen_all), torch.cat(advs)
+        ent = torch.cat(ents).mean()
+        pg = -(adv_t * chosen).mean()
+        loss = a.mix_experience * (lm + a.pg_coef * pg - a.entropy_coef * ent)
+        (loss / a.grad_accum).backward()
+        e = 0.95 if self.pg_loss is not None else 0.0
+        self.pg_loss = e * (self.pg_loss or 0.0) + (1 - e) * float(pg)
+        self.motor_entropy = e * (self.motor_entropy or 0.0) + (1 - e) * float(ent)
+        self.exp_ret = e * (self.exp_ret or 0.0) + (1 - e) * (sum(rets) / len(rets))
 
     def gpu_wait(self):
         """Wait for the GPU to finish its queued work while *sleeping*. torch.cuda.synchronize() and
@@ -377,6 +455,8 @@ class Academy:
             p["val"] = round(self.val_loss, 4)
         if self.concept_score:
             p["concepts"] = self.concept_score.get("accuracy")
+        if self.pg_loss is not None:
+            p["pg"], p["ent"], p["ret"] = _r(self.pg_loss), _r(self.motor_entropy), _r(self.exp_ret)
         return p
 
     def bpb(self) -> float | None:
@@ -612,7 +692,9 @@ class Academy:
             "mix": {k: round(v / tot, 3) for k, v in self.rows_from.items()},
             "pools": {"lessons": len(self.lessons), "journal": len(self.journal),
                       "lessons_added": self.lessons.added, "journal_added": self.journal.added,
-                      "facts": len(self.concepts.facts)},
+                      "facts": len(self.concepts.facts), "experience": len(self.experience)},
+            "motor": {"pg_loss": _r(self.pg_loss), "entropy": _r(self.motor_entropy), "return": _r(self.exp_ret),
+                      "windows": len(self.experience)},
             "fineweb": {"status": self.fineweb.status, "error": self.fineweb.error, "docs": self.fineweb.docs_seen,
                         "buffer": len(self.fineweb.docs), "source": self.fineweb.source,
                         "bytes_per_token": round(self.fineweb.bytes_per_token, 3)},
