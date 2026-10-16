@@ -1,13 +1,6 @@
-"""Where the mind's experience comes from.
-
-* FineWeb: HuggingFace's web corpus, streamed (nothing downloaded up front) and tokenized
-  on a background thread so the GPU never waits for text.
-* Teacher pool: lessons, dialogues and corrected thoughts written by a local Ollama model.
-* Experience pool: what the mind lived through: conversations, things it was taught,
-  books it read and narrated moments from its body in the world.
-
-Each training row is drawn from one source by the configured mixture weights.
-"""
+"""FineWeb, streamed: random 1000-document parquet row groups fetched by HTTP range requests from
+random Common Crawl dumps, tokenized on a background thread into a ready buffer. Memory stays flat
+(a whole FineWeb file is about 2 GB) and the stream is well shuffled across all of the crawl."""
 from __future__ import annotations
 
 import random
@@ -15,8 +8,6 @@ import re
 import threading
 import time
 from collections import Counter, deque
-
-import torch
 
 from .tokenizer import Tokenizer
 
@@ -162,103 +153,3 @@ class FineWebStream:
         with self.lock:
             for w in _WORD.findall(text.lower()):
                 self.words[w] += weight
-
-
-class TextPool:
-    """A bounded replay pool of short texts. Newer and heavier items are drawn more often."""
-
-    def __init__(self, tok: Tokenizer, maxlen: int, on_text=None):
-        self.tok = tok
-        self.on_text = on_text
-        self.items: deque[tuple[list[int], float, str]] = deque(maxlen=maxlen)
-        self.lock = threading.Lock()
-        self.added = 0
-
-    def add(self, text: str, weight: float = 1.0, tag: str = ""):
-        text = text.strip()
-        if not text:
-            return
-        if self.on_text:
-            self.on_text(text)
-        ids = self.tok.encode(text) + [self.tok.eot]
-        with self.lock:
-            self.items.append((ids, weight, tag))
-            self.added += 1
-
-    def add_ids(self, ids: list[int], weight: float = 1.0, tag: str = ""):
-        if self.on_text:
-            self.on_text(self.tok.decode(ids))
-        with self.lock:
-            self.items.append((ids + [self.tok.eot], weight, tag))
-            self.added += 1
-
-    def __len__(self):
-        return len(self.items)
-
-    def _pick(self) -> list[int]:
-        n = len(self.items)
-        # Recency bias (half the candidates come from the newest quarter), then pick by weight.
-        cands = [n - 1 - random.randrange(max(1, n // 4)) if random.random() < 0.5 else random.randrange(n)
-                 for _ in range(4)]
-        i = random.choices(cands, [self.items[c][1] for c in cands])[0]
-        return self.items[i][0]
-
-    def take(self, n: int) -> list[int] | None:
-        with self.lock:
-            if not self.items:
-                return None
-            out: list[int] = []
-            while len(out) < n:
-                ids = self._pick()
-                if len(ids) > n and random.random() < 0.5:
-                    s = random.randrange(len(ids) - n)
-                    ids = ids[s:]
-                out.extend(ids)
-            return out[:n]
-
-    def texts(self, limit: int = 4000) -> list[tuple[str, float, str]]:
-        with self.lock:
-            items = list(self.items)[-limit:]
-        return [(self.tok.decode(ids[:-1]), w, tag) for ids, w, tag in items]
-
-
-class Mixer:
-    """Assembles (inputs, targets) batches from the sources according to the mixture."""
-
-    def __init__(self, cfg, fineweb: FineWebStream, teacher: TextPool, experience: TextPool):
-        self.cfg = cfg
-        self.sources = {"fineweb": fineweb, "teacher": teacher, "experience": experience}
-        self.rows_from = Counter()
-
-    def weights(self) -> dict[str, float]:
-        d = self.cfg.data
-        w = {
-            "fineweb": d.mix_fineweb if (d.fineweb_enabled and self.sources["fineweb"].ready()) else 0.0,
-            "teacher": d.mix_teacher if len(self.sources["teacher"]) else 0.0,
-            "experience": d.mix_experience if len(self.sources["experience"]) else 0.0,
-        }
-        return w
-
-    def batch(self, B: int, T: int, device) -> tuple[torch.Tensor, torch.Tensor] | None:
-        w = self.weights()
-        if sum(w.values()) <= 0:
-            return None
-        names = [k for k in w if w[k] > 0]
-        probs = [w[k] for k in names]
-        rows = []
-        for _ in range(B):
-            for _attempt in range(3):
-                src = random.choices(names, probs)[0]
-                r = self.sources[src].take(T + 1)
-                if r is not None:
-                    self.rows_from[src] += 1
-                    rows.append(r)
-                    break
-        if not rows:
-            return None
-        t = torch.tensor(rows, dtype=torch.long)
-        if device.type == "cuda":
-            t = t.pin_memory().to(device, non_blocking=True)
-        else:
-            t = t.to(device)
-        return t[:, :-1], t[:, 1:]

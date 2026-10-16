@@ -1,7 +1,7 @@
-"""Start a synthetic mind and its dashboard.
+"""Start Ada: the Hub (this process) serves the dashboard and starts the Academy and the World.
 
-    python run.py                      # create or resume the mind "Ada"
-    python run.py --name Bo --preset tiny --tokenizer bytes
+    python run.py                          create or resume the mind "Ada"
+    python run.py --name Bo --preset tiny  another mind, a smaller brain
 """
 from __future__ import annotations
 
@@ -15,86 +15,96 @@ ROOT = Path(__file__).resolve().parent
 
 
 def disable_console_pause():
-    """Windows consoles freeze a program that prints while text is selected (QuickEdit mode):
-    one stray click in the window would stall training. Turn QuickEdit off for this console."""
+    """Windows consoles freeze a program that prints while text is selected (QuickEdit mode)."""
     if os.name != "nt":
         return
     try:
         import ctypes
 
         k32 = ctypes.windll.kernel32
-        handle = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        h = k32.GetStdHandle(-10)
         mode = ctypes.c_uint32()
-        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
-            ENABLE_QUICK_EDIT_MODE, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
-            k32.SetConsoleMode(handle, (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS)
+        if k32.GetConsoleMode(h, ctypes.byref(mode)):
+            k32.SetConsoleMode(h, (mode.value & ~0x0040) | 0x0080)
     except Exception:
         pass
+
+
+def gpu_present() -> bool:
+    """Whether an NVIDIA GPU is usable, without importing PyTorch into the Hub."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("nvidia-smi"):
+        return False
+    try:
+        return subprocess.run(["nvidia-smi", "-L"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", default="Ada", help="which mind to create or resume")
-    ap.add_argument("--preset", default=None, choices=["tiny", "small", "medium", "large"],
-                    help="network size for a NEW mind (default: small on a GPU, tiny on CPU)")
-    ap.add_argument("--tokenizer", default=None, choices=["gpt2", "bytes"],
-                    help="for a NEW mind (default: gpt2 on a GPU, bytes on CPU)")
-    ap.add_argument("--minds", default=str(ROOT / "minds"), help="folder where minds are saved")
+    ap.add_argument("--preset", choices=["tiny", "small", "medium", "large"], default=None,
+                    help="brain size for a NEW mind (default: small with a GPU, tiny without)")
+    ap.add_argument("--tokenizer", choices=["gpt2", "bytes"], default=None,
+                    help="for a NEW mind (default: gpt2 with a GPU, bytes without)")
+    ap.add_argument("--minds", default=str(ROOT / "minds"), help="folder where minds live")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--cpu", action="store_true", help="force CPU even if a GPU is available")
-    ap.add_argument("--no-fineweb", action="store_true", help="do not stream FineWeb")
-    ap.add_argument("--no-teacher", action="store_true", help="do not use Ollama")
+    ap.add_argument("--schedule", choices=["day_night", "together", "academy", "world"], default=None)
+    ap.add_argument("--no-fineweb", action="store_true")
+    ap.add_argument("--no-oracle", action="store_true")
     ap.add_argument("--ollama-url", default=None)
-    ap.add_argument("--compile", action="store_true", help="torch.compile the training graph (needs Triton)")
+    ap.add_argument("--world-device", choices=["auto", "cuda", "cpu"], default=None,
+                    help="where Ada's brain runs while she lives (cpu leaves the GPU to the Academy)")
+    ap.add_argument("--compile", action="store_true", help="torch.compile training (Linux/WSL)")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
     disable_console_pause()
 
-    import torch
     import uvicorn
 
-    from mind.brain import Mind, pick_device
-    from mind.config import MindConfig
-    from mind.server import create_app
+    from ada.config import AdaConfig
+    from ada.hub import Hub
+    from ada.web import create_app
 
     root = Path(args.minds)
-    device = torch.device("cpu") if args.cpu else pick_device()
-    cfg_path = root / args.name / "config.json"
-    if cfg_path.exists():
-        cfg = MindConfig.load(cfg_path)
-        print(f"Resuming {cfg.name} ({cfg.preset}, {cfg.model.n_layers} layers, {cfg.tokenizer} tokens)")
+    path = root / args.name / "config.json"
+    if path.exists():
+        cfg = AdaConfig.load(path)
+        print(f"Resuming {cfg.name}.")
     else:
-        cfg = MindConfig(name=args.name, tokenizer=args.tokenizer or ("bytes" if device.type == "cpu" else "gpt2"))
-        cfg.apply_preset(args.preset or ("tiny" if device.type == "cpu" else "small"))
-        print(f"Creating a new mind {cfg.name} ({cfg.preset})")
+        gpu = gpu_present()
+        # GPT-2's 50k-token vocabulary is a lot for a CPU; raw bytes keep a CPU-only brain quick.
+        cfg = AdaConfig(name=args.name, tokenizer=args.tokenizer or ("gpt2" if gpu else "bytes"))
+        cfg.apply_preset(args.preset or ("small" if gpu else "tiny"))
+        print(f"Creating {cfg.name} with a {cfg.preset} brain.")
+    if args.schedule:
+        cfg.schedule.mode = args.schedule
     if args.no_fineweb:
-        cfg.data.fineweb_enabled = False
-    if args.no_teacher:
-        cfg.teacher_enabled = False
+        cfg.academy.fineweb = False
+    if args.no_oracle:
+        cfg.oracle.enabled = False
     if args.ollama_url:
-        cfg.ollama_url = args.ollama_url
+        cfg.oracle.url = args.ollama_url
+    if args.world_device:
+        cfg.world.device = args.world_device
     if args.compile:
-        cfg.train.compile = True
+        cfg.academy.compile = True
 
-    if device.type == "cpu" and not args.cpu and torch.version.cuda is None:
-        import shutil
-        if shutil.which("nvidia-smi"):
-            print("WARNING: an NVIDIA GPU is present but this PyTorch is the CPU-only build, so training will be slow.\n"
-                  "         On Windows, start.bat repairs this. Manually: pip uninstall torch, then\n"
-                  "         pip install torch --index-url https://download.pytorch.org/whl/cu126")
-    mind = Mind(cfg, root, device)
-    print(f"Device: {mind.device}  parameters: {mind.model.n_params():,}")
-    mind.start()
+    hub = Hub(cfg, root)
+    hub.start()
     url = f"http://{args.host}:{args.port}"
-    print(f"Dashboard: {url}")
+    print(f"Dashboard: {url}   (Ctrl+C saves and stops)")
     if not args.no_browser:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     try:
-        uvicorn.run(create_app(mind), host=args.host, port=args.port, log_level="warning")
+        uvicorn.run(create_app(hub), host=args.host, port=args.port, log_level="warning")
     finally:
-        print("Saving...")
-        mind.stop()
+        print("Saving and stopping…")
+        hub.stop()
 
 
 if __name__ == "__main__":

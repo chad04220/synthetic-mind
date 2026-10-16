@@ -1,4 +1,4 @@
-"""Tokenizers. The network itself is trained from scratch; only the text<->id mapping is borrowed.
+"""Tokenizers. The network is trained from scratch; only the text<->id mapping is borrowed.
 
 "gpt2" uses tiktoken's GPT-2 BPE (about 3.5x fewer tokens per text than bytes, so far
 more language per training step). "bytes" needs no download and lets you watch the
@@ -6,7 +6,10 @@ mind learn to spell from raw characters.
 """
 from __future__ import annotations
 
-SPECIALS = ["<|endoftext|>", "<|thought|>", "<|user|>", "<|mind|>", "<|teacher|>", "<|world|>"]
+# Role tokens mark who is speaking or what kind of text follows. <|intent|> is what Ada decides to
+# do; the World parses it into an action, so her own words steer her body.
+SPECIALS = ["<|endoftext|>", "<|thought|>", "<|user|>", "<|mind|>", "<|oracle|>", "<|world|>",
+            "<|intent|>", "<|npc|>"]
 
 
 def _pad64(n: int) -> int:
@@ -101,3 +104,12 @@ def make_tokenizer(kind: str) -> Tokenizer:
             print(f"[tokenizer] GPT-2 BPE unavailable ({e}); falling back to bytes")
             return ByteTokenizer()
     return ByteTokenizer()
+
+
+def encode_parts(tok: Tokenizer, parts) -> list[int]:
+    """[(role, text), ...] -> ids, each text preceded by its role token."""
+    ids: list[int] = []
+    for role, text in parts:
+        ids.append(tok[role])
+        ids.extend(tok.encode(text))
+    return ids

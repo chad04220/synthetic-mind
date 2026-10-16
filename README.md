@@ -1,188 +1,149 @@
-# Synthetic Mind
+# Ada: a mind that learns language, then lives with it
 
-A neural network that starts as random weights and learns language while you watch, think
-along with it, and talk to it. It lives in a small garden world through a body, has a
-free-running inner monologue, studies web text streamed from **FineWeb**, and is tutored
-by whichever **Ollama** model you have installed.
+Ada is a neural network that starts as random weights. A two-part system raises her:
 
-Everything it knows it learns itself, by gradient descent on its own predictions. Ollama
-never touches its weights: the teacher only writes text, which goes into the training mix
-like any other experience.
+- **The Academy** teaches her language and concepts. It streams web text from **FineWeb**,
+  studies lessons written by an **Oracle** (any model you run locally in **Ollama**), drills
+  the facts of her world, and studies her own journal of everything she has lived through.
+- **The World** is where she lives with what she has learned: a valley with a cottage, a
+  garden, an orchard, a meadow, a forest, a lake, a village (bakery, library, workshop and the
+  Oracle's shrine) and an observatory. There are days, nights, seasons and weather, three
+  villagers, animals, needs to look after, and things to grow, cook, bake, craft and read.
 
-It is always in one of two modes, so it never has to learn and live at the same time:
+The two halves never compete. By default Ada lives by day, and at night she sleeps while the
+Academy studies with the whole GPU. Each morning she wakes up with the brain she earned
+overnight.
 
-- **📚 Study**: every bit of compute goes to learning from web text, the teacher's lessons and
-  what it has lived through. Its thoughts, conversation and body are paused.
-- **🌱 Awake**: it thinks, talks with you and lives in its world, and does no training. What it
-  experiences (your conversations, gifts, books, its body's adventures) is kept and studied in the
-  next study session.
+## What makes it different
 
-Switch with the buttons in the header, or let it alternate on a timer like sleep and waking
-(Settings → *Alternate automatically*).
+**Her words steer her body.** Whenever she is free to choose, her own brain writes an intention
+("I eat the apple.", "I ask the Oracle why the sky is blue."). If the World can make sense of
+it, she does it. While her words can't yet, her needs choose for her, *with a reason*, and
+those choices go into her journal next to what she sensed and how it turned out. The Academy
+studies the journal, so her brain gradually learns to make those choices itself. The header
+shows the share of her actions that come from her own words: the clearest sign that her
+language is grounded in her world.
 
-```
-                ┌──────────────── one engine thread owns the network ────────────────┐
- FineWeb ──►    │  training step  ◄── data mix: web text · teacher lessons · lived   │
- (streamed)     │       │                          experience (chats, books, world)  │
-                │       ▼                                                            │
- Ollama  ──►    │  MindNet (transformer trained from scratch)                         │
- (teacher)      │    ├─ language head ──► inner monologue · replies · speech          │
-                │    └─ policy + value heads ──► body actions in the world (RL)       │
-                └──────────────────────────────▲─────────────────────────────────────┘
-                                               │ WebSocket (4×/s)
-                                     browser dashboard (you)
-```
+**Understanding is measured, not guessed.** The world's ontology (what each thing is, its
+color, what it's made of, what it's for, where it's found) becomes a concept graph. The
+Academy drills those facts, and tests them separately as four-way choices *worded unlike any
+drill* ("To look for a mushroom, go to the ___": forest / library / lake / bakery). A rising
+score means she grasped the idea rather than memorised a sentence. The Oracle adds new facts
+with every lesson, and its background lessons go first to what she gets wrong.
 
-## Quick start (Windows + NVIDIA GPU)
-
-1. Install Python 3.10+ from python.org (tick *Add to PATH*).
-2. Install [Ollama](https://ollama.com) and pull at least one chat model, for example
-   `ollama pull llama3.2` (3B is plenty; a 7–8B model writes better lessons).
-3. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA
-   and the other requirements, then opens the dashboard at <http://127.0.0.1:8765>.
-
-Linux/macOS: `./start.sh`. Manual setup:
+**The page stays responsive.** Three separate processes: the Academy (training), the World
+(living), and the Hub (the web page and the Oracle). The Hub never touches PyTorch, so no
+amount of training can freeze the dashboard, and if the Academy or the World ever crashes, the
+Hub restarts it.
 
 ```
-pip install torch --index-url https://download.pytorch.org/whl/cu126   # or the CPU build
-pip install -r requirements.txt
-python run.py
+           FineWeb ──┐                          ┌── Ollama (the Oracle)
+                     ▼                          ▼
+   ┌──────────────────────────┐        ┌─────────────────────┐        ┌──────────────────────────┐
+   │ ACADEMY  (process 1)     │ brain  │ HUB  (process 3)    │ events │ WORLD  (process 2)       │
+   │ trains on web text,      │───────▶│ web page, schedule, │◀──────▶│ the valley, Ada's body,  │
+   │ lessons, journal,        │ files  │ Oracle, supervision │        │ intentions, thoughts,    │
+   │ concept drills; tests    │◀───────┤ (never loads torch) │        │ talk; writes her journal │
+   │ concepts; publishes      │journal └─────────▲───────────┘        └──────────────────────────┘
+   └──────────────────────────┘ lessons          │ WebSocket
+                                          your browser
 ```
 
-On start it queries Ollama's `/api/tags`, lists every installed chat model (embedding
-models are filtered out) and picks one; switch models any time in the **Teacher** tab.
-Without Ollama it still learns from FineWeb and from you.
+## Start
 
-## Options
+**Windows with an NVIDIA GPU**
+
+1. Install Python 3.10 or newer from python.org (tick *Add to PATH*).
+2. Install [Ollama](https://ollama.com) and pull a chat model, for example `ollama pull llama3.2`.
+3. Double-click **`start.bat`**. The first run creates `.venv`, installs PyTorch with CUDA and
+   the other requirements, prints which GPU it found, and opens <http://127.0.0.1:8765>.
+
+**Linux / macOS:** `./start.sh`. **By hand:**
+`pip install torch --index-url https://download.pytorch.org/whl/cu126` (or the CPU build), then
+`pip install -r requirements.txt` and `python run.py`.
+
+Ada is saved in `minds/Ada/` continuously; Ctrl+C saves everything and stops. Start again with
+the same name to continue where she left off.
 
 ```
-python run.py --name Ada              # create or resume a mind (saved in minds/<name>/)
-python run.py --name Bo --preset tiny --tokenizer bytes
-python run.py --preset medium         # bigger brain for a 12 GB+ GPU
-python run.py --no-fineweb            # learn only from the teacher, you and the world
-python run.py --ollama-url http://192.168.1.20:11434
-python run.py --compile               # torch.compile (Linux/WSL with Triton): ~1.3–2x faster
-python run.py --cpu                   # force CPU
+python run.py --name Bo --preset tiny      another mind, a small brain
+python run.py --preset medium              a bigger brain (12 GB+ GPU)
+python run.py --schedule together          live and study at the same time
+python run.py --world-device cpu           run her daily life on the CPU, leaving the GPU to study
+python run.py --no-fineweb --no-oracle     offline
 ```
 
-| preset | width × layers | context | parameters (GPT-2 tokens) | suits |
-|---|---|---|---|---|
-| tiny   | 256 × 4  | 256  | ~16M  | CPU, quick experiments |
-| small  | 512 × 8  | 512  | ~51M  | **8 GB GPUs (RTX 3070) – default on GPU** |
-| medium | 768 × 12 | 1024 | ~124M | 12–16 GB GPUs |
-| large  | 1024 × 16| 1024 | ~250M | 24 GB GPUs |
-
-`--tokenizer gpt2` (default on GPU) uses GPT-2's BPE, so each training step covers ~4.4
-bytes of text per token. `--tokenizer bytes` (default on CPU) reads raw UTF-8 bytes, so
-you can watch it learn to spell, letter by letter.
-
-Minds autosave every 10 minutes and on Ctrl+C. Restarting with the same `--name` resumes
-everything: weights, optimizer, monologue, conversations, memories and the world.
+| preset | brain | parameters (GPT-2 tokens) | for |
+|---|---|---|---|
+| tiny | 256 wide × 4 layers | ~16M | CPU (uses byte tokens: ~3M) |
+| small | 512 × 8 | ~51M | **8 GB GPUs such as the RTX 3070 (default)** |
+| medium | 768 × 12 | ~124M | 12–16 GB |
+| large | 1024 × 16 | ~250M | 24 GB |
 
 ## The dashboard
 
-**Header.** Its developmental stage (Static → Babbling → First words → Phrases →
-Sentences → Conversational → Articulate, judged from held-out bits per byte), age, tokens
-read, brain size, speed and how many real words it has used. *📚 Study / 🌱 Awake*,
-*Think*, *Grow* and *Save*. Sending a chat message while it studies offers to wake it.
+- **🌍 World:** the valley, following Ada (or you, or the whole map). Beside it: her six
+  needs (food, water, rest, warmth, company, fun), what she is doing right now, whether that
+  came from *her own words*, *her needs* or *your idea*, and what she tried to say when her
+  words didn't work yet. Below it are three modes:
+  - **👀 Watch:** click anyone or anything to learn about it.
+  - **🧺 Add things:** put apples, books (with your own words), signs, balls, animals… anywhere.
+  - **🧍 Be there:** join as your own avatar. Walk (WASD), carry things, give them to her (G),
+    hug her (H). She senses you, takes what you hold, and is rewarded for your company.
 
-**World.** A garden with a pond, trees, a bed, a lamp, a mirror, a music box, books, balls,
-blocks, seeds, berries, apples and a cat. The body gets hungry and bored; eating, playing,
-reading, petting the cat, discovering new places and spending time with you are rewarding.
-Each step the body's senses are written as first-person text ("I feel hungry. I see a red
-apple 2 north. My friend is right next to me…"); the same network that learns language
-reads it and chooses one of 12 actions. What happens is narrated back and studied, so its
-words are grounded in what it does. Books it reads contain FineWeb pages (or text you
-write) and become study material. Under the map are three modes:
-- **🧺 Add things**: pick an item, then click open ground to place it (a dashed outline
-  previews the spot and turns red where it can't go). Signs and books ask for their text;
-  🧽 erases.
-- **🧍 Be there**: *Join the world* to appear next to the mind as your own avatar (the map
-  zooms in and follows you; 🔍 toggles the whole map). Walk with WASD/arrows, take a new
-  item into your hands from the row of items, pick things up or put them down (F), walk
-  up to the mind and give it what you hold (G) or hug it (H), and talk (T, or just use the
-  conversation box): your words appear above you and the mind hears them when it's close.
-  It senses where you are and what you hold, can take things from your hands and hug you,
-  and is rewarded for your company, so it learns to come to you.
-- **🎮 Guide the mind**: drive its body with the d-pad or keys (WASD/arrows, E use, F take,
-  G drop, L look, V speak, Z sleep, Q approach). This is a *demonstration*: it learns to
-  imitate you.
+  The side panel has four tabs:
+  - **💬 Talk:** chat with her. The Oracle suggests the reply she should have given, and she
+    studies it. Or *suggest* something for her to do ("bake bread"); if she understands, she
+    does it.
+  - **💭 Thoughts:** her free-running inner monologue, each word shaded by her confidence.
+  - **📔 Diary:** every intention and how it turned out.
+  - **🏘️ Village:** what the villagers say to her, what she read, and the Oracle's answers to
+    the questions she asks at the shrine.
+- **🎓 Academy:** her developmental stage (Static → Babbling → First words → Phrases →
+  Sentences → Conversational → Articulate), loss and bits-per-byte, concept score against
+  chance, study speed, the Oracle's assessments of her thoughts, what she is studying and
+  from where, a probe that shows what she predicts next, and buttons to publish, test, grow
+  or save.
+- **🧠 Concepts:** how well she understands each kind of fact, every fact with what she
+  chose, and **Teach her a topic**: the Oracle writes a lesson, questions and new facts, and
+  your topics go first.
+- **🔮 Oracle:** pick the Ollama model, ask it anything ("Let Ada study this" turns the answer
+  into a lesson), and read every lesson it has written.
+- **⚙️ Settings:** the schedule (day & night, together, study only, live only), day and night
+  lengths, GPU intensity, what she studies, how she thinks and talks, and the Oracle.
 
-*What it wants to do* shows the policy's current action probabilities. Everything you do
-in the world applies immediately, even while the mind is busy training or thinking.
+## How she learns quickly
 
-**Inner monologue.** A thought every few seconds, generated freely: the only input is its
-own previous thoughts. Every token is shaded by the probability the network gave it (hover
-for exact numbers) and real words are underlined. Switch on *Grounded* to let it sense the
-world before each thought.
-
-**Conversation.** *Talk* to it at any stage and it answers with whatever it has; hearing
-you is training data. With the teacher on, each reply gets a *Teacher suggests* line,
-which it then studies. 👍 a reply to make that exchange a study example. *Teach* mode sends
-text straight into its studies.
-
-**Growth tab.** Training and held-out FineWeb loss, bits per byte, share of real words in
-its thoughts, vocabulary, body reward, tokens/s and the teacher's 0–10 assessments of
-spelling, grammar, coherence and meaning (every 5 minutes).
-
-**Brain tab.** Attention map of the last thought, activation size and attention spread per
-layer, a *probe* that shows how surprised it is by each token of your text and what it
-expects next, and its anatomy.
-
-**Teacher tab.** Model picker, status and the teacher's notebook: lessons, dialogues, rewritten
-thoughts and ideal replies. **Data tab.** FineWeb status, the file it is reading, and
-sliders for the diet (web text / teacher lessons / lived experience). **Settings.** Thought
-rate, length and temperature, monologue memory, reply length, body speed, learning rates,
-autosave, automatic growth and *GPU time for training* (below 100% the engine rests a moment
-after each step so the browser and desktop, which share the GPU, stay smooth).
-
-## How it learns as fast as it can
-
-- **Modern architecture**: RMSNorm, rotary positions, QK-norm, SwiGLU, tied embeddings,
-  logit soft-capping, zero-initialised residual outputs.
-- **Muon optimizer** for the transformer's matrices (orthogonalised momentum, the optimizer
-  behind the fastest GPT-2 speedruns) with AdamW for embeddings and heads.
-- **bf16 autocast, TF32, fused AdamW**, optional `torch.compile`, and a chunked
-  cross-entropy that never materialises the full logits tensor (with a 50k vocabulary that
-  tensor would otherwise be the largest thing in GPU memory).
-- **Lean FineWeb streaming**: random 1000-document parquet row groups fetched by HTTP
-  range requests from random Common Crawl dumps, tokenized on a background thread into a
-  2048-document buffer. Memory stays flat and the GPU never waits. Two batches are held out
-  as a clean validation set.
-- **Curriculum**: the teacher writes toddler sentences while the mind is babbling, picture
-  book text at first words, short stories, explanations and essays as it matures, plus
-  dialogues in the same format as your conversations.
-- **Distilled self-correction**: the teacher rewrites muddled thoughts into the clear
-  thought they reach for, and the mind studies them.
-- **Growth without forgetting**: a new transformer block starts as the identity, so
-  *Grow* (or auto-growth on a plateau) adds depth without changing what the network
-  computes, then lets it use the new capacity.
-- **One network, many signals**: language modelling, the body's actor-critic loss and
-  imitation of your demonstrations all train the same trunk in the same step.
-
-## What to expect
-
-On an RTX 3070 the *small* preset trains at very roughly 50–100k tokens per second.
-Expect babbling within minutes, real words within the first hour, grammatical phrases
-after a few hundred million tokens and coherent sentences after a few billion (a day or
-more). A 50M-parameter network will not become an assistant like the teacher; it becomes a
-small, genuinely self-trained language model whose growth you can watch and shape. Larger
-presets go further if your GPU allows.
+- A modern small transformer: RMSNorm, rotary positions, QK-norm, SwiGLU, tied embeddings,
+  logit soft-capping, zero-initialised residual branches. Blocks can be added later without
+  disturbing what she knows ("grow").
+- The **Muon** optimizer for the transformer's matrices (it learns faster per token than
+  AdamW), bf16, TF32, fused AdamW, and a chunked loss that never holds the full vocabulary of
+  logits in memory.
+- **FineWeb** streamed as random 1000-document row groups from across Common Crawl, with flat
+  memory and a held-out set for honest measurement.
+- **Curriculum from the Oracle**, pitched at her stage: toddler sentences while she babbles,
+  stories and explanations as she grows, targeted at the concepts her tests say she gets wrong.
+- **Her own life as data**: what she sensed, chose, did and heard, weighted by how it turned out.
+- **Never broken by a bad step:** unstable steps are skipped, broken weights are never saved
+  or published, and the previous good save is always kept.
 
 ## Files
 
 ```
-run.py              entry point and command-line options
-mind/config.py      all settings (saved as minds/<name>/config.json)
-mind/model.py       the transformer, its body heads and growth
-mind/optim.py       Muon + AdamW
-mind/data.py        FineWeb streaming, replay pools, batch mixing
-mind/tokenizer.py   GPT-2 BPE or raw bytes, plus role tokens
-mind/brain.py       the Mind: engine loop, training, thoughts, chat, body, saving
-mind/teacher.py     the Ollama curriculum, tutor and assessor
-mind/ollama.py      Ollama HTTP client
-mind/world.py       the garden world and the body
-mind/server.py      FastAPI + WebSocket server
-web/                the dashboard (no external dependencies, works offline)
-tests/              offline tests:  python -m pytest tests
+run.py               starts the Hub, which starts the Academy and the World
+ada/hub.py           the Hub: processes, schedule, Oracle jobs, browser messages (no torch)
+ada/web.py           the web server inside the Hub
+ada/academy.py       the Academy: training, evaluation, publishing
+ada/life.py          the World process: Ada's day, her brain, talk, journal
+ada/world/sim.py     the valley: places, things, weather, seasons, villagers, needs
+ada/world/agent.py   words to deeds: parsing intentions, needs, plans, actions
+ada/ontology.py      everything in the world and what is true about it
+ada/concepts.py      the concept graph: drills and tests
+ada/oracle.py        the Oracle (Ollama): lessons, answers, villagers, books, assessments
+ada/model.py         the brain; ada/optim.py Muon; ada/fineweb.py streaming; ada/tokenizer.py
+web/                 the dashboard (no external dependencies)
+tests/               python -m pytest tests
 ```
+
+Earlier versions (one process doing everything) are in the v0.x releases.

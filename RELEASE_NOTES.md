@@ -1,3 +1,51 @@
+# Ada v1.0.0: a two-part mind
+
+A redesign from the ground up, built on what Synthetic Mind taught us.
+
+## Why the browser was still sluggish, and how that's fixed
+
+Until now one Python process trained the network, ran the mind *and* served the web page, and
+Python runs only one thread at a time, so the page was starved whenever training or inference
+was busy. Ada is now **three processes**: the **Academy** (only learns), the **World** (only
+lives), and the **Hub** (the web page and the Oracle; it never loads PyTorch). Nothing either
+of the others does can freeze the dashboard, and the Hub restarts either of them if it ever
+stops.
+
+## The two parts
+
+- **The Academy** studies web text streamed from FineWeb, lessons written by the Oracle, concept
+  drills, and Ada's journal of her own life. It tests her understanding with concept questions
+  worded unlike anything she studies, and publishes a new brain to the World.
+- **The World** is a whole valley: cottage, garden, orchard, meadow, forest, lake, a village
+  with a bakery, library, workshop, well, fire pit and the Oracle's shrine, and an observatory.
+  It has days and nights, seasons, weather, three villagers (Mira the baker, Theo the librarian,
+  Rowan the gardener) and animals. Ada has six needs and things to do: grow wheat and bake
+  bread, cook mushrooms, make an axe, read, play, stargaze, ask questions.
+- **By default they take turns:** Ada lives by day; at night she sleeps and the Academy gets
+  the whole GPU. Each morning she wakes with the brain she earned.
+
+## New ideas
+
+- **Her own words steer her body.** Her brain writes an intention ("I bake bread in the
+  oven."); if the World understands it, she does it. Until then her needs choose, with a reason,
+  and she studies those choices. The share of actions that come from her own words is shown
+  live.
+- **Concepts you can see.** A concept graph built from the world (and grown by the Oracle) is
+  drilled in training and tested separately, with every fact's result on the Concepts page.
+- **The Oracle (any Ollama model)** writes lessons pitched at her stage and aimed at what she
+  gets wrong, teaches any topic you name, answers her questions at the shrine and yours,
+  voices the villagers, writes the library's books, suggests the reply she should have given
+  you, and assesses her thoughts.
+- **Be there with her:** join the valley, carry things, give them to her, hug her, talk; or
+  suggest what she should do and watch her try.
+
+## Upgrading
+
+This is a new design with a new save format: minds from v0.x don't carry over (they remain
+usable with the v0.2.0 release). Run `start.bat` as before. The first run creates `minds/Ada/`.
+
+---
+
 # Synthetic Mind v0.2.0
 
 ## Study or be awake, never both at once

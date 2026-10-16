@@ -1,0 +1,534 @@
+"""The Academy: the process where Ada learns. It does nothing else.
+
+It trains her brain on a mixture of four kinds of text:
+
+    FineWeb       the open web, streamed
+    lessons       written by the Oracle: lessons, dialogues, answers to her questions, topics you asked for
+    journal       Ada's own life in the World: what she sensed, decided, did, heard and read
+    concepts      drills stating the facts in the concept graph
+
+It measures her with held-out FineWeb (bits per byte) and with concept tests worded unlike any
+drill, publishes a fresh brain to the World every few minutes (and whenever it is told to stop
+for the day), and saves its full training state so it can resume exactly where it left off.
+"""
+from __future__ import annotations
+
+import math
+import random
+import time
+from array import array
+from collections import Counter, deque
+from pathlib import Path
+
+from .config import AdaConfig
+from .proc import STAGES, FileTail, Link, pick_device, stage_of, write_json
+
+
+class Pool:
+    """Bounded replay pool of token sequences; recent and heavy items are drawn more often."""
+
+    def __init__(self, maxlen: int):
+        self.items: deque[tuple[list[int], float, str]] = deque(maxlen=maxlen)
+        self.added = 0
+
+    def add(self, ids: list[int], weight: float, tag: str):
+        if ids:
+            self.items.append((ids, max(0.05, float(weight)), tag))
+            self.added += 1
+
+    def __len__(self):
+        return len(self.items)
+
+    def take(self, n: int, rng: random.Random, eot: int) -> list[int] | None:
+        if not self.items:
+            return None
+        out: list[int] = []
+        while len(out) < n:
+            k = len(self.items)
+            cands = [k - 1 - rng.randrange(max(1, k // 4)) if rng.random() < 0.5 else rng.randrange(k)
+                     for _ in range(4)]
+            ids = self.items[rng.choices(cands, [self.items[c][1] for c in cands])[0]][0]
+            if len(ids) > n and rng.random() < 0.5:
+                ids = ids[rng.randrange(len(ids) - n):]
+            out.extend(ids)
+            out.append(eot)
+        return out[:n]
+
+
+def run(name: str, root: str, inbox, outbox):
+    """Process entry point (spawned by the Hub)."""
+    folder = Path(root) / name
+    link = Link("academy", inbox, outbox, folder)
+    try:
+        Academy(folder, link).loop()
+    except Exception as e:  # pragma: no cover - reported to the Hub, which restarts us
+        link.crash(e)
+        raise
+
+
+class Academy:
+    def __init__(self, folder: Path, link: Link):
+        import torch
+
+        from .concepts import ConceptGraph
+        from .fineweb import FineWebStream
+        from .model import Brain
+        from .optim import build_optimizers
+        from .tokenizer import make_tokenizer
+
+        self.torch = torch
+        self.folder, self.link = folder, link
+        self.cfg = AdaConfig.load(folder / "config.json")
+        self.tok = make_tokenizer(self.cfg.tokenizer)
+        self.cfg.brain.vocab_size = self.tok.vocab_size
+        self.device = pick_device("auto")
+        if self.device.type == "cpu":
+            import os
+
+            torch.set_num_threads(max(1, (os.cpu_count() or 4) - 2))   # two cores stay with the World and the Hub
+        if self.device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        self.amp = torch.bfloat16 if self.device.type == "cuda" and torch.cuda.is_bf16_supported() else None
+        self.brain = Brain(self.cfg.brain).to(self.device)
+        self._Brain, self._build_optimizers = Brain, build_optimizers
+        self.opts = build_optimizers(self.brain, self.cfg.academy, self.device.type)
+        self.rng = random.Random()
+
+        self.fineweb = FineWebStream(self.tok, self.cfg.academy.fineweb_repo, self.cfg.academy.fineweb_config, 2048)
+        self.lessons = Pool(6000)
+        self.journal = Pool(6000)
+        self.concepts = ConceptGraph(folder / "concepts.json")
+        self.tails = {"lessons": FileTail(folder / "curriculum.jsonl"), "journal": FileTail(folder / "journal.jsonl")}
+        self.rows_from: Counter = Counter()
+
+        self.step = 0
+        self.tokens = 0
+        self.loss_ema: float | None = None
+        self.val_loss: float | None = None
+        self.best_val = float("inf")
+        self.evals_since_best = 0
+        self.growths = 0
+        self.tps = 0.0
+        self.gnorm = 0.0
+        self.lr = 0.0
+        self.skipped = 0
+        self.version = 0
+        self.last_publish = 0.0
+        self.steps_at_publish = -1
+        self.concept_score: dict = {}
+        self.val_batches: list = []
+        self.paused = True
+        self.pause_reason = "starting"
+        self.intensity_override: str | None = None
+        self.status_line = "starting"
+        self.load()
+
+    # -------------------------------------------------------------- data
+    def ingest(self):
+        """Pick up new lessons and journal entries written by the other processes."""
+        from .tokenizer import encode_parts
+
+        for name, tail in self.tails.items():
+            pool = self.lessons if name == "lessons" else self.journal
+            for rec in tail.read():
+                parts = [(r, t) for r, t in rec.get("parts", []) if r in self.tok.special and t]
+                ids = encode_parts(self.tok, parts)
+                w = float(rec.get("weight", 1.0)) * (3.0 if rec.get("priority") else 1.0)
+                pool.add(ids[: self.cfg.brain.seq_len * 4], w, rec.get("kind", name))
+                if name == "lessons":
+                    self.fineweb.learn_words(" ".join(t for _, t in parts))
+        self.concepts.reload()
+
+    def _concept_row(self, n: int) -> list[int]:
+        from .tokenizer import encode_parts
+
+        out: list[int] = []
+        while len(out) < n:
+            out += encode_parts(self.tok, self.concepts.drill(self.rng)) + [self.tok.eot]
+        return out[:n]
+
+    def weights(self) -> dict[str, float]:
+        a = self.cfg.academy
+        return {
+            "fineweb": a.mix_fineweb if a.fineweb and self.fineweb.ready() else 0.0,
+            "lessons": a.mix_lessons if len(self.lessons) else 0.0,
+            "journal": a.mix_journal if len(self.journal) else 0.0,
+            "concepts": a.mix_concepts,
+        }
+
+    def batch(self, B: int, T: int):
+        w = self.weights()
+        names = [k for k, v in w.items() if v > 0]
+        if not names:
+            return None
+        rows = []
+        for _ in range(B):
+            for _try in range(3):
+                src = self.rng.choices(names, [w[k] for k in names])[0]
+                if src == "fineweb":
+                    r = self.fineweb.take(T + 1)
+                elif src == "concepts":
+                    r = self._concept_row(T + 1)
+                else:
+                    r = (self.lessons if src == "lessons" else self.journal).take(T + 1, self.rng, self.tok.eot)
+                if r:
+                    rows.append(r)
+                    self.rows_from[src] += 1
+                    break
+        if not rows:
+            return None
+        t = self.torch.tensor(rows, dtype=self.torch.long)
+        t = t.pin_memory().to(self.device, non_blocking=True) if self.device.type == "cuda" else t.to(self.device)
+        return t[:, :-1], t[:, 1:]
+
+    # -------------------------------------------------------------- training
+    def autocast(self):
+        import contextlib
+
+        return self.torch.autocast(self.device.type, dtype=self.amp) if self.amp else contextlib.nullcontext()
+
+    def train_step(self) -> bool:
+        from .optim import set_lrs
+
+        torch, a = self.torch, self.cfg.academy
+        B, T = a.batch_size, self.cfg.brain.seq_len
+        if not self.val_batches and self.fineweb.ready() and a.fineweb:
+            for _ in range(2):
+                rows = [r for r in (self.fineweb.take(T + 1) for _ in range(B)) if r]
+                if rows:
+                    t = torch.tensor(rows, device=self.device)
+                    self.val_batches.append((t[:, :-1], t[:, 1:]))
+        t0 = time.perf_counter()
+        total, ntok = 0.0, 0
+        for _ in range(a.grad_accum):
+            b = self.batch(B, T)
+            if b is None:
+                for o in self.opts:
+                    o.zero_grad(set_to_none=True)
+                self.status_line = "waiting for something to study (FineWeb: %s)" % self.fineweb.status
+                return False
+            x, y = b
+            with self.autocast():
+                loss = self.brain(x, y)
+            (loss / a.grad_accum).backward()
+            total += float(loss.detach()) / a.grad_accum
+            ntok += x.numel()
+        gnorm = float(torch.nn.utils.clip_grad_norm_(self.brain.parameters(), a.grad_clip))
+        if not (math.isfinite(total) and math.isfinite(gnorm)):
+            for o in self.opts:
+                o.zero_grad(set_to_none=True)
+            self.skipped += 1
+            self.link.log(f"skipped an unstable step (loss {total}, grad norm {gnorm})", every=30)
+            return True
+        set_lrs(self.opts, a, min(1.0, (self.step + 1) / max(1, a.warmup_steps)))
+        self.lr = a.muon_lr * min(1.0, (self.step + 1) / max(1, a.warmup_steps))
+        for o in self.opts:
+            o.step()
+            o.zero_grad(set_to_none=True)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+        dt = max(time.perf_counter() - t0, 1e-6)
+        self.step += 1
+        self.tokens += ntok
+        self.gnorm = gnorm
+        self.tps = ntok / dt if self.step == 1 else 0.9 * self.tps + 0.1 * ntok / dt
+        self.loss_ema = total if self.loss_ema is None else 0.98 * self.loss_ema + 0.02 * total
+        self.status_line = "studying"
+        if self.step % 20 == 0:
+            self.link.send("metric", point=self.point(total))
+        if self.step % a.eval_every == 0:
+            self.evaluate()
+        # Leave the GPU some breathing room when asked to.
+        mode = self.intensity_override or a.intensity
+        rest = {"full": 0.0, "balanced": 0.35, "gentle": 1.5}.get(mode, 0.0)
+        if rest:
+            time.sleep(min(0.5, dt * rest))
+        return True
+
+    def point(self, loss: float | None = None) -> dict:
+        p = {"step": self.step, "tokens": self.tokens, "loss": None if loss is None else round(loss, 4),
+             "loss_ema": None if self.loss_ema is None else round(self.loss_ema, 4),
+             "bpb": None if self.bpb() is None else round(self.bpb(), 4), "tps": round(self.tps),
+             "layers": self.cfg.brain.n_layers, "t": time.time()}
+        if self.val_loss is not None:
+            p["val"] = round(self.val_loss, 4)
+        if self.concept_score:
+            p["concepts"] = self.concept_score.get("accuracy")
+        return p
+
+    def bpb(self) -> float | None:
+        loss = self.val_loss if self.val_loss is not None else self.loss_ema
+        if loss is None:
+            return None
+        return loss / math.log(2) / max(self.fineweb.bytes_per_token, 1e-6)
+
+    def stage(self) -> int:
+        return stage_of(self.val_loss if self.val_loss is not None else self.loss_ema, self.bpb(), self.tok.n_real)
+
+    # -------------------------------------------------------------- evaluation
+    def evaluate(self):
+        torch = self.torch
+        with torch.no_grad():
+            if self.val_batches:
+                ls = []
+                for x, y in self.val_batches:
+                    with self.autocast():
+                        ls.append(float(self.brain(x, y)))
+                self.val_loss = sum(ls) / len(ls)
+                if self.val_loss < self.best_val * 0.99:
+                    self.best_val, self.evals_since_best = self.val_loss, 0
+                else:
+                    self.evals_since_best += 1
+            self.concept_score = self.concept_test()
+        self.link.send("metric", point=self.point())
+        self.link.send("concepts", report=self.concept_score)
+        write_json(self.folder / "concept_report.json", self.concept_score)
+        a = self.cfg.academy
+        if a.auto_grow and self.evals_since_best >= a.grow_patience_evals and self.cfg.brain.n_layers < a.max_layers:
+            self.grow("its learning had levelled off")
+
+    def concept_test(self) -> dict:
+        """Score every concept probe: the option whose sentence the brain finds most likely wins."""
+        torch, F = self.torch, self.torch.nn.functional
+        probes = self.concepts.probes()
+        if not probes:
+            return {}
+        seqs = [[self.tok.eot] + self.tok.encode(s) for p in probes for s in p["sentences"]]
+        scores = []
+        for i in range(0, len(seqs), 64):
+            chunk = seqs[i:i + 64]
+            L = max(map(len, chunk))
+            x = torch.full((len(chunk), L), self.tok.eot, dtype=torch.long)
+            mask = torch.zeros(len(chunk), L - 1)
+            for j, s in enumerate(chunk):
+                x[j, :len(s)] = torch.tensor(s)
+                mask[j, :len(s) - 1] = 1
+            x = x.to(self.device)
+            with self.autocast():
+                logits = self.brain(x[:, :-1])
+            lp = F.log_softmax(logits.float(), -1).gather(-1, x[:, 1:, None]).squeeze(-1).cpu()
+            scores += ((lp * mask).sum(1) / mask.sum(1)).tolist()
+        results, by_rel, by_src = [], Counter(), Counter()
+        tot_rel, tot_src = Counter(), Counter()
+        src_of = dict(self.concepts.all())
+        for k, p in enumerate(probes):
+            sc = scores[4 * k:4 * k + 4]
+            choice = p["options"][max(range(4), key=lambda i: sc[i])]
+            ok = choice == p["o"]
+            src = src_of.get((p["s"], p["r"], p["o"]), "oracle")
+            results.append({"s": p["s"], "r": p["r"], "o": p["o"], "chose": choice, "ok": ok, "src": src})
+            by_rel[p["r"]] += ok
+            tot_rel[p["r"]] += 1
+            by_src[src] += ok
+            tot_src[src] += 1
+        acc = sum(r["ok"] for r in results) / len(results)
+        return {"accuracy": round(acc, 4), "chance": 0.25, "n": len(results), "step": self.step,
+                "by_relation": {r: round(by_rel[r] / tot_rel[r], 3) for r in tot_rel},
+                "by_source": {s: round(by_src[s] / tot_src[s], 3) for s in tot_src},
+                "results": results}
+
+    @staticmethod
+    def _finite(sd) -> bool:
+        import torch
+
+        return all(bool(torch.isfinite(v).all()) for v in sd.values() if v.is_floating_point())
+
+    # -------------------------------------------------------------- publishing and saving
+    def publish(self, why: str = "scheduled"):
+        """Hand the World a fresh brain (bf16 weights + a small description)."""
+        if not self._finite(self.brain.state_dict()):
+            self.link.log("not publishing: the weights are not finite; restoring the last save", error=True)
+            self.load()
+            return
+        brain_dir = self.folder / "brain"
+        brain_dir.mkdir(exist_ok=True)
+        self.version += 1
+        sd = {k: v.detach().to("cpu", self.torch.bfloat16) for k, v in self.brain.state_dict().items()}
+        tmp = brain_dir / "latest.pt.tmp"
+        self.torch.save({"weights": sd, "brain": vars(self.cfg.brain).copy(), "tokenizer": self.tok.kind}, tmp)
+        tmp.replace(brain_dir / "latest.pt")
+        st = self.stage()
+        meta = {"version": self.version, "step": self.step, "tokens": self.tokens, "t": time.time(),
+                "layers": self.cfg.brain.n_layers, "stage": st, "stage_name": STAGES[st][0], "bpb": self.bpb(),
+                "concepts": self.concept_score.get("accuracy"), "why": why}
+        write_json(brain_dir / "latest.json", meta)
+        self.last_publish, self.steps_at_publish = time.time(), self.step
+        self.link.send("published", meta=meta)
+
+    def save(self):
+        if not self._finite(self.brain.state_dict()):
+            return
+        state = {
+            "brain": self.brain.state_dict(), "opts": [o.state_dict() for o in self.opts],
+            "brain_cfg": vars(self.cfg.brain).copy(),
+            "counters": dict(step=self.step, tokens=self.tokens, loss_ema=self.loss_ema, val_loss=self.val_loss,
+                             best_val=self.best_val, growths=self.growths, version=self.version),
+            "concept_score": self.concept_score,
+            "pools": {n: [(array("i", ids).tobytes(), w, tag) for ids, w, tag in p.items]
+                      for n, p in (("lessons", self.lessons), ("journal", self.journal))},
+            "tails": {n: t.pos for n, t in self.tails.items()},
+        }
+        path = self.folder / "academy.pt"
+        tmp = path.with_suffix(".tmp")
+        self.torch.save(state, tmp)
+        if path.exists():
+            path.replace(self.folder / "academy.prev.pt")
+        tmp.replace(path)
+
+    def load(self):
+        torch = self.torch
+        for name in ("academy.pt", "academy.prev.pt"):
+            path = self.folder / name
+            if not path.exists():
+                continue
+            s = torch.load(path, map_location=self.device, weights_only=False)
+            if not self._finite(s["brain"]):
+                self.link.log(f"{name} holds broken weights; trying the previous save", error=True)
+                continue
+            for k, v in s["brain_cfg"].items():
+                setattr(self.cfg.brain, k, v)
+            self.brain = self._Brain(self.cfg.brain).to(self.device)
+            self.brain.load_state_dict(s["brain"])
+            self.opts = self._build_optimizers(self.brain, self.cfg.academy, self.device.type)
+            try:
+                for o, st in zip(self.opts, s["opts"]):
+                    o.load_state_dict(st)
+            except (ValueError, KeyError, RuntimeError):
+                pass
+            c = s["counters"]
+            self.step, self.tokens, self.loss_ema = c["step"], c["tokens"], c["loss_ema"]
+            self.val_loss, self.best_val, self.growths = c["val_loss"], c["best_val"], c["growths"]
+            self.version = c.get("version", 0)
+            self.concept_score = s.get("concept_score", {})
+            if not self.lessons.items:
+                for pname, pool in (("lessons", self.lessons), ("journal", self.journal)):
+                    for b, w, tag in s["pools"].get(pname, []):
+                        ids = array("i")
+                        ids.frombytes(b)
+                        pool.add(ids.tolist(), w, tag)
+                for n, pos in s.get("tails", {}).items():
+                    if n in self.tails:
+                        self.tails[n].pos = pos
+            self.link.log(f"resumed at step {self.step} ({self.tokens:,} tokens) from {name}")
+            return
+
+    def grow(self, why: str):
+        n = self.brain.grow()
+        self.opts = self._build_optimizers(self.brain, self.cfg.academy, self.device.type)
+        self.growths += 1
+        self.evals_since_best, self.best_val = 0, float("inf")
+        self.link.send("grew", layers=n, params=self.brain.n_params(), why=why)
+        self.link.log(f"grew to {n} layers ({why})")
+
+    # -------------------------------------------------------------- control
+    def handle(self, msg: dict):
+        cmd, rid = msg.get("cmd"), msg.get("rid")
+        try:
+            if cmd == "config":
+                new = AdaConfig.from_dict(msg["config"])
+                new.brain = self.cfg.brain                 # the shape is ours to change, not the Hub's
+                self.cfg = new
+                self.fineweb.enabled = self.cfg.academy.fineweb
+            elif cmd == "pause":
+                was_studying = not self.paused
+                self.paused, self.pause_reason = True, msg.get("why", "paused")
+                if was_studying:
+                    if self.step != self.steps_at_publish:
+                        self.publish("end of a study session")   # she wakes up with what she learned
+                    self.save()
+            elif cmd == "resume":
+                self.paused, self.pause_reason = False, ""
+                self.intensity_override = msg.get("intensity")
+            elif cmd == "publish":
+                self.publish("you asked for it")
+            elif cmd == "grow":
+                self.grow("you asked for it")
+            elif cmd == "save":
+                self.save()
+            elif cmd == "evaluate":
+                self.evaluate()
+            elif cmd == "probe":
+                self.link.reply(rid, self.probe(msg["text"]))
+                return
+            elif cmd == "stop":
+                raise SystemExit
+            self.link.reply(rid, True)
+        except SystemExit:
+            raise
+        except Exception as e:
+            self.link.reply(rid, error=f"{type(e).__name__}: {e}")
+
+    def probe(self, text: str) -> dict:
+        torch, F = self.torch, self.torch.nn.functional
+        ids = self.tok.encode(text)[-(self.cfg.brain.seq_len - 1):] or [self.tok.eot]
+        with torch.no_grad(), self.autocast():
+            logits = self.brain(torch.tensor([ids], device=self.device))[0].float()
+        logits[:, self.tok.n_real:] = float("-inf")
+        lp = F.log_softmax(logits, -1)
+        surprise = [0.0] + [float(-lp[i, ids[i + 1]]) / math.log(2) for i in range(len(ids) - 1)]
+        top = lp[-1].exp().topk(10)
+        return {"tokens": [[self.tok.token_str(t), round(s, 2)] for t, s in zip(ids, surprise)],
+                "next": [[self.tok.token_str(int(i)), round(float(p), 4)] for p, i in zip(top.values, top.indices)]}
+
+    def status(self) -> dict:
+        st = self.stage()
+        tot = sum(self.rows_from.values()) or 1
+        return {
+            "paused": self.paused, "pause_reason": self.pause_reason, "line": self.status_line,
+            "intensity": self.intensity_override or self.cfg.academy.intensity,
+            "step": self.step, "tokens": self.tokens, "tps": self.tps, "loss": self.loss_ema, "val": self.val_loss,
+            "bpb": self.bpb(), "stage": st, "stage_name": STAGES[st][0], "stage_blurb": STAGES[st][2],
+            "stages": [s[0] for s in STAGES], "lr": self.lr, "gnorm": self.gnorm, "skipped": self.skipped,
+            "params": self.brain.n_params(), "trunk_params": self.brain.n_params(True),
+            "layers": self.cfg.brain.n_layers, "d_model": self.cfg.brain.d_model, "seq_len": self.cfg.brain.seq_len,
+            "growths": self.growths, "device": str(self.device) + (
+                f" ({self.torch.cuda.get_device_name()})" if self.device.type == "cuda" else ""),
+            "precision": "bf16" if self.amp else "fp32", "tokenizer": self.tok.kind,
+            "version": self.version, "last_publish": self.last_publish,
+            "mix": {k: round(v / tot, 3) for k, v in self.rows_from.items()},
+            "pools": {"lessons": len(self.lessons), "journal": len(self.journal),
+                      "lessons_added": self.lessons.added, "journal_added": self.journal.added,
+                      "facts": len(self.concepts.facts)},
+            "fineweb": {"status": self.fineweb.status, "error": self.fineweb.error, "docs": self.fineweb.docs_seen,
+                        "buffer": len(self.fineweb.docs), "source": self.fineweb.source,
+                        "bytes_per_token": round(self.fineweb.bytes_per_token, 3)},
+            "concepts": {k: v for k, v in self.concept_score.items() if k != "results"},
+        }
+
+    def loop(self):
+        self.fineweb.enabled = self.cfg.academy.fineweb
+        self.fineweb.start()
+        self.ingest()
+        if not (self.folder / "brain" / "latest.pt").exists():
+            self.publish("her first brain")   # the World needs something to live with, even if it's noise
+        self.concept_score = self.concept_score or self.concept_test()
+        self.link.send("concepts", report=self.concept_score)
+        last_ingest = last_status = 0.0
+        last_save = time.time()
+        while True:
+            if not self.link.hub_alive():
+                self.save()
+                return
+            for msg in self.link.commands():
+                self.handle(msg)
+            now = time.time()
+            if now - last_ingest > 2.0:
+                last_ingest = now
+                self.ingest()
+            did = False
+            if not self.paused:
+                did = self.train_step()
+                if self.cfg.academy.publish_minutes > 0 and now - self.last_publish > self.cfg.academy.publish_minutes * 60 \
+                        and self.step != self.steps_at_publish:
+                    self.publish()
+                if now - last_save > 600:
+                    last_save = now
+                    self.save()
+            else:
+                self.status_line = f"resting ({self.pause_reason})"
+            if now - last_status > 1.0:
+                last_status = now
+                self.link.send("status", status=self.status())
+            if not did:
+                time.sleep(0.1)
