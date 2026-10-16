@@ -1,3 +1,73 @@
+# Synthetic Mind v4.0.0: a mind that makes itself
+
+A new design. Zen is alone in an endless world, and everything it does comes from its own brain.
+
+## Zen's own mind, all the way down
+- **No caretaker, no planner, no script.** Wren is gone, and so is every rule that chose for Zen.
+  Its brain (the language model the Academy trains) chooses every action, one word at a time,
+  from 14 motor words: forward, back, left, right, wait, take, drop, eat, drink, use, sleep, look,
+  speak, ask. The only things that happen by themselves are physics: Zen falls asleep when exhausted
+  and faints (waking at home) when its health runs out.
+- **It learns from what happens.** The world reports the consequence of every deed and how it
+  felt: hunger eased, thirst quenched, warmth from a fire, a new place found, pain at a wall. The
+  Academy learns from Zen's own stream two ways: predicting what follows what it does (its
+  understanding of the world) and a policy gradient on its own choices (doing more of what turned out
+  well). Its past choices are never copied as text, so chance can't harden into habit.
+- **Boredom**, a sixth need: waiting around and doing the same thing with nothing new coming of it
+  makes Zen bored, which feels bad; new places, new things, varied deeds, making art and the
+  Sprite's answers relieve it.
+- **Real deeds are worth something.** Eating, drinking clean water, lighting a fire, cooking,
+  reading a book, chopping a tree, opening a chest, sleeping in a bed and more earn a reward of their
+  own, worth less each time they are repeated soon after, so only genuine doing pays.
+- **Thoughts, words and deeds in one stream.** What Zen perceives, thinks, says, is told and does is
+  one continuous text its brain reads, so language and action grow together.
+
+## The Sprite of All Knowing
+- A small glowing sprite floats beside Zen and answers whatever Zen asks. When Zen's brain chooses
+  *ask*, its brain also writes the question; its body waits for the answer while its thoughts go on.
+  Early questions are babble; the Sprite guesses kindly what Zen likely means and answers that.
+- It runs on llama.cpp on your CPU and costs nothing unless asked. Its default model, **Qwen 2.5
+  Omni 3B**, can see and hear (3.6 GB with its projector). You can ask it about Zen on its tab.
+
+## Art from nothing, one mark at a time
+- At the easel, the piano, with clay or at the desk, Zen's brain chooses every mark: where the
+  brush moves, when it presses and lifts, which of 12 colours; every note, octave, length and rest;
+  every bit of clay added, cut or smoothed; every written word. No templates, no composers.
+- **The Sprite looks and listens**: it sees each painting and sculpture and hears each song, says
+  what it sees, tells Zen something kind and honest, and scores it. That verdict is the reward for
+  every mark that made the piece (with the studio's own measures as a smaller part, and as a
+  fallback).
+- **♥ Love** a piece in Keepsakes: every mark that made it counts for more in Zen's learning.
+- **Time-lapse**: replay any piece mark by mark. Watch Zen paint live on Home.
+
+## An endless world
+- Generated from a seed in 32×32 chunks as Zen goes: meadow, grassland, forest, pine forest, jungle,
+  swamp, savanna, desert, tundra, snow, mountains and rock; lakes, rivers and the sea.
+- Named places: ruins with chests and real books to read, abandoned cabins, caves, standing stones,
+  springs, cairns to climb and look far from, beehives, nests and old wells.
+- Animals that wander, flee and sleep; fruit in season, poisonous mushrooms, honey, fish and eggs.
+- Day and night, seasons, rain, storms, snow, fog and wind; temperature by land, height and hour;
+  shelter, fire, darkness, getting wet. A cabin at home with a bed, fireplace, books, an easel,
+  a piano, a desk and a rain barrel.
+
+## The page
+- **Home**: the world in 3D, streamed around Zen, with the Sprite, live art, a local map and Zen's
+  needs (including boredom) and choices. Follow, Free and Visit modes.
+- New tabs: **Zen** (journey, body, motor mind), **Atlas** (everywhere Zen has been), **Sprite**.
+- **Thoughts** now shows every action and its consequence too; **Conversations** shows its
+  questions, the Sprite's answers and verdicts, and your talks.
+- **Keepsakes**: what the Sprite saw and said, the piece's measures, time-lapse replay, ♥ Love.
+- **Academy**: "learning from its own life" (policy loss, choice entropy, return).
+
+## Under the hood
+- Fixed: feeding several tokens at once into the brain's attention cache gave wrong results (Zen's
+  continuous stream depends on it).
+- Zen's brain chooses an action in about 40 ms on 4 CPU threads (small brain).
+- Upgrading keeps Zen's brain, journey and keepsakes; its life starts over in the endless world.
+- 64 tests, including a real (tiny) brain living, painting, asking and being judged end to end.
+
+---
+
 # Synthetic Mind v3.3.1
 
 - **The Thoughts tab shows what Zen decides, too.** In your report, Zen's brain was brand new

@@ -1,3 +1,3 @@
 """Ada: a two-part mind. The Academy teaches her; the World is where she lives."""
 
-__version__ = "3.3.1"
+__version__ = "4.0.0"
