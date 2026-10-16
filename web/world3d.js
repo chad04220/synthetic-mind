@@ -1533,7 +1533,7 @@ function buildFurniture() {
       fbox(-0.49, 0.49, 0.62, 1.73, 0.24, 0.46, blanket);
       fbox(-0.49, 0.49, 0.54, 0.64, 0.4, 0.475, shade(blanket, 1.15));
       const [px, pz] = P(0, 0.3), [mx, mz] = P(0, 0.9);
-      S.beds.set(e.id, { id: e.id, owner: e.owner, tx: e.x, ty: e.y, px, pz, mx, mz, hx: dir[0], hz: dir[1], top: base + 0.44 });
+      S.beds.set(e.id, { id: e.id, owner: e.owner, blanket, tx: e.x, ty: e.y, px, pz, mx, mz, hx: dir[0], hz: dir[1], top: base + 0.44 });
     } else if (e.kind === "table") {
       fbox(-0.5, 0.5, -0.4, 0.4, 0.6, 0.66, wood);
       for (const a of [-0.42, 0.42]) for (const b of [-0.32, 0.32]) fbox(a - 0.04, a + 0.04, b - 0.04, b + 0.04, 0, 0.6, shade(wood, 0.8));
@@ -1727,8 +1727,11 @@ function makeFigure(name, color, role = "", isPlayer = false, hat = null) {
     } else if (hashStr(name) % 2) add(B, FG.bun, 0, 0.98, -0.12, hair);
   }
   g.add(mesh(B));
+  // a blanket, shown only while lying in bed (local +z is up then)
+  const blanket = new THREE.Mesh(UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0x7fb3a6 }));
+  blanket.position.set(0, 0.36, 0.08); blanket.scale.set(0.9, 0.86, 0.34); blanket.visible = false; blanket.castShadow = true; g.add(blanket);
   S.scene.add(g);
-  return { group: g, parts, mat: fmat, x: 0, z: 0, y: 0, heading: 0, walk: 0, moving: false, init: false };
+  return { group: g, parts, mat: fmat, blanket, x: 0, z: 0, y: 0, heading: 0, walk: 0, moving: false, init: false };
 }
 function animateFigure(f, dt, speed, sleeping) {
   f.walk += dt * (speed > 0.05 ? 9 + speed * 1.5 : 0);
@@ -1964,6 +1967,8 @@ function updatePeople(dt) {
     f.lie = lerp(f.lie || 0, bed ? 1 : 0, damp(5, dt));
     f.group.position.set(f.x, f.y + (f.bob || 0), f.z); f.group.rotation.y = f.heading;
     f.group.rotation.x = -Math.PI / 2 * f.lie;
+    f.blanket.visible = f.lie > 0.85;
+    if (bed && f.blanket.visible) f.blanket.material.color.copy(bed.blanket);
     if (p.sleeping && !bed) { f.group.rotation.z = lerp(f.group.rotation.z, Math.PI / 2 * 0.95, damp(4, dt)); f.group.position.y += 0.15; }
     else f.group.rotation.z = lerp(f.group.rotation.z, 0, damp(6, dt));
     const wet = smooth(0.4, 1, Number(p.wet) || 0);
@@ -2690,7 +2695,7 @@ function setMode(mode) {
   if (!S.inited) return;
   mode = mode === "visit" ? "visit" : "watch";
   if (mode === S.mode) return;
-  S.mode = mode; S.keys.clear();
+  S.mode = mode; S.keys.clear(); if (S.hoverEl) S.hoverEl.hidden = true;
   if (mode === "visit") { S.local.init = false; S.cam.focus = "you"; S.cam.fp = false; initLocal(); }
   else {
     if (document.pointerLockElement) document.exitPointerLock();
