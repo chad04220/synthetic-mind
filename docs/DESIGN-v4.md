@@ -1,0 +1,176 @@
+# Synthetic Mind v4: Zen alone, in an endless world
+
+Zen is the only mind. Everything Zen does comes from its own brain: no planner, no scripted
+choices, no caretaker. The World is physics and consequences; the Academy turns Zen's experience
+into learning; the Sprite of All Knowing answers when Zen asks.
+
+## 1. Principles
+
+- **Every deed is Zen's.** Each motor action is sampled from Zen's brain (the language model it is
+  training), restricted to the motor vocabulary. Nothing else moves Zen's body. The only
+  involuntary things are physics: Zen collapses asleep when its rest reaches 0 and wakes when rested
+  in daylight; cold, hunger and thirst hurt.
+- **Learning from consequences.** The World scores each action (reward) from what changed:
+  needs relieved or worsened, pain, novelty (new tiles, new kinds of thing, new chunks), answers
+  received. The Academy trains the brain with a policy-gradient loss on its own actions, and with the
+  ordinary language-model loss on the experience text, so Zen also learns to predict what its actions
+  lead to.
+- **Words and deeds in one stream.** Zen's experience is one text stream: what it perceives, what it
+  thinks, what it does and what happens. Its thoughts sit in the same context as its actions, so
+  language can come to steer the body.
+- **No LLM cost unless Zen asks.** The only language model is the Sprite (llama.cpp, CPU), used only
+  when Zen asks a question (and when you ask it from its tab).
+
+## 2. Tokens
+
+Role tokens (ids unchanged from v3; two renamed):
+`<|endoftext|> <|thought|> <|user|> <|mind|> <|oracle|> <|world|> <|intent|> <|act|>`
+- `<|act|>` (was `<|npc|>`) precedes one motor word.
+- `<|oracle|>` precedes the Sprite's answer. `<|mind|>` precedes what Zen says or asks.
+- `<|world|>` precedes a perception or a consequence. `<|thought|>` precedes an inner thought.
+- `<|intent|>` is unused (kept for old minds).
+
+Motor vocabulary (each a single fineweb32k token with a leading space):
+
+| word | effect |
+|---|---|
+| forward | step one tile ahead (blocked by water deeper than wading, trees, rock, walls) |
+| back | step one tile back, keeping the facing |
+| left / right | turn 90° |
+| wait | do nothing for one beat |
+| take | pick up the takeable thing ahead or underfoot (hands hold up to 4 things) |
+| drop | put down the last thing held |
+| eat | eat the edible thing held (or underfoot/ahead, e.g. berries on a bush) |
+| drink | drink from water ahead/underfoot or a held water vessel |
+| use | use the thing ahead (open a chest, read a book, light the fire with a held flint, sit, play the piano, paint at the easel, chop a tree with a held axe, fill a held bucket…) |
+| sleep | lie down and sleep (wakes when rested, or by morning) |
+| look | look around: a longer description of everything in sight |
+| speak | say something aloud: Zen's brain writes the words (heard by you if near) |
+| ask | ask the Sprite a question: Zen's brain writes the question; Zen's body waits for the answer |
+
+The World also returns `ok=false` with a reason ("A tree is in the way.") for actions that don't work.
+
+## 3. The World (`ada/world/`)
+
+### 3.1 Terrain (`terrain.py`)
+- Endless, deterministic from `seed`. Tiles are integer (x, y), any value. Chunks are 32×32
+  (`cx = x // 32`).
+- Fields from fractal value noise: elevation, moisture, temperature (latitude-free; varies with
+  noise and elevation). Biomes: `ocean`, `lake`, `beach`, `meadow`, `grassland`, `forest`,
+  `pine_forest`, `jungle`, `swamp`, `desert`, `savanna`, `tundra`, `snow`, `mountain`, `rock`.
+  Rivers carve along noise ridges. Water depth: `shallow` (wadeable), `deep` (blocked).
+- Static features per tile (part of chunk data, not entities): trees (by biome: oak, birch, pine,
+  palm, cactus, jungle tree, dead tree), bushes (berry bush, plain), rocks/boulders, tall grass,
+  flowers, reeds, snow drifts. A feature may be removed or changed (a felled tree becomes a
+  stump); such changes are stored as chunk diffs.
+- Points of interest, placed by hashed chance per chunk: ruins (stone walls, a chest, books with
+  real text, tools), an abandoned cabin, a cave mouth, standing stones, a spring, a lookout hill,
+  a beehive, a bird's nest, an old well. Each has a generated name ("the Grey Ruins").
+- **Home**: a small cabin at the origin (bed, fireplace, wood, flint, table, bookshelf with a few
+  books, easel with paper, piano, chest with a cup, bucket, axe), on meadow near water.
+
+### 3.2 Things and beings (`sim.py`)
+- Entities (takeable things and placed objects): `{id, kind, x, y, ...state}` generated per chunk on
+  first load (berries, apples under trees, mushrooms, sticks, stones, flint, clay, feathers, shells,
+  eggs in nests, honey, fish in water…), kept in a chunk index; removed/added ones persist.
+- Animals (in loaded chunks only): deer, rabbit, fox, bird, fish, frog (night), owl (night),
+  fireflies (summer nights), bees near hives, bear (rare, far from home, avoids Zen unless
+  cornered). They wander, flee when Zen comes close, sleep at night/day by species.
+- **Zen's body**: x, y, facing (0=N,1=E,2=S,3=W), hands (list of held entities, max 4), needs 0–100:
+  `energy` (food), `water`, `rest`, `warmth`, `health`; derived feelings. Wet in rain/swimming,
+  dries by fire or sun. Warmth follows the air temperature (biome, elevation, time, weather,
+  shelter, fire nearby). Health drops when energy, water or warmth is near 0 and slowly recovers
+  otherwise. At health 0 Zen faints and wakes at home (the cabin), hands empty: a big negative
+  reward, not death.
+- **The Sprite**: a small glowing being always within 1–2 tiles of Zen (it floats along; never
+  blocks). State: `idle | listening | answering`. It never acts on the World.
+- **You (the visitor)**: as before: walk, say, give a held thing, place things from a list.
+- Day/night (`day_minutes`, `night_minutes`), seasons (a season per 4 days), weather (clear,
+  cloudy, rain, storm, snow, fog, wind) per region over time, temperature.
+- Light: darkness limits sight at night except near fire, a lit lantern held, or moonlight.
+
+### 3.3 Senses (`perceive`)
+Egocentric, short, deterministic English (the words the brain must learn), e.g.
+`Forest, morning, cool, light rain. Ahead: an oak tree. Left: grass. Right: a stream. Here: grass.
+I see a berry bush 2 ahead and 1 left, a deer 5 to the right. I hold a stick. I am hungry.`
+- `perceive()` ≤ ~45 words. `look()` returns a fuller description (≤ ~120 words) including
+  named places in sight and what things are.
+- Consequence texts for actions: `I step forward.`, `I take the berries.`, `A tree is in the way.`,
+  `I drink the cold water. I am less thirsty.`, `I read the book. It says: "…"` (book text in full).
+
+### 3.4 Rewards (`act` returns them)
+`reward = 0.6·Δwellbeing + novelty + pain + events`, where wellbeing is a weighted mean of needs
+(health counts double), novelty: new tile +0.01, new kind of thing seen +0.25, new chunk +0.1, new
+named place +0.5; pain: blocked −0.02, failed action −0.01, health loss −0.2/point; events:
+answer received +0.4, first time doing an action successfully +0.3, eating when hungry/drinking
+when thirsty are already in Δwellbeing. Rewards are per action and also accumulate between actions
+(e.g. getting colder while waiting).
+
+### 3.5 Interface used by Life
+```
+w = World(seed)                       # or World.from_state(dict)
+w.advance(dt)                         # time, weather, animals, physiology, sprite follows
+r = w.act(word)                       # -> {"ok": bool, "text": str, "reward": float, "events": [..]}
+w.perceive() -> str; w.look() -> str
+w.reward_since_last()                 # passive reward accumulated by advance() since last call
+w.zen                                 # body (x, y, facing, hands, needs, sleeping, said, activity)
+w.sprite                              # {x, y, state, said}
+w.wellbeing() -> float; w.feelings() -> list[str]
+w.time_of_day(), w.day, w.phase ("day"|"night"), w.season, w.weather
+w.snapshot(full: bool) -> dict        # §5
+w.chunk_payload(cx, cy) -> dict       # §5
+w.atlas() -> dict                     # §5
+w.state() -> dict; World.from_state(d)
+w.visitor_* (join, leave, move, say, give, place)
+w.creations / w.create(...)           # art Zen makes with `use` at the easel/piano
+```
+
+### 3.6 Ontology
+`ada/ontology.py` keeps `K(...)`, `KINDS` and `triples(synth)` (facts for the concept graph),
+describing every kind in the new world (biomes and features too), `GENERAL_FACTS`.
+
+## 4. Life (`ada/life.py`): Zen's control loop
+- Every motor beat (0.5 s of world time while awake and not waiting for the Sprite): append
+  `<|world|> perception` to Zen's stream if it changed, then `<|act|>` and sample the next token
+  from the brain's logits restricted to the 14 motor words (temperature `motor_temperature`,
+  default 1.0). Run it on the brain thread (KV cache over a rolling window).
+- Append the consequence `<|world|> text` to the stream. Record `(position, action, reward)`.
+- Thoughts: as before, every `thought_seconds`, `<|thought|>` + generated text into the same stream.
+- `speak`: generate `<|mind|>` text (≤ `reply_tokens`) → said aloud; `ask`: generate `<|mind|>`
+  question → sent to the Sprite; motor beats pause until the answer (`<|oracle|> answer`) arrives,
+  thoughts continue; then reward +0.4.
+- Every 64 motor beats (and at sleep), the segment is written to `minds/<name>/experience.jsonl`:
+  `{t, ids: [...], acts: [[pos, action_index, advantage], ...], ret, steps}` where advantages are
+  discounted returns (γ=0.95) minus a running baseline, normalised by a running std.
+- Chats with you: Zen answers with its brain as before.
+
+## 5. Messages to the page
+`world` snapshot (full, then deltas merged by the Hub as now):
+```
+{tick, day, phase, season, weather, time, light, sun, temperature,
+ zen: {x, y, fx, fy, facing, needs, feelings, hands:[kind], sleeping, activity, said, waiting, biome, place},
+ sprite: {x, y, fx, fy, state, said},
+ visitor: {...} | null,
+ ents: [ {id, kind, x, y, ...} ] (within 48 tiles of Zen or you), removed: [id],
+ animals: [ {id, kind, x, y, fx, fy, facing, state} ],
+ home: {x, y}, places: [ {name, kind, x, y} ] (known),
+ mind: {...as before: plan→"", motor: {last, autonomy:1, entropy, reward_rate, steps}},
+ creations: [...] (new ones), skills, log}
+```
+Chunks: `GET /api/chunk?cx=&cy=` → `{cx, cy, size: 32, h: [1024 ints, decimetres], biome: [1024
+ints → BIOMES list], water: [1024: 0 none, 1 shallow, 2 deep, 3 river], feat: [1024 ints → FEATURES
+list, 0 none], meta: {pois: [{kind, name, x, y}]}}` plus `GET /api/world_meta` → `{BIOMES, FEATURES,
+seed, home}`. Atlas: `GET /api/atlas` → `{explored: [[cx, cy, biome_index]...], places: [...], trail:
+[[x, y]...], zen: {x, y}, home: {x, y}}`.
+
+## 6. Academy
+- Pools: FineWeb, journal (Zen's own talk/answers), concept drills, **experience**.
+- Experience segments are trained with the LM loss (world model) and, on `<|act|>` positions, a
+  policy-gradient loss: `−A·log π(a)` where π is the softmax over the 14 motor-word logits, plus a
+  small entropy bonus. Mixed into every training step with weight `mix_experience`.
+- Metrics: policy loss, mean advantage, action entropy; published with the brain.
+
+## 7. The page
+Tabs: Home (3D world + overlay), Zen (journey, body, skills, motor stats), Thoughts, Conversations
+(with you, with the Sprite), Atlas (explored map), Keepsakes, Academy, Concepts, Sprite (model,
+its answers, ask it yourself), Settings, Health.
