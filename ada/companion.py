@@ -408,18 +408,20 @@ class Companion:
         word = k["noun"].split(" ", 1)[-1]
         props = k.get("props", [])
         z = self.zen.name
+        plural = k["noun"].startswith("some ")
+        this, it = ("These are", "They are") if plural else ("This is", "It is")
         if self.stage <= 1:
             line = f"{z}, look! {word.capitalize()}. {_cap(k['noun'])}. {word.capitalize()}!"
         elif self.stage <= 3:
-            line = f"Look, {z}. This is {k['noun']}. It is {props[0] if props else k['color']}" + \
+            line = f"Look, {z}. {this} {k['noun']}. {it} {props[0] if props else k['color']}" + \
                    (f" and {k['color']}." if props else ".") + (f" Can you say {word}?" if self.stage <= 2 else "")
         else:
             use = k.get("used_for", "")
-            line = f"This is {k['noun']}, {z}. It is {k['color']}" + (f", and it is for {use}." if use else ".")
+            line = f"{this} {k['noun']}, {z}. {it} {k['color']}" + (f", and {it.lower()} for {use}." if use else ".")
         self.speak(line, kind="name")
         if self.near_zen(7):
             self.life.journal("named", [("<|world|>", self.w.perceive(me=self.zen)), ("<|npc|>", f"{self.name}: {line}"),
-                                        ("<|thought|>", f"This is {k['noun']}.")], 2.0)
+                                        ("<|thought|>", f"{this} {k['noun']}.")], 2.0)
 
     # ------------------------------------------------------------------ what Wren could do now
     def synth_state(self) -> str:

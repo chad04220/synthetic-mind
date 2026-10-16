@@ -2684,8 +2684,8 @@ function nextFrame() {
   S.raf = setTimeout(() => requestAnimationFrame(frame), wait);
 }
 function frame(now) {
+  if (S.paused) { S.raf = null; return; }      // asleep until pause(false): no wake-ups at all
   nextFrame();
-  if (S.paused) return;
   const minGap = S.quality === "low" ? 1000 / 31 : 1000 / 61;
   if (now - S.lastFrame < minGap) return;
   const dt = Math.min(0.1, (now - S.lastFrame) / 1000); S.lastFrame = now;
@@ -2744,7 +2744,10 @@ function focusOn(what) {
   else if (what && what !== "synth" && S.people.has(what)) { c.focus = "person:" + what; if (S.mode !== "visit") { c.tDist = 12; c.tPitch = 0.7; } }
   else { c.focus = "synth"; if (S.mode !== "visit") { c.tDist = 13; c.tPitch = 0.72; } }
 }
-function pause(p) { S.paused = !!p; if (!p) S.lastFrame = performance.now(); }
+function pause(p) {
+  S.paused = !!p;
+  if (!p) { S.lastFrame = performance.now(); if (S.raf == null && S.inited) nextFrame(); }
+}
 function stats() { const s = S.stats; return { fps: s.fps, drawCalls: s.drawCalls, triangles: s.triangles, ms: s.ms }; }
 
 World3D._debug = S;

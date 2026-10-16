@@ -1,3 +1,33 @@
+# Synthetic Mind v3.1.0
+
+- **60 frames a second, whatever the screen.** The 3D view drew at most 60 frames a second before,
+  but on a 240 Hz laptop screen the browser still woke the page 240 times a second, and the
+  minimap's loop as well.
+  - Now the browser isn't asked for a frame until the next one is due, so the page wakes about
+    60 times a second (30 on Low quality).
+  - The minimap wakes about 30 times a second.
+  - On every tab but Home the 3D view sleeps completely, and it picks up again when you come back.
+  - The Health tab reports the frames the 3D view actually drew.
+- **Separate tabs for what's happening** (below the 3D view):
+  - **💬 You & Zen**: your conversation with Zen;
+  - **🗣️ Zen & Wren**: only what the two of them say to each other, as a chat: their
+    conversations, Wren's words to Zen (naming things, talking it through, looking after it) and
+    Zen's questions with Wren's answers;
+  - **💭 Zen's thoughts**: its inner monologue;
+  - **🪶 Wren's thoughts**: what Wren thinks to itself, and what it decides to do and why;
+  - **📔 Deeds**: what each of them did, with a switch to show only Zen's or only Wren's.
+- **Fixed: lost updates.** When something happened in the house that carried a detail of its own
+  (a fire going out), the Hub crashed on the World's message, so that update to the page was lost.
+- **Faster Wren.** Your report showed Wren's decisions taking about 14 seconds.
+  - Its model now gets more of the CPU: 4 of 6 physical cores. Zen's small brain keeps 2.
+  - Its long, unchanging instructions are cached between requests.
+  - Its decision prompt is shorter.
+- **No false "page is drawing slowly" warning** while the page is in the background or on
+  another tab.
+- Wren names plural things properly ("These are some wooden blocks.").
+
+---
+
 # Synthetic Mind v3.0.0: Zen and Wren
 
 One synth, one companion, one small and deep world. The village of v2 is gone. Zen now lives in a
