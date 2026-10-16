@@ -29,7 +29,16 @@ from ada.world.sim import World  # noqa: E402
 
 class FakeLink:
     def __init__(self):
+        from ada.diag import Perf
+
         self.sent = []
+        self.perf = Perf()
+
+    def warn(self, *a, **k):
+        pass
+
+    def maybe_send_perf(self, *a, **k):
+        pass
 
     def send(self, type_, **d):
         self.sent.append((type_, d))
@@ -343,3 +352,56 @@ print("ok")
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert r.stdout.strip() == "ok", r.stderr[-800:]
+
+
+def test_warnings_and_crashes_are_logged(tmp_path):
+    code = f"""
+import sys, warnings, threading, time; sys.path.insert(0, {str(ROOT)!r})
+from pathlib import Path
+from ada.diag import setup_logging
+setup_logging("probe", Path({str(tmp_path)!r}))
+warnings.warn("something odd \\ufffd")
+t = threading.Thread(target=lambda: 1 / 0, name="worker"); t.start(); t.join()
+raise RuntimeError("the whole thing fell over")
+"""
+    subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    log = (tmp_path / "logs" / "probe.log").read_text(encoding="utf-8")
+    assert "WARNING" in log and "something odd" in log
+    assert "ZeroDivisionError" in log and "worker" in log
+    assert "CRITICAL" in log and "the whole thing fell over" in log
+
+
+def test_timings_and_findings():
+    import time as _t
+
+    from ada.diag import Perf, findings
+
+    p = Perf()
+    with p.time("wait for data"):
+        _t.sleep(0.05)
+    p.add("training step", 0.01)
+    p.gauge("studying", 1)
+    s = p.take()
+    assert s["timings"]["wait for data"]["avg_ms"] >= 45 and s["timings"]["wait for data"]["share"] > 0.3
+    f = findings({"academy": s}, [{"util_percent": 99, "mem_used_mb": 7900, "mem_total_mb": 8192, "temp_c": 70}],
+                 {"fps": 9, "visible": True, "longtask_ms": 4000, "longtask_max_ms": 900, "window_s": 15}, {"world": 2})
+    text = " ".join(x["text"] for x in f)
+    assert "waiting for training data" in text and "memory is over 92%" in text
+    assert "frames per second" in text and "frozen" in text and "restarted 2 time" in text
+
+
+def test_report_has_everything(tmp_path):
+    from ada.hub import Hub
+
+    cfg = AdaConfig(name="R", tokenizer="bytes")
+    cfg.oracle.enabled = False
+    hub = Hub(cfg, tmp_path)
+    hub.log.warning("a test warning")
+    hub.on_message({"type": "perf", "src": "academy", "t": 1.0, "perf": {"timings": {}, "gauges": {}, "cpu_percent": 5}})
+    hub.record_client_perf({"fps": 50, "visible": True})
+    hub._diagnose_tick()
+    text = hub.report()
+    for section in ("Likely bottlenecks", "System", "GPU", "Latest timings", "Browser", "Academy", "Settings",
+                    "Warnings and errors", "a test warning"):
+        assert section in text
+    assert (tmp_path / "R" / "logs" / "diagnostics-latest.txt").exists()

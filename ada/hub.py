@@ -21,6 +21,7 @@ from pathlib import Path
 from . import academy, life
 from .concepts import ConceptGraph
 from .config import AdaConfig, get_live, set_live
+from .diag import Perf, findings, gpu_readings, setup_logging, system_info
 from .oracle import TOPICS, Oracle
 from .proc import append_jsonl
 
@@ -34,6 +35,16 @@ class Hub:
         self.folder = root / cfg.name
         self.folder.mkdir(parents=True, exist_ok=True)
         cfg.save(self.folder / "config.json")
+        self.log = setup_logging("hub", self.folder)
+        self.perf = Perf()
+        self.perf_latest: dict[str, dict] = {}          # process -> latest timings
+        self.perf_history: deque = deque(maxlen=720)    # (t, process, timings)
+        self.gpu: list[dict] = []
+        self.client_perf: dict = {}
+        self.findings: list[dict] = []
+        self._finding_seen: dict[str, float] = {}
+        self.started = time.time()
+        self.ws_bytes = 0
         self.ctx = mp.get_context("spawn")
         self.outbox = self.ctx.Queue(maxsize=5000)
         self.inboxes = {n: self.ctx.Queue() for n in CHILDREN}
@@ -114,11 +125,12 @@ class Hub:
                     self.restarts[n] += 1
                     wait = min(60, 3 * self.restarts[n])
                     self.event("error", text=f"The {n} process stopped (exit code {p.exitcode}); restarting in {wait}s. "
-                                             f"Details are in minds/{self.cfg.name}/{n}.log")
+                                             f"Details are in minds/{self.cfg.name}/logs/{n}.log")
                     time.sleep(wait)
                     if not self.stopping:
                         self.spawn(n)
             self.apply_schedule()
+            self._diagnose_tick()
             if self.cfg.oracle.enabled and not self.oracle.models and time.time() - self.last_refresh > 30:
                 self.last_refresh = time.time()      # Ollama may have been started after us
                 self.pool.submit(self._refresh_oracle)
@@ -147,6 +159,8 @@ class Hub:
         return f
 
     def event(self, kind: str, **data):
+        if kind == "error" and data.get("src") is None:
+            self.log.error(data.get("text", ""))
         with self.lock:
             self.event_id += 1
             ev = {"id": self.event_id, "kind": kind, "t": time.time(), **data}
@@ -169,8 +183,10 @@ class Hub:
             except (EOFError, OSError):
                 return
             try:
-                self.on_message(msg)
+                with self.perf.time("handling messages"):
+                    self.on_message(msg)
             except Exception as e:
+                self.log.exception("could not handle a message")
                 self.event("error", text=f"Hub: {type(e).__name__}: {e}")
 
     def on_message(self, m: dict):
@@ -218,6 +234,9 @@ class Hub:
                 self.feeds["chat"].append({"id": 0, "kind": "chatline", **c})
         elif t == "oracle":
             self.pool.submit(self._world_oracle, m)
+        elif t == "perf":
+            self.perf_latest[m["src"]] = m["perf"]
+            self.perf_history.append((m["t"], m["src"], m["perf"]))
 
     def _merge_world(self, snap: dict):
         with self.lock:
@@ -278,6 +297,116 @@ class Hub:
                 self.send("academy", "resume", intensity=want[1] if want[1] != "full" else None)
             else:
                 self.send("academy", "pause", why=want[1])
+
+    # ------------------------------------------------------------------ diagnostics
+    def _diagnose_tick(self):
+        now = time.time()
+        if now - getattr(self, "_last_diag", 0) < 10:
+            return
+        self._last_diag = now
+        self._last_diag_prev = getattr(self, "_last_diag_prev", self.started)
+        self.gpu = gpu_readings()
+        self.perf.gauge("kb_sent_to_browsers_per_s", round(self.ws_bytes / 1024 / max(1.0, now - self._last_diag_prev), 1))
+        self.ws_bytes, self._last_diag_prev = 0, now
+        try:
+            self.perf.gauge("outbox_backlog", self.outbox.qsize())
+        except (NotImplementedError, OSError):
+            pass
+        hub_perf = self.perf.take()
+        self.perf_latest["hub"] = hub_perf
+        self.perf_history.append((now, "hub", hub_perf))
+        if self.gpu:
+            self.perf_history.append((now, "gpu", {"gpu": self.gpu}))
+        client = self.client_perf if now - self.client_perf.get("t", 0) < 60 else None
+        self.findings = findings(self.perf_latest, self.gpu, client, self.restarts)
+        for f in self.findings:
+            key = f["where"] + f["text"][:50]
+            if now - self._finding_seen.get(key, 0) > 600:   # log each finding at most every 10 minutes
+                self._finding_seen[key] = now
+                (self.log.error if f["level"] == "error" else self.log.warning if f["level"] == "warn"
+                 else self.log.info)(f"[{f['where']}] {f['text']}")
+
+    def record_client_perf(self, p: dict):
+        p["t"] = time.time()
+        self.client_perf = p
+        self.perf_history.append((p["t"], "browser", p))
+
+    def health(self) -> dict:
+        return {"perf": self.perf_latest, "gpu": self.gpu, "browser": self.client_perf, "findings": self.findings,
+                "processes": {n: {"alive": p.is_alive(), "pid": p.pid, "restarts": self.restarts[n], "exitcode": p.exitcode}
+                              for n, p in self.procs.items()},
+                "log": self.log_tail(80, min_level="WARNING"), "uptime_s": round(time.time() - self.started)}
+
+    def log_tail(self, n: int = 200, min_level: str = "") -> list[str]:
+        """The most recent lines of every process's log, newest last."""
+        levels = ("WARNING", "ERROR", "CRITICAL")
+        lines = []
+        for f in sorted((self.folder / "logs").glob("*.log")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
+            except OSError:
+                continue
+            entry = None
+            for line in text:
+                if line[:4].isdigit() and line[4:5] == "-":       # a new entry (tracebacks continue it)
+                    entry = [line[:23], f.stem, line]
+                    lines.append(entry)
+                elif entry is not None:
+                    entry[2] += "\n" + line
+        if min_level:
+            lines = [e for e in lines if any(f" {lv} " in e[2][:40] for lv in levels)]
+        lines.sort(key=lambda e: e[0])
+        return [e[2] for e in lines[-n:]]
+
+    def report(self) -> str:
+        """Everything useful for diagnosing a problem, as one text file."""
+        from . import __version__
+
+        def block(title, obj):
+            return f"\n===== {title} =====\n" + (obj if isinstance(obj, str) else json.dumps(obj, indent=2, default=str)) + "\n"
+
+        out = [f"Ada diagnostics report · version {__version__} · {time.strftime('%Y-%m-%d %H:%M:%S %z')} · "
+               f"mind '{self.cfg.name}' · Hub up {round((time.time() - self.started) / 60)} min\n"]
+        out.append(block("Likely bottlenecks and problems", "\n".join(f"[{f['level']}] {f['where']}: {f['text']}"
+                                                                    for f in self.findings) or "none detected"))
+        out.append(block("System", system_info()))
+        out.append(block("GPU (nvidia-smi)", self.gpu or "no NVIDIA GPU readings"))
+        out.append(block("Processes", self.health()["processes"]))
+        out.append(block("Latest timings per process (avg/max ms, calls per second, share of wall time)", self.perf_latest))
+        out.append(block("Browser", self.client_perf or "the page hasn't reported yet (keep it open for 15 s)"))
+        a = self.academy_status
+        out.append(block("Academy", {k: a.get(k) for k in ("paused", "pause_reason", "line", "intensity", "step", "tokens",
+                                                            "tps", "loss", "val", "bpb", "stage_name", "params", "layers",
+                                                            "device", "precision", "tokenizer", "version", "mix", "pools",
+                                                            "fineweb", "skipped")}))
+        w = self.world_state
+        out.append(block("World", {"day": w.get("day"), "phase": w.get("phase"), "mind": w.get("mind"),
+                                   "ada": {k: (w.get("ada") or {}).get(k) for k in ("place", "needs", "sleeping")}}))
+        out.append(block("Oracle", {k: v for k, v in self.oracle_info().items() if k != "models"} |
+                         {"models": [m["name"] for m in self.oracle.models]}))
+        out.append(block("Settings", self.cfg.to_dict()))
+        def line(t, src, p):
+            stamp = time.strftime("%H:%M:%S", time.localtime(t))
+            if src == "gpu":
+                g = p["gpu"][0]
+                return f"{stamp} gpu      {g.get('util_percent')}% busy, {g.get('mem_used_mb')} MB, {g.get('temp_c')}°C, {g.get('power_w')} W"
+            if src == "browser":
+                return (f"{stamp} browser  {p.get('fps')} fps, worst gap {p.get('worst_frame_gap_ms')} ms, frozen "
+                        f"{p.get('longtask_ms')} ms, draw {p.get('draw_avg_ms')} ms, view {p.get('view')}")
+            top = sorted((p.get("timings") or {}).items(), key=lambda kv: -kv[1]["share"])[:4]
+            return (f"{stamp} {src:<8} cpu {p.get('cpu_percent')}% | " +
+                    "; ".join(f"{k} {v['avg_ms']}ms×{v['per_s']}/s ({v['share']:.0%}, max {v['max_ms']})" for k, v in top))
+
+        recent = [line(t, s, p) for t, s, p in self.perf_history if time.time() - t < 1800]
+        out.append(block("Timing history (last 30 minutes, top activities)", "\n".join(recent) or "none yet"))
+        out.append(block("Warnings and errors (all processes, newest last)", "\n".join(self.log_tail(300, "WARNING")) or "none"))
+        out.append(block("Recent log (all processes, newest last)", "\n".join(self.log_tail(150))))
+        text = "".join(out)
+        try:
+            (self.folder / "logs" / "diagnostics-latest.txt").write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+        return text
 
     # ------------------------------------------------------------------ settings
     def set(self, key: str, value):

@@ -31,11 +31,43 @@ function toast(text, ms = 2800) {
 function banner(text) { const b = $("#banner"); b.hidden = !text; if (text) b.textContent = text; }
 
 // ================================================================== connection
+// ================================================================== the page's own health
+const P = { t0: performance.now(), msgs: 0, bytes: 0, msgMs: 0, msgMax: 0, long: 0, longMs: 0, longMax: 0, errors: 0 };
+try {
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) { P.long++; P.longMs += e.duration; P.longMax = Math.max(P.longMax, e.duration); }
+  }).observe({ type: "longtask", buffered: false });
+} catch { /* not every browser reports long tasks */ }
+addEventListener("error", (e) => { P.errors++; report("error", `${e.message} (${e.filename}:${e.lineno})`); });
+addEventListener("unhandledrejection", (e) => { P.errors++; report("error", String(e.reason)); });
+function report(level, text) { P.lastError = `${level}: ${text}`.slice(0, 300); }
+setInterval(() => {
+  const now = performance.now(), secs = (now - P.t0) / 1000, mp = MapView.st.perf;
+  const body = {
+    window_s: Math.round(secs), visible: !document.hidden, view: S.view,
+    fps: Math.round(mp.frames / secs), worst_frame_gap_ms: Math.round(mp.gapMax),
+    draws_per_s: +(mp.draws / secs).toFixed(1), draw_avg_ms: +(mp.drawMs / Math.max(1, mp.draws)).toFixed(1), draw_max_ms: Math.round(mp.drawMax),
+    msgs_per_s: +(P.msgs / secs).toFixed(1), kb_per_s: +(P.bytes / 1024 / secs).toFixed(1),
+    msg_avg_ms: +(P.msgMs / Math.max(1, P.msgs)).toFixed(1), msg_max_ms: Math.round(P.msgMax),
+    longtasks: P.long, longtask_ms: Math.round(P.longMs), longtask_max_ms: Math.round(P.longMax), js_errors: P.errors,
+    last_error: P.lastError || "", dpr: devicePixelRatio, canvas: `${MapView.canvas.width}x${MapView.canvas.height}`,
+    window: `${innerWidth}x${innerHeight}`, browser: navigator.userAgent.slice(0, 160),
+    memory_mb: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 2 ** 20) : -1,
+  };
+  fetch("/api/client_perf", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+  S.clientPerf = body;
+  Object.assign(P, { t0: now, msgs: 0, bytes: 0, msgMs: 0, msgMax: 0, long: 0, longMs: 0, longMax: 0, errors: 0 });
+  Object.assign(mp, { frames: 0, draws: 0, drawMs: 0, drawMax: 0, gapMax: 0 });
+}, 15000);
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   ws.onmessage = (m) => {
+    const t0 = performance.now();
     let msg; try { msg = JSON.parse(m.data); } catch { return; }
-    try { msg.type === "init" ? init(msg) : tick(msg); } catch (e) { console.error(e); }
+    try { msg.type === "init" ? init(msg) : tick(msg); } catch (e) { console.error(e); report("error", e.message); P.errors++; }
+    const dt = performance.now() - t0;
+    P.msgs++; P.bytes += m.data.length; P.msgMs += dt; P.msgMax = Math.max(P.msgMax, dt);
   };
   ws.onopen = () => banner("");
   ws.onclose = () => { banner("Lost contact with Ada's Hub. Reconnecting…"); setTimeout(connect, 1500); };
@@ -121,7 +153,7 @@ $$("#nav button").forEach((b) => b.onclick = () => {
   S.view = b.dataset.view;
   $$("#nav button").forEach((x) => x.classList.toggle("on", x === b));
   $$(".view").forEach((v) => v.classList.toggle("on", v.id === `view-${S.view}`));
-  renderAll(); if (S.view === "academy") drawCharts();
+  renderAll(); if (S.view === "academy") drawCharts(); if (S.view === "health") pollHealth(true);
   MapView.st.dirty = true;
 });
 
@@ -131,6 +163,47 @@ function renderAll() {
   else if (S.view === "academy") renderAcademy();
   else if (S.view === "concepts") renderConcepts();
   else if (S.view === "oracle") renderOracle();
+  else if (S.view === "health") pollHealth();
+}
+
+// ================================================================== health view
+let healthAt = 0;
+async function pollHealth(force) {
+  if (!force && performance.now() - healthAt < 4000) return;
+  healthAt = performance.now();
+  try { renderHealth(await (await fetch("/api/health")).json()); } catch (e) { /* the Hub will be back */ }
+}
+function perfTable(p, keep = 8) {
+  if (!p || !p.timings) return '<div class="muted">No measurements yet.</div>';
+  const rows = Object.entries(p.timings).sort((a, b) => b[1].share - a[1].share).slice(0, keep);
+  return `<div class="muted" style="margin-bottom:6px">CPU ${p.cpu_percent}% of a core${p.gauges?.memory_mb ? ` · ${Math.round(p.gauges.memory_mb)} MB` : ""}</div>`
+    + `<table class="perf"><tr><th>Activity</th><th>time share</th><th>avg ms</th><th>max ms</th><th>/s</th></tr>`
+    + rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td><span class="share" style="width:${Math.round(Math.min(1, v.share) * 40)}px"></span>${pct(v.share)}</td><td>${v.avg_ms}</td><td>${v.max_ms}</td><td>${v.per_s}</td></tr>`).join("")
+    + `</table>` + (p.gauges ? `<div class="muted" style="margin-top:6px">${Object.entries(p.gauges).filter(([k]) => k !== "memory_mb").map(([k, v]) => `${esc(k.replace(/_/g, " "))}: <b>${esc(v)}</b>`).join(" · ")}</div>` : "");
+}
+function renderHealth(h) {
+  setText($("#logPath"), `minds/${$("#name").textContent}/logs/`);
+  const f = h.findings || [];
+  setHTML($("#findings"), f.length ? f.map((x) => `<div class="finding ${x.level}"><b>${esc(x.where)}</b> · ${esc(x.text)}</div>`).join("")
+    : '<div class="finding ok">Nothing looks wrong right now.</div>');
+  const proc = (n) => { const p = h.processes?.[n]; return p ? `<div class="muted" style="margin-bottom:4px">${p.alive ? "running" : "stopped"} · pid ${p.pid}${p.restarts ? ` · <b style="color:var(--bad)">restarted ${p.restarts}×</b>` : ""}</div>` : ""; };
+  setHTML($("#hAcademy"), proc("academy") + perfTable(h.perf?.academy));
+  setHTML($("#hWorld"), proc("world") + perfTable(h.perf?.world));
+  setHTML($("#hHub"), `<div class="muted" style="margin-bottom:4px">up ${dur(h.uptime_s)}</div>` + perfTable(h.perf?.hub));
+  const g = (h.gpu || [])[0];
+  setHTML($("#hGpu"), g ? dl([["Card", esc(g.name)], ["Busy", `${g.util_percent}%`], ["Memory", `${Math.round(g.mem_used_mb)} / ${Math.round(g.mem_total_mb)} MB`],
+    ["Temperature", `${g.temp_c}°C`], ["Power", `${g.power_w} W`], ["Clock", `${g.sm_clock_mhz} MHz`], ["Driver", esc(g.driver)]])
+    : '<dd class="muted">No NVIDIA GPU readings (nvidia-smi not found).</dd>');
+  const b = S.clientPerf || h.browser || {};
+  setHTML($("#hBrowser"), b.fps != null ? dl([["Frames per second", `${b.fps} <span class="muted">(worst gap ${b.worst_frame_gap_ms} ms)</span>`],
+    ["Map drawing", `${b.draws_per_s}/s, ${b.draw_avg_ms} ms avg, ${b.draw_max_ms} ms max`],
+    ["Frozen moments", `${b.longtasks} (${b.longtask_ms} ms total, longest ${b.longtask_max_ms} ms)`],
+    ["Updates", `${b.msgs_per_s}/s, ${b.kb_per_s} KB/s, ${b.msg_avg_ms} ms each (max ${b.msg_max_ms})`],
+    ["Screen", `${b.window} window, map ${b.canvas}, scale ${b.dpr}`], ["Script errors", `${b.js_errors}${b.last_error ? ` · ${esc(b.last_error)}` : ""}`]])
+    : '<dd class="muted">Measuring… (the first numbers arrive after 15 seconds)</dd>');
+  const box = $("#hLog"), stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  setText(box, (h.log || []).join("\n") || "No warnings or errors so far.");
+  if (stick) box.scrollTop = box.scrollHeight;
 }
 
 // ================================================================== world view

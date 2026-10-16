@@ -539,7 +539,7 @@ class Life:
             self.thoughts.extend(s.get("thoughts", []))
             self.chat_log = s.get("chat", [])
         except (ValueError, KeyError, TypeError) as e:
-            self.link.log(f"could not restore the world ({e}); starting a fresh one", error=True)
+            self.link.warn(f"could not restore the world ({e}); starting a fresh one")
 
     # ------------------------------------------------------------------ main loop
     def step(self):
@@ -554,37 +554,57 @@ class Life:
             if w.phase == "day" and not self.bedtime and w.needs["rest"] > 90:
                 w.ada.sleeping = False             # a daytime nap ends when she's rested
             return
+        perf = self.link.perf
         if self.plan:
-            self.walk()
+            with perf.time("walking and doing"):
+                self.walk()
         elif self.brain is not None or not self.with_brain:
-            self.decide()
+            with perf.time("deciding"):
+                self.decide()
         if self.brain is not None and time.time() >= self.next_thought:
             self.next_thought = time.time() + cfg.world.thought_seconds
-            self.think()
+            with perf.time("thinking"):
+                self.think()
 
     def loop(self):
         self.maybe_load_brain()
         self.broadcast(full=True)
         self.link.send("history", thoughts=list(self.thoughts), chat=self.chat_log)
         next_tick = next_cast = next_save = next_brain = time.time()
+        perf = self.link.perf
         while True:
             if not self.link.hub_alive():
                 self.save()
                 return
             for msg in self.link.commands():
-                self.handle(msg)
+                with perf.time(f"request: {msg.get('cmd')}"):
+                    self.handle(msg)
             now = time.time()
             if now >= next_tick:
+                late = now - next_tick
+                if late > 1.0:
+                    self.link.warn(f"the world fell {late:.1f}s behind schedule", every=120)
+                perf.add("lateness", max(0.0, late))
                 next_tick = now + self.cfg.world.tick
-                self.step()
+                with perf.time("tick"):
+                    self.step()
             if now >= next_cast:
                 next_cast = now + 0.2
-                self.broadcast()
+                with perf.time("sending the world to the Hub"):
+                    self.broadcast()
             if now >= next_brain:
                 next_brain = now + 5
                 if self.world.phase == "day" or self.brain is None:
-                    self.maybe_load_brain()
+                    with perf.time("loading a new brain"):
+                        self.maybe_load_brain()
+                perf.gauge("device", str(self.device.type) if self.device is not None else "none")
+                perf.gauge("brain_version", self.brain_version)
+                perf.gauge("awake", 0 if self.world.ada.sleeping else 1)
+                perf.gauge("journal_mb", round((self.folder / "journal.jsonl").stat().st_size / 2**20, 2)
+                           if (self.folder / "journal.jsonl").exists() else 0)
+                self.link.maybe_send_perf()
             if now >= next_save:
                 next_save = now + 60
-                self.save()
+                with perf.time("saving"):
+                    self.save()
             time.sleep(0.01)

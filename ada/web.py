@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .hub import Hub
@@ -38,7 +40,20 @@ def dumps(o) -> str:
 
 
 def create_app(hub: Hub) -> FastAPI:
-    app = FastAPI(title=f"Ada · {hub.cfg.name}")
+    async def watch_lag():
+        """How late the web server wakes up: if this grows, something is starving the Hub."""
+        while True:
+            t = time.perf_counter()
+            await asyncio.sleep(0.5)
+            hub.perf.add("event loop lag", max(0.0, time.perf_counter() - t - 0.5))
+
+    @asynccontextmanager
+    async def lifespan(app):
+        task = asyncio.create_task(watch_lag())
+        yield
+        task.cancel()
+
+    app = FastAPI(title=f"Ada · {hub.cfg.name}", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=WEB), name="static")
 
     @app.get("/")
@@ -58,6 +73,22 @@ def create_app(hub: Hub) -> FastAPI:
             return await asyncio.to_thread(fn, *args)
         except Exception as e:
             raise HTTPException(400, f"{type(e).__name__}: {e}")
+
+    @app.get("/api/health")
+    def health():
+        return clean(hub.health())
+
+    @app.get("/api/diagnostics")
+    async def diagnostics():
+        text = await asyncio.to_thread(hub.report)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        return PlainTextResponse(text, headers={
+            "Content-Disposition": f'attachment; filename="ada-diagnostics-{stamp}.txt"'})
+
+    @app.post("/api/client_perf")
+    def client_perf(body: dict):
+        hub.record_client_perf({k: v for k, v in body.items() if isinstance(v, (int, float, str, bool))})
+        return {"ok": True}
 
     @app.post("/api/{name}")
     async def command(name: str, body: dict | None = None):
@@ -122,7 +153,11 @@ def create_app(hub: Hub) -> FastAPI:
                     settings = msg["settings"] = s
                     msg["oracle"] = hub.oracle_info()
                 if len(msg) > 1:
-                    await sock.send_text(dumps(msg))
+                    t = time.perf_counter()
+                    text = dumps(msg)
+                    await sock.send_text(text)
+                    hub.perf.add("sending to the browser", time.perf_counter() - t)
+                    hub.ws_bytes += len(text)
         except (WebSocketDisconnect, RuntimeError):
             pass
 

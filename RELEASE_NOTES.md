@@ -1,3 +1,27 @@
+# Ada v1.1.0
+
+## New: error logs and a performance report you can share
+
+- **Every error and warning is logged.** The Hub, the Academy and the World each write to
+  `minds/<name>/logs/<process>.log` (UTF-8, rotated at 2 MB): their own warnings and errors,
+  PyTorch's warnings, and the full traceback of anything that crashes, including inside threads.
+- **Every part times its own work.** The Academy (waiting for data, forward and backward,
+  optimizer, waiting for the GPU, resting, evaluating, saving), the World (each step, deciding,
+  thinking, replies, loading a brain, how far behind schedule it runs), the Hub (how promptly the
+  web server responds, message handling, data sent), and the browser itself (frame rate, worst
+  pause between frames, frozen moments, map drawing time, update handling, script errors).
+- **GPU readings** from `nvidia-smi` every 10 seconds: load, memory, temperature, power, clock.
+- **A 🩺 Health tab** shows all of it live and points out likely bottlenecks in plain words
+  (for example "the GPU is fully busy training and the page is drawing slowly").
+- **Download report** writes everything (findings, system, GPU, timings over the last 30
+  minutes, settings, warnings and errors, recent log) into one text file. A copy is also kept
+  as `minds/<name>/logs/diagnostics-latest.txt`.
+
+If something feels slow or breaks, open the Health tab, press **Download report**, and send the
+file.
+
+---
+
 # Ada v1.0.1
 
 ## Fixed: crashes on Windows that made everything choppy

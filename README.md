@@ -109,6 +109,11 @@ python run.py --no-fineweb --no-oracle     offline
   your topics go first.
 - **🔮 Oracle:** pick the Ollama model, ask it anything ("Let Ada study this" turns the answer
   into a lesson), and read every lesson it has written.
+- **🩺 Health:** what looks wrong right now, in plain words; where each process spends its time
+  (training step, waiting for data, thinking, the web server's responsiveness…); the GPU's load,
+  memory and temperature; this browser's frame rate and frozen moments; and every warning and
+  error. **Download report** saves it all, with your settings and recent logs, as one text file
+  to share. Each process also keeps a full log in `minds/<name>/logs/`.
 - **⚙️ Settings:** the schedule (day & night, together, study only, live only), day and night
   lengths, GPU intensity, what she studies, how she thinks and talks, and the Oracle.
 

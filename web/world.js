@@ -18,7 +18,8 @@ const EMOJI_FONT = `"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans
 const MapView = (() => {
   const cv = document.getElementById("map"), g = cv.getContext("2d");
   const st = { world: null, ents: new Map(), follow: "ada", tool: null, hover: null, dirty: true, cam: null,
-               pos: {}, last: 0, terrainKey: "", terrainImg: null, ts: 0, onClick: null };
+               pos: {}, last: 0, terrainKey: "", terrainImg: null, ts: 0, onClick: null,
+               perf: { frames: 0, draws: 0, drawMs: 0, drawMax: 0, gapMax: 0, prev: 0 } };
 
   function grassColor(season) {
     return { spring: "#4c8c3f", summer: "#468737", autumn: "#7c8a3a", winter: "#9bb0a2" }[season] || "#4c8c3f";
@@ -187,12 +188,18 @@ const MapView = (() => {
 
   function frame(t) {
     requestAnimationFrame(frame);
+    const pf = st.perf;           // how often the browser gives us a frame: the page's real smoothness
+    if (pf.prev && !document.hidden) { pf.frames++; pf.gapMax = Math.max(pf.gapMax, t - pf.prev); }
+    pf.prev = document.hidden ? 0 : t;
     if (!st.world || document.hidden) return;
     const weather = st.world.weather === "rain" || st.world.weather === "snow";
     const due = st.dirty || st.moving ? 50 : weather ? 100 : 330;
     if (t - st.last < due) return;
     st.last = t; st.dirty = false;
+    const d0 = performance.now();
     draw(t);
+    const dd = performance.now() - d0;
+    pf.draws++; pf.drawMs += dd; pf.drawMax = Math.max(pf.drawMax, dd);
   }
   requestAnimationFrame(frame);
 

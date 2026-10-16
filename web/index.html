@@ -28,6 +28,7 @@
   <button data-view="concepts">🧠 Concepts</button>
   <button data-view="oracle">🔮 Oracle</button>
   <button data-view="settings">⚙️ Settings</button>
+  <button data-view="health">🩺 Health</button>
 </nav>
 <div class="banner" id="banner" hidden></div>
 
@@ -181,6 +182,28 @@
     </div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Questions and answers</h2><div class="feed" id="qa"></div></div>
+</section>
+
+<!-- ====================================================== HEALTH -->
+<section class="view" id="view-health">
+  <div class="card">
+    <div class="row"><h2 style="margin:0">Health and performance</h2><span class="grow"></span>
+      <a class="button primary" id="dlReport" href="/api/diagnostics" download>⬇️ Download report</a></div>
+    <div class="muted" style="margin-top:6px">The report gathers everything below plus your settings, system details and the recent logs into one
+      text file you can share. Each process also keeps its full log in <code id="logPath">minds/Ada/logs/</code>.</div>
+    <h3>What looks wrong</h3>
+    <div id="findings" class="feed" style="max-height:none"></div>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div class="card"><h2>🎓 Academy</h2><div id="hAcademy"></div></div>
+    <div class="card"><h2>🌍 World</h2><div id="hWorld"></div></div>
+    <div class="card"><h2>🧭 Hub</h2><div id="hHub"></div></div>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card"><h2>🖥️ GPU</h2><dl class="facts" id="hGpu"></dl></div>
+    <div class="card"><h2>🌐 This browser</h2><dl class="facts" id="hBrowser"></dl></div>
+  </div>
+  <div class="card" style="margin-top:14px"><h2>Warnings and errors</h2><pre class="logbox" id="hLog"></pre></div>
 </section>
 
 <!-- ====================================================== SETTINGS -->

@@ -201,34 +201,41 @@ class Academy:
                     self.val_batches.append((t[:, :-1], t[:, 1:]))
         t0 = time.perf_counter()
         total, ntok = 0.0, 0
+        perf = self.link.perf
         for _ in range(a.grad_accum):
-            b = self.batch(B, T)
+            with perf.time("wait for data"):
+                b = self.batch(B, T)
             if b is None:
                 for o in self.opts:
                     o.zero_grad(set_to_none=True)
                 self.status_line = "waiting for something to study (FineWeb: %s)" % self.fineweb.status
                 return False
             x, y = b
-            with self.autocast():
-                loss = self.brain(x, y)
-            (loss / a.grad_accum).backward()
-            total += float(loss.detach()) / a.grad_accum
+            with perf.time("forward + backward"):
+                with self.autocast():
+                    loss = self.brain(x, y)
+                (loss / a.grad_accum).backward()
+                total += float(loss.detach()) / a.grad_accum
             ntok += x.numel()
-        gnorm = float(torch.nn.utils.clip_grad_norm_(self.brain.parameters(), a.grad_clip))
+        with perf.time("optimizer"):
+            gnorm = float(torch.nn.utils.clip_grad_norm_(self.brain.parameters(), a.grad_clip))
         if not (math.isfinite(total) and math.isfinite(gnorm)):
             for o in self.opts:
                 o.zero_grad(set_to_none=True)
             self.skipped += 1
-            self.link.log(f"skipped an unstable step (loss {total}, grad norm {gnorm})", every=30)
+            self.link.warn(f"skipped an unstable step (loss {total}, grad norm {gnorm})", every=30)
             return True
         set_lrs(self.opts, a, min(1.0, (self.step + 1) / max(1, a.warmup_steps)))
         self.lr = a.muon_lr * min(1.0, (self.step + 1) / max(1, a.warmup_steps))
-        for o in self.opts:
-            o.step()
-            o.zero_grad(set_to_none=True)
+        with perf.time("optimizer"):
+            for o in self.opts:
+                o.step()
+                o.zero_grad(set_to_none=True)
         if self.device.type == "cuda":
-            torch.cuda.synchronize()
+            with perf.time("waiting for the GPU"):
+                torch.cuda.synchronize()
         dt = max(time.perf_counter() - t0, 1e-6)
+        perf.add("training step", dt)
         self.step += 1
         self.tokens += ntok
         self.gnorm = gnorm
@@ -238,12 +245,14 @@ class Academy:
         if self.step % 20 == 0:
             self.link.send("metric", point=self.point(total))
         if self.step % a.eval_every == 0:
-            self.evaluate()
+            with perf.time("evaluate"):
+                self.evaluate()
         # Leave the GPU some breathing room when asked to.
         mode = self.intensity_override or a.intensity
         rest = {"full": 0.0, "balanced": 0.35, "gentle": 1.5}.get(mode, 0.0)
         if rest:
-            time.sleep(min(0.5, dt * rest))
+            with perf.time("resting (intensity)"):
+                time.sleep(min(0.5, dt * rest))
         return True
 
     def point(self, loss: float | None = None) -> dict:
@@ -513,22 +522,34 @@ class Academy:
             for msg in self.link.commands():
                 self.handle(msg)
             now = time.time()
+            perf = self.link.perf
             if now - last_ingest > 2.0:
                 last_ingest = now
-                self.ingest()
+                with perf.time("reading lessons and journal"):
+                    self.ingest()
             did = False
             if not self.paused:
                 did = self.train_step()
                 if self.cfg.academy.publish_minutes > 0 and now - self.last_publish > self.cfg.academy.publish_minutes * 60 \
                         and self.step != self.steps_at_publish:
-                    self.publish()
+                    with perf.time("publishing a brain"):
+                        self.publish()
                 if now - last_save > 600:
                     last_save = now
-                    self.save()
+                    with perf.time("saving"):
+                        self.save()
             else:
                 self.status_line = f"resting ({self.pause_reason})"
             if now - last_status > 1.0:
                 last_status = now
                 self.link.send("status", status=self.status())
+                perf.gauge("studying", 0 if self.paused else 1)
+                perf.gauge("device", self.device.type)
+                perf.gauge("tokens_per_s", round(self.tps))
+                perf.gauge("fineweb_ready_docs", len(self.fineweb.docs))
+                perf.gauge("batch_tokens", self.cfg.academy.batch_size * self.cfg.brain.seq_len * self.cfg.academy.grad_accum)
+                if self.device.type == "cuda":
+                    perf.gauge("gpu_memory_peak_mb", round(self.torch.cuda.max_memory_allocated() / 2**20))
+                self.link.maybe_send_perf()
             if not did:
                 time.sleep(0.1)

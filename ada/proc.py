@@ -16,7 +16,6 @@ import multiprocessing as mp
 import os
 import queue
 import time
-import traceback
 from pathlib import Path
 
 STAGES = [  # (name, bits per byte above which the brain is still in this stage, what it means)
@@ -40,12 +39,16 @@ def stage_of(loss: float | None, bpb: float | None, n_vocab: int) -> int:
 
 
 class Link:
-    """A worker's connection to the Hub."""
+    """A worker's connection to the Hub, its log file and its performance timers."""
 
     def __init__(self, src: str, inbox: mp.Queue, outbox: mp.Queue, folder: Path):
+        from .diag import Perf, setup_logging
+
         self.src, self.inbox, self.outbox = src, inbox, outbox
-        self.logfile = folder / f"{src}.log"
+        self.logger = setup_logging(src, folder)
+        self.perf = Perf()
         self._printed: dict[str, float] = {}
+        self._perf_sent = time.time()
 
     def send(self, type_: str, **data):
         try:
@@ -69,20 +72,28 @@ class Link:
         return p is None or p.is_alive()
 
     def log(self, msg: str, every: float = 0.0, error: bool = False):
-        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(self.logfile, "a", encoding="utf-8") as f:
-                f.write(f"{stamp} {msg}\n")
-        except OSError:
-            pass
+        """Write to logs/<process>.log, and tell the Hub (at most once per `every` seconds)."""
+        (self.logger.error if error else self.logger.info)(msg)
         key = msg[:40]
         if time.time() - self._printed.get(key, 0) >= every:
             self._printed[key] = time.time()
             self.send("log", text=msg[-600:], error=error)
 
+    def warn(self, msg: str, every: float = 60.0):
+        self.logger.warning(msg)
+        key = "w" + msg[:40]
+        if time.time() - self._printed.get(key, 0) >= every:
+            self._printed[key] = time.time()
+            self.send("log", text=msg[-600:], error=False)
+
     def crash(self, e: BaseException):
-        self.log(traceback.format_exc(), error=True)
+        self.logger.critical("crashed", exc_info=e)
         self.send("error", text=f"{type(e).__name__}: {e}"[:500])
+
+    def maybe_send_perf(self, every: float = 5.0):
+        if time.time() - self._perf_sent >= every:
+            self._perf_sent = time.time()
+            self.send("perf", perf=self.perf.take())
 
 
 class FileTail:
