@@ -200,7 +200,7 @@ class Academy:
                     t = torch.tensor(rows, device=self.device)
                     self.val_batches.append((t[:, :-1], t[:, 1:]))
         t0 = time.perf_counter()
-        total, ntok = 0.0, 0
+        losses, ntok = [], 0
         perf = self.link.perf
         for _ in range(a.grad_accum):
             with perf.time("wait for data"):
@@ -219,10 +219,14 @@ class Academy:
                     with self.autocast():
                         loss = self.brain(x, y)
                     (loss / a.grad_accum).backward()
-                total += float(loss.detach()) / a.grad_accum
+                losses.append(loss.detach())
             ntok += x.numel()
         with perf.time("optimizer"):
-            gnorm = float(torch.nn.utils.clip_grad_norm_(self.brain.parameters(), a.grad_clip))
+            gnorm_t = torch.nn.utils.clip_grad_norm_(self.brain.parameters(), a.grad_clip)
+        with perf.time("waiting for the GPU"):
+            self.gpu_wait()
+        total = sum(float(l) for l in losses) / a.grad_accum
+        gnorm = float(gnorm_t)
         if not (math.isfinite(total) and math.isfinite(gnorm)):
             for o in self.opts:
                 o.zero_grad(set_to_none=True)
@@ -235,9 +239,8 @@ class Academy:
             for o in self.opts:
                 o.step()
                 o.zero_grad(set_to_none=True)
-        if self.device.type == "cuda":
-            with perf.time("waiting for the GPU"):
-                torch.cuda.synchronize()
+        with perf.time("waiting for the GPU"):
+            self.gpu_wait()
         dt = max(time.perf_counter() - t0, 1e-6)
         perf.add("training step", dt)
         self.step += 1
@@ -259,6 +262,15 @@ class Academy:
                 time.sleep(min(0.5, dt * rest))
         return True
 
+    def gpu_wait(self):
+        """Wait for the GPU to finish its queued work while *sleeping*. torch.cuda.synchronize() and
+        reading a number off the GPU spin a CPU core at 100% the whole time the GPU works, which
+        heats the CPU for nothing (laptops share one cooler between the CPU and the GPU)."""
+        if self.device.type == "cuda":
+            ev = self.torch.cuda.Event(blocking=True)
+            ev.record()
+            ev.synchronize()
+
     def profiled(self, x, y, accum: int):
         """One training pass timed part by part on the GPU itself (every 100 steps)."""
         torch = self.torch
@@ -271,7 +283,7 @@ class Academy:
         ev[2].record()
         (loss / accum).backward()
         ev[3].record()
-        torch.cuda.synchronize()
+        self.gpu_wait()
         perf = self.link.perf
         perf.gauge("profile_forward_ms", round(ev[0].elapsed_time(ev[1]), 1))
         perf.gauge("profile_loss_ms", round(ev[1].elapsed_time(ev[2]), 1))

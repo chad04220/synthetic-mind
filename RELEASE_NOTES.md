@@ -1,3 +1,22 @@
+# Ada v1.1.4
+
+## A cooler CPU while Ada studies
+
+While the GPU trained, the Academy kept one CPU core busy at 100% doing nothing useful. Each
+time it waited for the GPU to finish a step, it checked "done yet?" millions of times a second
+(PyTorch's default way of waiting) instead of sleeping. Task Manager averages over all 12
+threads, so this looked like only about 8% of the CPU. But one core flat out runs at its highest
+boost clock, and on a laptop it shares a single cooler with an 80 W GPU, so the CPU ran very hot.
+
+- **The Academy now sleeps while it waits for the GPU** and is woken when the step is done. Its
+  CPU use while studying should drop from a full core to a small fraction of one, with no loss of
+  speed.
+- In the Health tab, the time the GPU spends on a step now shows up as *waiting for the GPU*.
+  *Forward + backward* is now only the time spent handing the work to the GPU. The GPU-side split
+  (forward, loss, backward) is still measured every 100 steps.
+
+---
+
 # Ada v1.1.3
 
 ## Faster training
