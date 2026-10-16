@@ -427,14 +427,14 @@ class Hub:
     def _load_history(self):
         path = self.folder / "metrics.jsonl"
         if path.exists():
-            for line in path.read_text().splitlines()[-20000:]:
+            for line in path.read_text(encoding="utf-8").splitlines()[-20000:]:
                 try:
                     self.metrics.append(json.loads(line))
                 except ValueError:
                     pass
         path = self.folder / "assessments.jsonl"
         if path.exists():
-            for line in path.read_text().splitlines()[-500:]:
+            for line in path.read_text(encoding="utf-8").splitlines()[-500:]:
                 try:
                     self.assessments.append(json.loads(line))
                 except ValueError:
@@ -442,7 +442,7 @@ class Hub:
         path = self.folder / "concept_report.json"
         if path.exists():
             try:
-                self.concept_report = json.loads(path.read_text())
+                self.concept_report = json.loads(path.read_text(encoding="utf-8"))
             except ValueError:
                 pass
 

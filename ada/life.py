@@ -79,7 +79,7 @@ class Life:
         if not self.with_brain or not meta_path.exists():
             return
         try:
-            meta = json.loads(meta_path.read_text())
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return
         if meta.get("version", 0) <= self.brain_version:
@@ -533,7 +533,7 @@ class Life:
         if not path.exists():
             return
         try:
-            s = json.loads(path.read_text())
+            s = json.loads(path.read_text(encoding="utf-8"))
             self.world.load_state(s["world"])
             self.memory = s.get("memory", [])
             self.thoughts.extend(s.get("thoughts", []))

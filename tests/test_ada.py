@@ -322,3 +322,24 @@ def test_oracle_lesson_pack_against_a_fake_ollama(tmp_path):
     lines = [json.loads(x) for x in (tmp_path / "O" / "curriculum.jsonl").read_text().splitlines()]
     assert lines[0]["priority"] and lines[0]["parts"][0] == ["<|oracle|>", "Owls hunt at night."]
     srv.shutdown()
+
+
+def test_saving_works_where_the_default_encoding_is_not_utf8(mind):
+    """Windows writes text as cp1252 by default, which cannot hold the '�' Ada babbles early on."""
+    code = f"""
+import sys, locale; sys.path.insert(0, {str(ROOT)!r})
+assert locale.getpreferredencoding(False).lower() not in ("utf-8", "utf8"), locale.getpreferredencoding(False)
+from pathlib import Path
+from ada.proc import write_json
+from ada.concepts import ConceptGraph
+from ada.config import AdaConfig
+folder = Path({str(mind)!r})
+write_json(folder / "x.json", {{"text": "babble \\ufffd \\u00e9 \\U0001F34E"}})
+g = ConceptGraph(folder / "concepts.json"); g.add([{{"s": "caf\\u00e9", "r": "is", "o": "cozy"}}], "oracle")
+assert ConceptGraph(folder / "concepts.json").all()
+AdaConfig.load(folder / "config.json").save(folder / "config.json")
+print("ok")
+"""
+    env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert r.stdout.strip() == "ok", r.stderr[-800:]

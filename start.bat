@@ -4,6 +4,7 @@ rem installs a CUDA build of PyTorch if an NVIDIA GPU is present, then the other
 rem It also repairs an environment that ended up with the CPU-only PyTorch build.
 setlocal
 cd /d "%~dp0"
+set PYTHONUTF8=1
 set "VPY=.venv\Scripts\python.exe"
 
 if exist "%VPY%" goto have_venv

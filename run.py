@@ -63,6 +63,9 @@ def main():
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
     disable_console_pause()
+    # Windows' default text encoding can't hold every character Ada babbles; make every process
+    # (the Academy and World inherit this) read and write UTF-8.
+    os.environ.setdefault("PYTHONUTF8", "1")
 
     import uvicorn
 

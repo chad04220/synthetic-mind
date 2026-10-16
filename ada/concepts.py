@@ -98,7 +98,7 @@ class ConceptGraph:
             return False
         self.mtime = m
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return False
         with self.lock:
@@ -130,7 +130,7 @@ class ConceptGraph:
             data = {"facts": [{"s": s, "r": r, "o": o, "src": src} for (s, r, o), src in self.facts.items()
                               if src != "built-in"]}
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=1))
+        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
         tmp.replace(self.path)
         self.mtime = self.path.stat().st_mtime
 

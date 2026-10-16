@@ -129,12 +129,12 @@ class AdaConfig:
 
     def save(self, path: Path) -> None:
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.to_dict(), indent=2))
+        tmp.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
         tmp.replace(path)
 
     @classmethod
     def load(cls, path: Path) -> "AdaConfig":
-        return cls.from_dict(json.loads(path.read_text()))
+        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _fill(obj, d: dict) -> None:

@@ -125,7 +125,7 @@ def append_jsonl(path: Path, obj: dict):
 
 def write_json(path: Path, obj):
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False))
+    tmp.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 

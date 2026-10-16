@@ -1,3 +1,21 @@
+# Ada v1.0.1
+
+## Fixed: crashes on Windows that made everything choppy
+
+On Windows, Python writes text files in the old "cp1252" encoding unless told otherwise, and
+that encoding can't hold the "�" character that appears in Ada's early babbling. Saving the
+World (which happens every minute and at nightfall) crashed with `UnicodeEncodeError: 'charmap'
+codec can't encode character '\ufffd'`, the Hub restarted it, and it crashed again. Each restart
+reloaded PyTorch and her brain onto the GPU, which made the browser and desktop stutter.
+
+- Every file Ada reads or writes is now explicitly UTF-8, and all three processes run in Python's
+  UTF-8 mode as a backstop.
+- NumPy is now installed, which silences PyTorch's "Failed to initialize NumPy" warning.
+
+Just unzip over your existing folder (or pull) and run `start.bat`; Ada continues where she was.
+
+---
+
 # Ada v1.0.0: a two-part mind
 
 A redesign from the ground up, built on what Synthetic Mind taught us.
