@@ -281,27 +281,35 @@ def _recipe(product: str):
     return next(((p, ing, st) for p, ing, st in RECIPES if p == product), None)
 
 
+def _conjugate(v: str) -> str:
+    irregular = {"am": "is", "have": "has", "do": "does", "go": "goes", "carry": "carries", "try": "tries",
+                 "can": "can", "can't": "can't", "could": "could", "fly": "flies", "dry": "dries"}
+    if v in irregular:
+        return irregular[v]
+    if v.endswith(("s", "sh", "ch", "x", "z")):
+        return v + "es"
+    if v.endswith("y") and v[-2:-1] not in "aeiou":
+        return v[:-1] + "ies"
+    return v + "s"
+
+
+_BASE_VERBS = set(_VERB_OF) | {"strike", "mix", "pour", "wait", "roll", "turn", "close", "lie", "wind", "shape", "scatter"}
+
+
 def third(sentence: str, name: str) -> str:
-    """'I put the pot on the stove.' -> 'Wren puts the pot on the stove.' (what others see)."""
+    """'I strike a match and light the stove.' -> 'Wren strikes a match and lights the stove.'"""
     s = sentence.strip()
     if not s.startswith("I "):
         return s
     words = s[2:].split(" ")
-    v = words[0]
-    irregular = {"am": "is", "have": "has", "do": "does", "go": "goes", "carry": "carries", "try": "tries",
-                 "can": "can", "can't": "can't", "could": "could", "fly": "flies", "dry": "dries"}
-    if v in irregular:
-        v = irregular[v]
-    elif v.endswith(("s", "sh", "ch", "x", "z")):
-        v += "es"
-    elif v.endswith("y") and v[-2:-1] not in "aeiou":
-        v = v[:-1] + "ies"
-    else:
-        v += "s"
+    words[0] = _conjugate(words[0])
+    for i in range(1, len(words) - 1):                 # "... and light the stove": the same subject goes on
+        if words[i] == "and" and words[i + 1] in _BASE_VERBS:
+            words[i + 1] = _conjugate(words[i + 1])
     rest = " ".join(words[1:])
     rest = re.sub(r"\bmy\b", "the", rest)
-    rest = re.sub(r"\bmyself\b", "too", rest)
-    return f"{name} {v}" + (f" {rest}" if rest else "")
+    rest = re.sub(r"\bmyself\b", "themself", rest)
+    return f"{name} {words[0]}" + (f" {rest}" if rest else "")
 
 
 # ====================================================================== what is where
