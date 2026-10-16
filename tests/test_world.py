@@ -275,7 +275,7 @@ def test_perception_is_short_and_deterministic():
         a.act(word), b.act(word)
         pa, pb = a.perceive(), b.perceive()
         assert pa == pb
-        assert len(pa.split()) <= 46, pa
+        assert len(pa.split()) <= 50, pa
         assert len(a.look().split()) <= 125, a.look()
     p = a.perceive()
     assert "Ahead:" in p and "Left:" in p and "Right:" in p and "Here:" in p
@@ -426,3 +426,49 @@ def test_ontology_covers_the_world():
     assert ("Zen", "is a", "synth") in facts and len(facts) > 300
     assert ("toadstool", "is", "poisonous") in facts
     assert len(T.BOOKS) >= 25
+
+
+def test_boredom_grows_with_sameness_and_fades_with_new_things():
+    w = World(11)
+    b0 = w.zen.needs["boredom"]
+    rewards = [w.act("wait")["reward"] for _ in range(20)]
+    assert w.zen.needs["boredom"] > b0 + 20 and sum(rewards) < 0        # waiting around is dull and feels bad
+    for _ in range(15):
+        w.act("left")                                                    # turning in circles: still dull
+    w.amuse(50)
+    bored = w.zen.needs["boredom"]
+    w.advance(120)
+    assert w.zen.needs["boredom"] > bored                               # time with nothing new makes it worse
+    assert "bored" in " ".join(w.feelings()) or w.zen.needs["boredom"] <= 60
+    w.amuse(30)
+    assert w.zen.needs["boredom"] < bored                                # making things or hearing answers helps
+    fresh = World(11)                                                    # going somewhere new helps too:
+    fresh.zen.needs["boredom"] = 40.0                                    # out of the cabin and into the forest
+    for _ in range(8):
+        assert fresh.act("forward")["ok"]
+    assert fresh.zen.needs["boredom"] < 10
+    for _ in range(12):                                                  # but bumping round the same trees bores
+        if not fresh.act("forward")["ok"]:
+            fresh.act("right")
+    circling = fresh.zen.needs["boredom"]
+    for _ in range(12):
+        if not fresh.act("forward")["ok"]:
+            fresh.act("right")
+    assert fresh.zen.needs["boredom"] > circling
+
+
+def test_real_deeds_are_rewarded_and_repeating_them_counts_less():
+    w = World(11)
+    gains = []
+    for _ in range(4):
+        w.zen.needs["energy"] = 85.0                    # the same small hunger each time
+        w.zen.hands.append(w.make("apple"))
+        r = w.act("eat")
+        assert r["ok"]
+        gains.append(r["reward"])
+    assert gains[0] > 0.1 and gains[1] > gains[2] > gains[3]           # repeating a deed soon after counts less
+    assert w._deed("drink", "sea", "I drink the sea water.") == 0.0       # not every deed is worth something
+    v1 = w._deed("use", "book", 'I read "Fables".')
+    v2 = w._deed("use", "book", 'I read "Fables".')
+    assert v1 == 0.5 and v2 < v1
+    assert w._deed("use", "flint", "I strike the flint. A spark catches and the fire burns.") == 0.6

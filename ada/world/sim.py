@@ -17,6 +17,8 @@ Coordinates: x grows east, y grows south. Facing: 0 = north, 1 = east, 2 = south
 """
 from __future__ import annotations
 
+from collections import deque
+
 import math
 import random
 
@@ -30,7 +32,19 @@ DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 DIR_NAMES = ["north", "east", "south", "west"]
 SEASONS = ["spring", "summer", "autumn", "winter"]
 WEATHERS = ["clear", "cloudy", "rain", "storm", "snow", "fog", "wind"]
-NEEDS = ["energy", "water", "rest", "warmth", "health"]
+NEEDS = ["energy", "water", "rest", "warmth", "health", "boredom"]
+# Deeds worth something in themselves (on top of what they do for the body): word -> {kind or "*": value}.
+# Each is worth less every time it is repeated soon after (habituation), so only doing things counts.
+DEEDS = {
+    "eat": {"*": 0.25},
+    "drink": {"*": 0.15, "sea": 0.0},
+    "take": {"*": 0.06, "flint": 0.15, "axe": 0.15, "book": 0.12, "bucket": 0.12, "clay": 0.12, "honey": 0.15},
+    "use": {"*": 0.08, "book": 0.5, "chest": 0.25, "cairn": 0.3, "easel": 0.3, "piano": 0.3, "desk": 0.3,
+            "clay": 0.3, "bed": 0.2},
+    "sleep": {"bed": 0.35, "ground": 0.05},
+}
+DEED_WORDS = (("fire burns", 0.6, "fire"), ("cook", 0.6, "cook"), ("falls", 0.5, "chop"), ("fill", 0.2, "fill"),
+              ("plant", 0.3, "plant"))
 MAX_HANDS = 4
 PLACEABLE = ["berries", "apple", "banana", "coconut", "honey", "mushroom", "egg", "raw fish", "cooked fish", "stick",
              "log", "stone", "flint", "clay", "flower", "feather", "shell", "crystal", "book", "paper", "cup",
@@ -205,7 +219,8 @@ class World:
         # beings
         self.zen = Body(x=0, y=0, fx=0.0, fy=0.0, facing=2, hands=[], sleeping=False, in_bed=False, said="",
                         said_t=-1e9, activity="", activity_t=0.0, waiting=False, wet=0.0, voluntary=False,
-                        needs={"energy": 80.0, "water": 80.0, "rest": 90.0, "warmth": 75.0, "health": 100.0})
+                        needs={"energy": 80.0, "water": 80.0, "rest": 90.0, "warmth": 75.0, "health": 100.0,
+                               "boredom": 20.0})
         self.sprite = Body(x=-1, y=-1, fx=-1.0, fy=-1.0, state="idle", said="", said_t=-1e9)
         self.visitor: Body | None = None
         self.animals: dict[int, dict] = {}
@@ -235,6 +250,9 @@ class World:
         self._passive = 0.0
         self._bonus = 0.0
         self.last_action = ""
+        self.last_text = ""
+        self.recent_words: list[str] = []              # the last dozen motor words (for boredom)
+        self.recent_deeds: deque = deque(maxlen=40)    # recent accomplishments (for habituation)
         self.steps = 0
         self.reward_rate = 0.0
         self._sent: set[int] = set()
@@ -867,6 +885,10 @@ class World:
             z.wet = max(0.0, z.wet - dry * dt)
         # needs
         if z.sleeping:
+            n["boredom"] += (25.0 - n["boredom"]) * min(1.0, dt / 300.0)      # sleep clears the mind
+        else:
+            n["boredom"] += 0.05 * dt                                       # nothing new: it grows
+        if z.sleeping:
             n["rest"] += (0.22 if z.in_bed else 0.15) * dt
             n["energy"] -= 0.010 * dt
             n["water"] -= 0.012 * dt
@@ -958,7 +980,28 @@ class World:
     def wellbeing(self) -> float:
         n = self.zen.needs
         return (_utility(n["energy"]) + _utility(n["water"]) + _utility(n["rest"]) + _utility(n["warmth"]) +
-                2 * _utility(n["health"])) / 6.0
+                2 * _utility(n["health"]) + 0.8 * _utility(100.0 - n.get("boredom", 0.0))) / 6.8
+
+    def amuse(self, points: float):
+        """Something engaging happened (a mark made, an answer heard): less bored, and it feels good."""
+        n = self.zen.needs
+        wb0 = self.wellbeing()
+        n["boredom"] = max(0.0, min(100.0, n.get("boredom", 0.0) - points))
+        self._passive += WB_GAIN * (self.wellbeing() - wb0)
+
+    def _deed(self, word: str, what, text: str) -> float:
+        """What a successful deed is worth in itself, less each time it is repeated soon after."""
+        table = DEEDS.get(word, {})
+        key, value = f"{word}:{what}", table.get(what, table.get("*", 0.0)) if table else 0.0
+        low = (text or "").lower()
+        for needle, v, name in DEED_WORDS:
+            if needle in low and word in ("use", "take"):
+                key, value = f"deed:{name}", max(value, v)
+        if value <= 0:
+            return 0.0
+        recent = sum(1 for k in self.recent_deeds if k == key)
+        self.recent_deeds.append(key)
+        return value * (0.55 ** recent)
 
     def feelings(self) -> list[str]:
         n, out = self.zen.needs, []
@@ -966,6 +1009,8 @@ class World:
                                 ("warmth", 35, "cold"), ("health", 50, "hurt")):
             if n[need] < low:
                 out.append(("very " if n[need] < low * 0.4 else "") + word)
+        if n.get("boredom", 0) > 60:
+            out.append(("very " if n["boredom"] > 85 else "") + "bored")
         if self.zen.wet > 0.5:
             out.append("wet")
         if n["warmth"] > 97 and self.air_temp(self.zen.x, self.zen.y) > 30:
@@ -1098,6 +1143,7 @@ class World:
 
     def answer_arrived(self):
         self._bonus += 0.4
+        self.amuse(12.0)
 
     def reward_since_last(self) -> float:
         r = self._passive + self._bonus
@@ -1422,6 +1468,9 @@ class World:
         bonus = extra.pop("bonus", 0.0)
         lost = max(0.0, h0 - z.needs["health"])
         reward = WB_GAIN * (self.wellbeing() - wb0) + pain - 0.2 * lost + bonus
+        what = extra.get("what")
+        if ok:
+            reward += self._deed(word, what, text)
         if ok:
             what = extra.pop("what", None)
             if word not in self.firsts:
@@ -1439,6 +1488,26 @@ class World:
         events += ev2
         if texts:
             text = (text + " " + " ".join(texts)).strip()
+        # boredom: doing the same thing (or nothing) again and again is dull; new things are not
+        wb1 = self.wellbeing()
+        same = word == self.last_action and text == self.last_text
+        repeats = sum(1 for k in self.recent_words if k == word)
+        stale = nov <= 0                                   # nothing new came of it
+        dull = (1.5 if word == "wait" else 0.0) + (3.0 if same and stale else 0.0) + \
+            (1.5 if repeats >= 5 and stale else 0.0)
+        fresh = (25.0 if any(e.get("kind") == "new_place" for e in events) else 0.0) + \
+            12.0 * sum(1 for e in events if e.get("kind") == "new_kind") + \
+            (6.0 if any(e.get("kind") == "new_chunk" for e in events) else 0.0) + \
+            (8.0 if any(e.get("kind") == "first" for e in events) else 0.0) + \
+            (1.0 if ok and word not in self.recent_words[-3:] else 0.0) + (nov > 0) * 1.5
+        n = z.needs
+        n["boredom"] = max(0.0, min(100.0, n.get("boredom", 0.0) + dull - fresh))
+        reward += WB_GAIN * (self.wellbeing() - wb1)
+        self.recent_words.append(word)
+        del self.recent_words[:-12]
+        self.last_text = text
+        if n["boredom"] > 85 and self.steps % 12 == 0:
+            text = (text + " I am so bored.").strip()
         reward = max(-1.0, min(1.0, reward))
         self.last_action = word
         self.steps += 1
@@ -2199,6 +2268,7 @@ class World:
         z.x, z.y, z.facing = zs["x"], zs["y"], zs["facing"]
         z.fx, z.fy = float(z.x), float(z.y)
         z.hands, z.needs = list(zs["hands"]), dict(zs["needs"])
+        z.needs.setdefault("boredom", 20.0)
         z.sleeping, z.in_bed, z.wet = zs["sleeping"], zs.get("in_bed", False), zs.get("wet", 0.0)
         z.voluntary = zs.get("voluntary", False)
         self.gone = set(d.get("gone", []))

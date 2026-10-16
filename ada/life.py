@@ -427,6 +427,7 @@ class Life:
         self.exp.act(i, VOCAB_INDEX[kind])
         s["ins"].apply(word)
         s["marks"] += 1
+        self.world.amuse(0.35)                       # making something is the opposite of boredom
         # now and then Zen looks at its work: what it sees goes into its stream
         if s["marks"] % 24 == 0:
             self.stream("<|world|>", s["ins"].describe())

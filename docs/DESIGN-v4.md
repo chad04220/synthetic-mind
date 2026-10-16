@@ -106,6 +106,21 @@ answer received +0.4, first time doing an action successfully +0.3, eating when 
 when thirsty are already in Δwellbeing. Rewards are per action and also accumulate between actions
 (e.g. getting colder while waiting).
 
+### 3.4b Boredom and accomplishments
+- **Boredom** is a sixth need (0–100, higher is worse, counted in wellbeing). It creeps up while Zen is
+  awake (+3 a minute), and faster when it waits, or repeats the same action with the same outcome
+  and nothing new comes of it. It falls with novelty (a new place −25, a new kind of thing −12, a new
+  chunk −6, a first-time action −8, a new tile, a varied successful action), with every mark Zen
+  makes in the studio, and with every answer from the Sprite; sleep settles it. Zen perceives it
+  ("I am bored", "I am so bored"). Because it is part of wellbeing, rising boredom is a negative
+  reward and relief from it a positive one: doing nothing, or the same thing, feels bad.
+- **Accomplishments**: a successful deed that is worth something in itself earns a reward on top of
+  what it does for the body (`sim.DEEDS`, `sim.DEED_WORDS`): eating 0.25, drinking clean water 0.15,
+  reading a book 0.5, lighting a fire 0.6, cooking 0.6, chopping a tree 0.5, opening a chest 0.25,
+  starting work at the easel, piano, desk or with clay 0.3, climbing a cairn 0.3, sleeping in a bed
+  0.35, picking up useful things 0.06–0.15. Each is worth 0.55× less for every time the same deed was
+  done in the last 40 deeds, so only genuine doing pays, not farming.
+
 ### 3.5 Interface used by Life
 ```
 w = World(seed)                       # or World.from_state(dict)

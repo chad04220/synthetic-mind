@@ -1897,8 +1897,9 @@ function updateBow() {
 function updateFog() {
   const E = S.env, d = S.cam.dist, reach = RADIUS * N + 14;
   const fogW = S.live.weather === "fog";
-  S.scene.fog.near = (fogW ? 2 : Math.min(E.fogN, 30)) + d * 0.35;
-  S.scene.fog.far = Math.min(fogW ? 34 : E.fogF, reach) + d * 0.55;
+  S.scene.fog.near = (fogW ? 2 : Math.min(E.fogN, 24)) + d * 0.35;
+  S.scene.fog.far = Math.min(fogW ? 34 : E.fogF, reach - 8) + d * 0.5;
+  S.skyMat.uniforms.uBot.value.copy(E.hor);      // below the horizon the sky is the fog: the land's far edge melts into it
   S.scene.fog.color.copy(E.hor);
 }
 
