@@ -3,37 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Zen</title>
+<title>Synthetic Mind</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="stylesheet" href="/static/world3d.css">
 </head>
 <body>
 <header class="top">
   <div class="brand">
     <div class="orb" id="orb"></div>
-    <div><div class="name" id="name">Zen</div><div class="sub" id="sub">connecting…</div></div>
+    <div class="brand-text"><div class="name" id="name">…</div><div class="sub" id="sub">connecting…</div></div>
   </div>
   <span class="chip" id="clock">…</span>
-  <span class="chip" id="sched">…</span>
-  <button id="btnSleep">Sleep now</button>
-  <button id="btnHelp" title="How it works">?</button>
   <div class="kpis">
-    <div class="kpi"><span>Stage</span><b id="kStage">–</b></div>
-    <div class="kpi"><span>Studied</span><b id="kTokens">–</b></div>
-    <div class="kpi"><span>Concepts known</span><b id="kConcepts">–</b></div>
-    <div class="kpi" title="Every deed Zen has done with its own body, each chosen by its own brain"><span>Deeds</span><b id="kDeeds">–</b></div>
+    <div class="kpi" title="How long its model took to choose its last action"><span>Last decision</span><b id="kLatency">–</b></div>
+    <div class="kpi" title="Median over its recent decisions"><span>Median</span><b id="kMedian">–</b></div>
+    <div class="kpi"><span>Decisions</span><b id="kDecisions">–</b></div>
+    <div class="kpi"><span>Blocks changed</span><b id="kBlocks">–</b></div>
   </div>
+  <button id="btnHelp" class="icon-btn" title="How it works" aria-label="How it works">?</button>
 </header>
 <nav class="main" id="nav">
-  <button data-view="world" class="on">🏡 Home</button>
-  <button data-view="zen">✨ <span class="synthname">Zen</span></button>
-  <button data-view="thoughts">💭 Thoughts</button>
+  <button data-view="home" class="on">🏡 Home</button>
+  <button data-view="mind">🧠 Mind</button>
   <button data-view="talks">🗣️ Conversations</button>
-  <button data-view="atlas">🗺️ Atlas</button>
-  <button data-view="gallery">🖼️ Keepsakes</button>
-  <button data-view="academy">🎓 Academy</button>
-  <button data-view="concepts">🧠 Concepts</button>
-  <button data-view="sprite">🌟 Sprite</button>
+  <button data-view="thoughts">💭 Thoughts</button>
+  <button data-view="map">🗺️ Map</button>
   <button data-view="settings">⚙️ Settings</button>
   <button data-view="health">🩺 Health</button>
 </nav>
@@ -41,323 +34,191 @@
 
 <main>
 <!-- ====================================================== HOME -->
-<section class="view on" id="view-world">
-  <div class="stage" id="stage">
-    <div id="stage3d"></div>
-    <div class="ov ov-tl"><div class="pill" id="ovClock">…</div><div class="pill dim" id="ovPlace"></div></div>
-    <div class="ov ov-left glass" id="mindStrip" aria-label="Zen and the Sprite"></div>
-    <div class="ov ov-right">
-      <div class="minimap glass" id="minimapWrap">
-        <canvas id="map" tabindex="0" aria-label="Map of the land around Zen"></canvas>
-        <div class="mm-tools"><button data-mm="in" title="Closer" aria-label="Zoom in">＋</button><button data-mm="out" title="Further" aria-label="Zoom out">－</button><button data-mm="atlas" title="Open the Atlas">🗺️</button></div>
+<section class="view on" id="view-home">
+  <div class="home">
+    <div class="stage" id="stage">
+      <div id="vox"></div>
+      <div class="ov ov-tl"><span class="pill" id="ovClock">…</span><span class="pill dim" id="ovWhere"></span></div>
+      <div class="ov ov-tr">
+        <div class="minimap glass">
+          <canvas id="mini" width="200" height="200" aria-label="Minimap of the land around"></canvas>
+          <div class="mm-tools"><button data-mm="in" aria-label="Zoom in">＋</button><button data-mm="out" aria-label="Zoom out">－</button><button data-mm="map" title="Open the Map" aria-label="Open the Map">⤢</button></div>
+          <div class="mm-coords" id="mmCoords"></div>
+        </div>
       </div>
-      <div class="glass studio-inset" id="studioInset" hidden>
-        <div class="si-head"><span id="studioTitle">Zen is painting…</span><small id="studioSteps"></small></div>
-        <canvas id="studioCanvas" width="512" height="384" aria-label="The piece Zen is making"></canvas>
+      <div class="ov ov-bottom">
+        <div class="hotbar glass" id="hotbar" hidden></div>
+        <div class="seg glass" id="modes">
+          <button data-mode="watch" class="on" title="Follow the inhabitant: drag to look around, wheel to zoom">👀 Watch</button>
+          <button data-mode="visit" title="Walk into the world yourself: WASD and the mouse, dig and build">🧍 Visit</button>
+          <button id="btnInv" title="Your inventory (E)" hidden>🎒</button>
+          <button id="btnCam" title="First or third person (V)" hidden>🎥</button>
+        </div>
       </div>
-      <div class="glass mindcard" id="mindCard"></div>
+      <div class="stage-toast" id="stageToast" hidden></div>
+      <div class="inv-panel glass" id="invPanel" hidden role="dialog" aria-label="Your inventory">
+        <div class="inv-head"><b>Your inventory</b><span class="muted" id="invNote"></span><button id="invClose" aria-label="Close">✕</button></div>
+        <div class="inv-grid" id="invGrid"></div>
+        <div id="creativeBox" hidden>
+          <div class="inv-head sub"><b>Every block</b><input type="search" id="palSearch" placeholder="Find a block…" aria-label="Find a block"></div>
+          <div class="palette" id="palette"></div>
+        </div>
+      </div>
     </div>
-    <div class="ov ov-feed glass" id="liveFeed" aria-live="polite"></div>
-    <div class="ov ov-bottom">
-      <div class="seg glass" id="modes">
-        <button data-mode="watch" class="on" title="Follow Zen: drag to look around, wheel to zoom, click something to look closer">👀 Follow</button>
-        <button data-mode="free" title="Fly over the land: drag to move, Shift+drag to turn, WASD">🕊️ Free</button>
-        <button data-mode="you" title="Walk in the world yourself: WASD + mouse">🧍 Visit</button>
-        <button id="uiToggle" title="Hide or show the overlay" aria-label="Hide or show the overlay">◱</button>
+    <aside class="side">
+      <div class="card mind-card" id="mindCard">
+        <div class="mc-head">
+          <span class="av" id="mcAv"></span>
+          <div class="mc-title"><b id="mcName">…</b><small id="mcState">waiting for the world…</small></div>
+          <div class="mc-held" id="mcHeld" title="In its hand"></div>
+        </div>
+        <div class="thought" id="mcThought"></div>
+        <dl class="mc-facts">
+          <dt>Goal</dt><dd id="mcGoal">–</dd>
+          <dt>Doing</dt><dd><div id="mcSkill">–</div><div class="meter"><i id="mcProgress" style="width:0"></i></div></dd>
+        </dl>
+        <div class="vitals">
+          <div class="vital" title="Health"><span>❤️</span><div class="meter health"><i id="mcHealth"></i></div><b id="mcHealthN">–</b></div>
+          <div class="vital" title="Food"><span>🍗</span><div class="meter food"><i id="mcFood"></i></div><b id="mcFoodN">–</b></div>
+        </div>
+        <div class="lastdec" id="mcDecision"></div>
       </div>
-      <div class="glass tray compact" id="mode-you" hidden>
-        <div class="hotbar" id="hotbar"></div>
-        <details class="takenew"><summary title="Put something down in front of you">＋</summary><div class="palette" id="placePalette"></div></details>
-        <span class="keys" title="E take · G give · T talk · V camera">E · G · T · V</span>
+      <div class="card chat-card">
+        <div class="row"><h2 style="margin:0">💬 Talk</h2><span class="grow"></span><span class="muted" id="chatHint"></span></div>
+        <div class="chat" id="chat" aria-live="polite"></div>
+        <form class="inline" id="chatForm"><input id="chatText" placeholder="Say something…" autocomplete="off" aria-label="Your message"><button class="primary">Send</button></form>
       </div>
-      <form class="glass talkbar" id="sayForm"><span class="to" id="sayTo">to Zen</span><input id="sayText" placeholder="Say something…" autocomplete="off"><button class="primary">Send</button></form>
-    </div>
+    </aside>
   </div>
-
-  <div class="world-grid below">
-    <div class="card">
-      <div class="row"><h2 style="margin:0" id="adaTitle">Zen</h2><span class="muted" id="adaWhere"></span></div>
-      <h3>Needs</h3>
-      <div class="needs" id="needs"></div>
-      <div class="intent">
-        <div class="muted" style="font-size:11px">NOW</div>
-        <div class="what" id="intent">…</div>
-        <div class="muted" id="intentWhy"></div>
-      </div>
-      <h3>Its last deeds <span class="muted" id="motorMini"></span></h3>
-      <canvas class="spark" id="sparkHome" aria-label="Reward of its recent deeds"></canvas>
-      <h3>What happened</h3><ul class="log" id="log"></ul>
-    </div>
-    <div class="card">
-      <div class="subtabs" id="adaTabs">
-        <button data-pane="talk" class="on" title="Your conversation with Zen">💬 You &amp; <span class="synthname">Zen</span></button>
-        <button data-pane="thoughts" title="Zen's inner monologue, written freely by its own brain">💭 Thoughts</button>
-        <button data-pane="diary" title="Everything Zen did, each deed chosen by its own brain">👣 Deeds</button>
-        <button data-pane="dialogue" title="Zen's questions to the Sprite and its answers">🌟 <span class="synthname">Zen</span> &amp; the Sprite</button>
-      </div>
-      <div class="pane on" id="pane-talk">
-        <div class="chat" id="chat"></div>
-        <form class="inline" id="chatForm"><input id="chatText" placeholder="Say something to Zen…" autocomplete="off"><button class="primary">Send</button></form>
-      </div>
-      <div class="pane" id="pane-thoughts"><div class="muted" style="margin-bottom:6px">Its inner monologue, written freely by its own brain. Brighter words were more certain.</div><div class="feed" id="thoughts"></div></div>
-      <div class="pane" id="pane-diary"><div class="muted" style="margin-bottom:6px">Every deed, as its body did it and the world answered. Each one was chosen by its brain, word by word.</div><div class="feed deeds" id="diary"></div></div>
-      <div class="pane" id="pane-dialogue"><div class="muted" style="margin-bottom:6px">What <span class="synthname">Zen</span> asks the Sprite of All Knowing, and what the Sprite answers. Its body waits while it listens.</div><div class="dialogue" id="dialogue"></div></div>
-    </div>
+  <div class="grid2 home-below">
+    <div class="card"><div class="row"><h2 style="margin:0">🎒 Its inventory</h2><span class="grow"></span><span class="muted" id="invCount"></span></div><div class="inv-grid big" id="agentInv"></div></div>
+    <div class="card"><h2>📜 What's happening</h2><div class="events" id="events" aria-live="polite"></div></div>
   </div>
 </section>
 
-<!-- ====================================================== ZEN -->
-<section class="view" id="view-zen">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">✨</span><div class="ph-text"><h1><span class="synthname">Zen</span></h1><p>Alone in an endless world: how its body is, where it is, and how its own brain moves it, one deed at a time.</p></div></div></div>
-  <div class="card journey"><h2>🧭 <span id="jName">Zen</span>'s journey <span class="h2-note">from knowing nothing to speaking</span></h2><div class="timeline" id="journey"></div></div>
+<!-- ====================================================== MIND -->
+<section class="view" id="view-mind">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🧠</span>
+    <div class="ph-text"><h1>How <span class="synthname">it</span> decides</h1><p>Each time a skill ends, someone speaks or something happens, its model reads what it sees and chooses one action. Rate a decision or show it what it should have done: Practice learns from that.</p></div>
+    <div class="ph-actions"><button data-agent="pause" id="btnPause">⏸ Pause</button><button data-agent="stop" title="Stop the current skill">⏹ Stop skill</button></div></div>
+    <div class="tiles" id="mindTiles"></div></div>
   <div class="grid2">
-    <div class="card"><h2>🫀 Its body</h2><div id="zenBody"></div></div>
-    <div class="card"><h2>🦾 How it moves <span class="h2-note">every deed sampled from its brain</span></h2><div id="motorStats"></div>
-      <figure class="spark-fig"><figcaption>Reward of each deed <span class="muted">(last ~200)</span></figcaption><canvas class="spark big" id="sparkZen"></canvas></figure>
-      <h3>What it chooses <span class="muted">(share of recent deeds)</span></h3><div class="bars" id="motorShare"></div></div>
+    <div class="card"><h2>⏱️ Decision latency <span class="h2-note">ms, last 120 decisions</span></h2><canvas class="chart" id="latChart" aria-label="Latency of recent decisions"></canvas>
+      <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>each decision</span><span><i class="sw dash"></i>250 ms target</span><span><i class="sw" style="background:var(--warm)"></i>median</span></div></div>
+    <div class="card" id="practiceMini"></div>
   </div>
-  <div class="grid2">
-    <div class="card"><h2>👣 Action stream <span class="h2-note">what it does and what happens</span></h2><div class="astream" id="actionStream"></div></div>
-    <div class="card"><h2>🎨 Its art</h2><div id="zenArt"></div>
-      <h3>Last made</h3><div id="zenMade" class="made-row"></div></div>
+  <div class="card"><div class="row"><h2 style="margin:0">🧾 Decisions</h2><span class="h2-note">newest first · what it saw, thought and did, and what came of it</span><span class="grow"></span>
+    <div class="seg" id="decFilter"><button data-f="" class="on">All</button><button data-f="said">Spoke</button><button data-f="failed">Failed</button><button data-f="rated">Rated</button></div></div>
+    <div class="declog" id="decLog"></div></div>
+  <div class="grid3">
+    <div class="card"><h2>📝 Its notes <span class="h2-note">written by itself</span></h2><ol class="notes" id="notes"></ol></div>
+    <div class="card"><h2>🪞 Lessons <span class="h2-note">from looking back, and from you</span></h2><div class="lessons" id="lessons"></div></div>
+    <div class="card"><h2>📍 Places it named</h2><div class="places" id="places"></div><h3>Goals</h3><div class="goals" id="goals"></div></div>
   </div>
-</section>
-
-<!-- ====================================================== THOUGHTS -->
-<section class="view" id="view-thoughts">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">💭</span>
-    <div class="ph-text"><h1><span class="synthname">Zen</span>'s thoughts</h1><p>Everything that goes through <span class="synthname">Zen</span>'s mind, whole, newest first: its inner monologue in its own words (silent at first, while its brain is new) and the deeds its brain chose. Shading shows how sure its brain was of each word.</p></div>
-    <div class="ph-actions"><div class="seg" id="thKind"><button data-kind="" class="on">All</button><button data-kind="thought">Thoughts</button><button data-kind="act">Actions</button></div>
-      <input type="search" id="thSearch" placeholder="Find a word…" aria-label="Find a word in its thoughts">
-      <label class="switch"><input type="checkbox" id="thShade" checked><span></span><span class="sw-text">Shading</span></label></div></div></div>
-  <div class="arch" id="thList" aria-live="polite"></div>
-  <div class="arch-more"><button id="thMore" hidden>Show older thoughts</button><span class="muted" id="thEnd"></span></div>
 </section>
 
 <!-- ====================================================== CONVERSATIONS -->
 <section class="view" id="view-talks">
   <div class="card page-head"><div class="ph-row"><span class="ph-icon">🗣️</span>
-    <div class="ph-text"><h1><span class="synthname">Zen</span>'s conversations</h1><p>Every conversation <span class="synthname">Zen</span> has had, line by line and in full: its talks with you, its questions to the Sprite of All Knowing and the Sprite's words about its work.</p></div>
-    <div class="ph-actions"><div class="seg" id="tkWho"><button data-who="" class="on">All</button><button data-who="you">With you</button><button data-who="sprite">With the Sprite</button><button data-who="world">Aloud</button></div>
+    <div class="ph-text"><h1>Conversations</h1><p>Everything <span class="synthname">it</span> has said and heard, whole: talks with you and what it said aloud in the world.</p></div>
+    <div class="ph-actions"><div class="seg" id="tkWho"><button data-who="" class="on">All</button><button data-who="you">With you</button><button data-who="world">Aloud</button></div>
       <input type="search" id="tkSearch" placeholder="Find a word…" aria-label="Find a word in its conversations"></div></div></div>
   <div class="arch talks" id="tkList" aria-live="polite"></div>
   <div class="arch-more"><button id="tkMore" hidden>Show older conversations</button><span class="muted" id="tkEnd"></span></div>
 </section>
 
-<!-- ====================================================== ATLAS -->
-<section class="view" id="view-atlas">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🗺️</span><div class="ph-text"><h1>Atlas</h1><p>All of the endless world <span class="synthname">Zen</span> has seen so far: the land it explored, its trail, home and the places it found. The rest is still fog.</p></div>
-    <div class="ph-actions"><button data-atlas="zen">✨ Where is Zen</button><button data-atlas="home">🏡 Home</button><button data-atlas="fit">⤢ Everything</button></div></div>
-    <div class="atlas-stats" id="atlasStats"></div></div>
-  <div class="atlas-grid">
-    <div class="card atlas-card"><div class="atlas-wrap"><canvas id="atlasCanvas" aria-label="Map of everything Zen explored"></canvas>
-      <div class="atlas-zoom"><button data-atlas="in" aria-label="Zoom in">＋</button><button data-atlas="out" aria-label="Zoom out">－</button></div>
-      <div class="atlas-tip" id="atlasTip" hidden></div></div>
-      <div class="atlas-legend" id="atlasLegend"></div></div>
-    <div class="card"><h2>📍 Places found</h2><div class="aplaces" id="atlasPlaces"></div></div>
+<!-- ====================================================== THOUGHTS -->
+<section class="view" id="view-thoughts">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">💭</span>
+    <div class="ph-text"><h1>Thoughts</h1><p>Every thought behind every decision, newest first, with the action it chose and how long it took.</p></div>
+    <div class="ph-actions"><div class="seg" id="thKind"><button data-kind="" class="on">All</button><button data-kind="thought">Decisions</button><button data-kind="reflection">Reflections</button></div>
+      <input type="search" id="thSearch" placeholder="Find a word…" aria-label="Find a word in its thoughts"></div></div></div>
+  <div class="arch" id="thList" aria-live="polite"></div>
+  <div class="arch-more"><button id="thMore" hidden>Show older thoughts</button><span class="muted" id="thEnd"></span></div>
+</section>
+
+<!-- ====================================================== MAP -->
+<section class="view" id="view-map">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🗺️</span>
+    <div class="ph-text"><h1>Map</h1><p>The land seen from above, as far as it has been loaded: the inhabitant, you, and the places it named. Drag to move, wheel to zoom.</p></div>
+    <div class="ph-actions"><button data-map="agent">🧑‍🌾 Find <span class="synthname">it</span></button><button data-map="you">🧍 Find you</button><button data-map="in" aria-label="Zoom in">＋</button><button data-map="out" aria-label="Zoom out">－</button></div></div>
+    <div class="tiles" id="mapStats"></div></div>
+  <div class="map-grid">
+    <div class="card map-card"><div class="map-wrap"><canvas id="bigMap" aria-label="Map of the explored land"></canvas><div class="map-tip" id="mapTip" hidden></div></div></div>
+    <div class="card"><h2>📍 Places</h2><div class="places" id="mapPlaces"></div></div>
   </div>
 </section>
 
-<!-- ====================================================== GALLERY -->
-<section class="view" id="view-gallery">
-  <div class="card page-head keep-head"><div class="ph-row"><span class="ph-icon">🖼️</span><div class="ph-text"><h1>Keepsakes</h1><p>Everything <span class="synthname">Zen</span> has made, one mark at a time: paintings at the easel, songs at the piano, sculptures in clay and words at the desk. The Sprite looks at each one and tells Zen what it sees. ♥ the ones you love: Zen feels it.</p></div></div>
-    <div class="gchips" id="galleryChips"></div>
-  </div>
-  <div class="gallery" id="gallery"></div>
-</section>
-
-<!-- ====================================================== ACADEMY -->
-<section class="view" id="view-academy">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🎓</span><div class="ph-text"><h1>Academy</h1><p>Where <span class="synthname">Zen</span>'s brain learns, from scratch: web text, concept drills and its own life — what it did, and what came of it.</p></div></div></div>
+<!-- ====================================================== SETTINGS -->
+<section class="view" id="view-settings">
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">⚙️</span><div class="ph-text"><h1>Settings</h1><p>Its model, how it practises, the rules of the world and this screen. Changes apply right away.</p></div></div></div>
   <div class="grid2">
     <div class="card">
-      <h2>🧬 Its brain</h2>
-      <div class="status" id="acStatus">…</div>
-      <div class="ladder" id="ladder"></div>
-      <div class="muted" id="stageBlurb" style="margin:6px 0 10px"></div>
-      <dl class="facts" id="acFacts"></dl>
-      <div class="row" style="margin-top:12px">
-        <button data-ac="publish" title="Give the World the brain as it is right now">Publish brain now</button>
-        <button data-ac="evaluate">Test concepts now</button>
-        <button data-ac="grow" title="Add a layer without losing what it knows">Grow</button>
-        <button data-ac="save">Save</button>
+      <h2>🧩 Its model</h2>
+      <div class="status" id="modelStatus">…</div>
+      <div class="meter" id="modelMeter" hidden><i id="modelBar" style="width:0"></i></div>
+      <label class="switch"><input type="checkbox" data-set="mind.gpu"><span></span><span class="sw-text">Run it on the GPU</span></label>
+      <div class="models" id="models"></div>
+    </div>
+    <div class="card" id="practiceCard"></div>
+  </div>
+  <div class="grid3">
+    <div class="card">
+      <h2>🧠 Its mind</h2>
+      <div class="sliders">
+        <label title="When nothing happens, it still decides at least this often">Decides at least every (s) <input type="range" min="2" max="60" step="1" data-set="mind.idle_seconds"><output></output></label>
+        <label title="Higher: more varied choices and words">Temperature <input type="range" min="0" max="1.5" step="0.05" data-set="mind.temperature"><output></output></label>
+        <label title="How far it hears you when you visit without the radio">Hears you within (blocks) <input type="range" min="4" max="64" step="1" data-set="mind.hear_radius"><output></output></label>
+      </div>
+      <label class="switch"><input type="checkbox" data-set="mind.radio"><span></span><span class="sw-text">Radio: it hears the chat box from anywhere</span></label>
+      <div class="row" style="margin-top:8px"><button data-agent="pause">⏸ Pause it</button><button data-agent="resume">▶ Resume</button><button data-agent="stop">⏹ Stop its skill</button><button data-agent="reflect" title="Ask it to look back over recent decisions and write a lesson">🪞 Reflect now</button></div>
+    </div>
+    <div class="card">
+      <h2>🌍 The world</h2>
+      <label class="switch"><input type="checkbox" data-set="world.peaceful" data-invert="1"><span></span><span class="sw-text">Night creatures (hostiles)</span></label>
+      <div class="sliders">
+        <label>Minutes in a day <input type="range" min="2" max="60" step="1" data-set="world.day_minutes"><output></output></label>
+        <label title="How many chunks around the camera are loaded and drawn">Render distance (chunks) <input type="range" min="2" max="10" step="1" data-set="world.view_chunks"><output></output></label>
       </div>
     </div>
     <div class="card">
-      <h2>📚 What it studies</h2>
-      <div class="bars" id="mix"></div>
-      <h3>🦾 Learning from its own life</h3><dl class="facts" id="lifeFacts"></dl>
-      <h3>FineWeb</h3><dl class="facts" id="fwFacts"></dl>
-      <h3>Probe the brain</h3>
-      <form class="inline" id="probeForm"><input id="probeText" value="The apple is"><button>Probe</button></form>
-      <div id="probeOut" style="margin-top:8px"></div>
+      <h2>🧍 You and this screen</h2>
+      <label class="switch"><input type="checkbox" id="creative"><span></span><span class="sw-text">Creative: place any block, break instantly</span></label>
+      <div class="sliders">
+        <label>Mouse sensitivity <input type="range" min="0.3" max="2.5" step="0.1" id="mouseSens"><output></output></label>
+        <label>Theme <select id="themeSel"><option value="">Like the system</option><option value="light">Light</option><option value="dark">Dark</option></select><output></output></label>
+      </div>
     </div>
   </div>
-  <div class="card">
-    <h2>📈 Progress</h2>
-    <div class="charts">
-      <figure class="wide"><figcaption>Loss <i class="sw" style="background:var(--accent)"></i>training <i class="sw" style="background:var(--warn)"></i>held-out web text</figcaption><canvas data-chart="loss"></canvas></figure>
-      <figure><figcaption>Concepts known <span class="muted">(chance is 25%)</span></figcaption><canvas data-chart="concepts"></canvas></figure>
-      <figure><figcaption>Bits per byte <span class="muted">(lower is better)</span></figcaption><canvas data-chart="bpb"></canvas></figure>
-      <figure><figcaption>Its deeds <i class="sw" style="background:var(--accent-2)"></i>policy loss <i class="sw" style="background:var(--good)"></i>choice entropy <i class="sw" style="background:var(--warn)"></i>return</figcaption><canvas data-chart="policy"></canvas></figure>
-      <figure><figcaption>Study speed <span class="muted">(tokens/s)</span></figcaption><canvas data-chart="tps"></canvas></figure>
-    </div>
-  </div>
-</section>
-
-<!-- ====================================================== CONCEPTS -->
-<section class="view" id="view-concepts">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🧠</span><div class="ph-text"><h1>Concepts</h1><p>What <span class="synthname">Zen</span> truly understands, tested with questions worded unlike anything it studies.</p></div></div></div>
-  <div class="grid2">
-    <div class="card">
-      <h2>🎯 How well <span class="synthname">Zen</span> understands</h2>
-      <div class="muted">Each fact is tested as a four-way choice, worded unlike anything it studies, so a correct answer means it grasped the idea rather than memorised a sentence.</div>
-      <h3>By kind of fact</h3><div class="bars" id="byRel"></div>
-    </div>
-    <div class="card"><h2>🗂️ By where the fact came from</h2><div class="bars" id="bySrc"></div></div>
-  </div>
-  <div class="card">
-    <div class="row"><h2 style="margin:0">📋 Every fact</h2><span class="grow"></span>
-      <select id="factFilter" aria-label="Which facts"><option value="all">All</option><option value="wrong">Getting wrong</option><option value="right">Getting right</option></select>
-      <input id="factSearch" placeholder="Search…" aria-label="Search the facts"></div>
-    <div class="scroll" style="margin-top:10px"><table class="facts"><thead><tr><th></th><th>Fact</th><th>It chose</th><th>From</th></tr></thead><tbody id="factRows"></tbody></table></div>
-  </div>
-</section>
-
-<!-- ====================================================== SPRITE -->
-<section class="view" id="view-sprite">
-  <div class="card page-head sprite-head"><div class="ph-row"><span class="ph-icon sprite-icon">🌟</span><div class="ph-text"><h1>The Sprite of All Knowing</h1><p>A small glowing being that floats beside <span class="synthname">Zen</span>. When Zen asks, it answers; when Zen makes something, it looks or listens and says what it sees. It is a pretrained language model on your CPU: it never acts on the world and never trains.</p></div></div></div>
-  <div class="grid2">
-    <div class="card">
-      <h2>⚙️ Its mind</h2>
-      <div class="status" id="orStatus">…</div>
-      <div class="meter" id="orMeter" hidden style="margin:-4px 0 10px"><i id="orBar" style="width:0"></i></div>
-      <label class="switch"><input type="checkbox" data-set="oracle.enabled"><span></span><span class="sw-text">The Sprite answers Zen's questions</span></label>
-      <h3>Its model</h3>
-      <div class="models" id="orModels"></div>
-      <div class="row" id="orOllamaRow" hidden style="margin-top:6px"><select id="orModel" class="grow" aria-label="Ollama model"></select><button id="btnModels">Refresh</button></div>
-    </div>
-    <div class="card">
-      <h2>💬 Ask it yourself</h2>
-      <form id="askForm"><textarea id="askText" rows="3" placeholder="What does Zen need to know about winter?"></textarea><div class="row" style="margin-top:6px"><button class="primary">Ask the Sprite</button></div></form>
-      <div id="askOut"></div>
-    </div>
-  </div>
-  <div class="card"><h2>❓ Questions and answers <span class="h2-note">Zen's, yours, and its words about Zen's work</span></h2><div class="qa" id="qa"></div></div>
 </section>
 
 <!-- ====================================================== HEALTH -->
 <section class="view" id="view-health">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🩺</span><div class="ph-text"><h1>Health</h1><p>How the program is running. The report gathers everything below plus your settings, system details and recent logs into one file you can share. Each process keeps its full log in <code id="logPath">minds/Zen/logs/</code>.</p></div><div class="ph-actions"><a class="button primary" id="dlReport" href="/api/diagnostics" download>⬇️ Download report</a></div></div></div>
-  <div class="card">
-    <h2>🔎 What looks wrong</h2>
-    <div id="findings" class="feed" style="max-height:none"></div>
-  </div>
-  <div class="grid3">
-    <div class="card"><h2>🎓 Academy</h2><div id="hAcademy"></div></div>
-    <div class="card"><h2>🌍 World</h2><div id="hWorld"></div></div>
-    <div class="card"><h2>🧭 Hub</h2><div id="hHub"></div></div>
-  </div>
+  <div class="card page-head"><div class="ph-row"><span class="ph-icon">🩺</span><div class="ph-text"><h1>Health</h1><p>How the program is running. The report gathers everything below plus your settings, system details and recent logs into one file you can share. Each process keeps its full log in <code id="logPath">minds/…/logs/</code>.</p></div><div class="ph-actions"><a class="button primary" id="dlReport" href="/api/diagnostics" download>⬇️ Download report</a></div></div></div>
+  <div class="card"><h2>🔎 What looks wrong</h2><div id="findings" class="feed"></div></div>
+  <div class="grid3" id="hProcs"></div>
   <div class="grid2">
     <div class="card"><h2>🖥️ GPU</h2><dl class="facts" id="hGpu"></dl></div>
     <div class="card"><h2>🌐 This browser</h2><dl class="facts" id="hBrowser"></dl></div>
   </div>
   <div class="card"><h2>⚠️ Warnings and errors</h2><pre class="logbox" id="hLog"></pre></div>
 </section>
-
-<!-- ====================================================== SETTINGS -->
-<section class="view" id="view-settings">
-  <div class="card page-head"><div class="ph-row"><span class="ph-icon">⚙️</span><div class="ph-text"><h1>Settings</h1><p>How <span class="synthname">Zen</span> lives and studies, and how the Sprite answers. Changes apply right away.</p></div></div></div>
-  <div class="grid2">
-    <div class="card">
-      <h2>🗓️ When <span class="synthname">Zen</span> lives and when it studies</h2>
-      <div class="radios" id="schedule">
-        <label><input type="radio" name="schedule" value="day_night"><div><b>Day and night</b><small>It lives by day; at night it sleeps and the Academy studies with the whole GPU. Never both at once.</small></div></label>
-        <label><input type="radio" name="schedule" value="together"><div><b>Together</b><small>Both always run. With its brain on the CPU, the Academy trains on the whole GPU all the time while it lives.</small></div></label>
-        <label><input type="radio" name="schedule" value="academy"><div><b>Study only</b><small>The World pauses; all compute goes to learning.</small></div></label>
-        <label><input type="radio" name="schedule" value="world"><div><b>Live only</b><small>No training; it lives with the brain it has.</small></div></label>
-      </div>
-      <h3>Day and night</h3>
-      <div class="sliders">
-        <label>Minutes of daylight <input type="range" min="2" max="60" step="1" data-set="world.day_minutes"><output></output></label>
-        <label>Minutes of night (study) <input type="range" min="2" max="240" step="1" data-set="world.night_minutes"><output></output></label>
-      </div>
-      <label class="switch"><input type="checkbox" id="dayGentle"><span></span><span class="sw-text">Keep studying gently while it's awake</span></label>
-      <h3>Academy</h3>
-      <div class="sliders">
-        <label>GPU intensity <select data-set="academy.intensity"><option value="full">Full</option><option value="balanced">Balanced</option><option value="gentle">Gentle</option></select><output></output></label>
-        <label>Publish a new brain every (minutes) <input type="range" min="1" max="60" step="1" data-set="academy.publish_minutes"><output></output></label>
-        <label>Web text share <input type="range" min="0" max="1" step="0.01" data-set="academy.mix_fineweb"><output></output></label>
-        <label>Its experience share <input type="range" min="0" max="1" step="0.01" data-set="academy.mix_experience"><output></output></label>
-        <label>Its journal share <input type="range" min="0" max="1" step="0.01" data-set="academy.mix_journal"><output></output></label>
-        <label>Concept drills share <input type="range" min="0" max="1" step="0.01" data-set="academy.mix_concepts"><output></output></label>
-      </div>
-      <label class="switch"><input type="checkbox" data-set="academy.fineweb"><span></span><span class="sw-text">Stream FineWeb</span></label>
-      <label class="switch"><input type="checkbox" data-set="academy.auto_grow"><span></span><span class="sw-text">Grow automatically when learning levels off</span></label>
-    </div>
-    <div class="card">
-      <h2>✨ <span class="synthname">Zen</span></h2>
-      <div class="sliders">
-        <label title="Where its brain runs while it lives. The CPU leaves the GPU entirely to the Academy's training.">Its brain runs on <select data-set="world.device"><option value="cpu">CPU (GPU kept for training)</option><option value="cuda">GPU</option><option value="auto">GPU if available</option></select><output></output></label>
-        <label title="CPU threads for its brain. 0 = automatic.">Its brain's CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="world.cpu_threads"><output></output></label>
-        <label title="How adventurous its body is: low sticks to what its brain likes best, high tries more things">Motor temperature <input type="range" min="0.2" max="2" step="0.05" data-set="world.motor_temperature"><output></output></label>
-        <label>Seconds between thoughts <input type="range" min="1" max="60" step="1" data-set="world.thought_seconds"><output></output></label>
-        <label>Thought length (tokens) <input type="range" min="8" max="120" step="4" data-set="world.thought_tokens"><output></output></label>
-        <label>Thought temperature <input type="range" min="0.1" max="1.5" step="0.05" data-set="world.thought_temperature"><output></output></label>
-        <label>Reply length (tokens) <input type="range" min="8" max="160" step="4" data-set="world.reply_tokens"><output></output></label>
-        <label>Reply temperature <input type="range" min="0.1" max="1.5" step="0.05" data-set="world.reply_temperature"><output></output></label>
-      </div>
-      <h3>🌟 The Sprite</h3>
-      <label class="switch"><input type="checkbox" data-set="oracle.enabled"><span></span><span class="sw-text">The Sprite answers Zen's questions</span></label>
-      <div class="sliders">
-        <label>Its model <select data-set="oracle.builtin_model" id="setModel">
-          <option value="qwen2.5-omni-3b">Qwen 2.5 Omni 3B · sees and hears</option><option value="gemma-2-2b">Gemma 2 2B</option>
-          <option value="qwen2.5-1.5b">Qwen 2.5 1.5B (light)</option><option value="qwen2.5-0.5b">Qwen 2.5 0.5B (tiny)</option><option value="llama-3.2-3b">Llama 3.2 3B</option></select><output></output></label>
-        <label title="CPU threads for the Sprite's model. 0 = automatic.">Its CPU threads (0 = auto) <input type="range" min="0" max="16" step="1" data-set="oracle.cpu_threads"><output></output></label>
-      </div>
-      <h3>🖥️ This screen</h3>
-      <div class="sliders">
-        <label title="Low: no shadows, less grass, 30 frames a second">3D quality <select id="quality3d"><option value="high">High</option><option value="low">Low</option></select><output></output></label>
-        <label>Theme <select id="themeSel"><option value="">Like the system</option><option value="light">Light</option><option value="dark">Dark</option></select><output></output></label>
-      </div>
-    </div>
-  </div>
-</section>
 </main>
+
 <dialog id="welcome">
   <div class="wel">
     <div class="wel-orb"></div>
-    <h1>Meet <span class="synthname">Zen</span></h1>
-    <p class="lead"><span class="synthname">Zen</span> is a synth: a neural network that begins as random numbers, knowing no words at all.
-      It lives alone in an endless, wild world, with only a small glowing Sprite for company.</p>
+    <h1>Meet <span class="synthname">it</span></h1>
+    <p class="lead">A small language model lives in this world. It sees what is around it, decides, and acts: it walks, digs, builds, crafts, and talks. Each decision takes a fraction of a second on your GPU.</p>
     <div class="wel-grid">
-      <div><b>🎓 Zen studies</b><span>The Academy trains its brain from scratch on your GPU: web text streamed from FineWeb and its own life. Watch it go from static to babble to first words and sentences.</span></div>
-      <div><b>🦾 Every deed is its own</b><span>Each step, turn, bite and word is chosen by its brain. Nothing else moves it. It learns from what happens: warmth, food, water, new places, pain.</span></div>
-      <div><b>🌍 An endless world</b><span>Meadows, forests, deserts, mountains, rivers and lakes, ruins and caves, deer, foxes and owls; days, nights, seasons and weather. The Atlas maps what it explores.</span></div>
-      <div><b>🌟 The Sprite of All Knowing</b><span>When Zen asks, the Sprite answers. When Zen paints, sings or sculpts, the Sprite looks or listens and tells it what it sees.</span></div>
+      <div><b>👀 Watch</b><span>Drag to look around, wheel to zoom. The mind card shows what it thinks and does right now.</span></div>
+      <div><b>💬 Talk</b><span>Type in the chat. It answers in its own words, and listens while it works.</span></div>
+      <div><b>🧍 Visit</b><span>Walk in with <kbd>WASD</kbd> and the mouse. Hold left-click to dig, right-click to place or use, <kbd>1</kbd>–<kbd>9</kbd> to choose, <kbd>E</kbd> inventory, <kbd>G</kbd> give it what you hold.</span></div>
+      <div><b>👍 Teach</b><span>Rate its decisions on the Mind tab, or show it what it should have done. Practice turns that into a better model.</span></div>
     </div>
-    <h3>You can</h3>
-    <ul>
-      <li><b>👀 Watch:</b> drag to look around, click Zen, the Sprite or anything to look closer. <b>🕊️ Free</b> flies over the land.</li>
-      <li><b>🧍 Visit:</b> walk with <b>WASD</b> and the mouse; <b>E</b> picks up, <b>G</b> gives Zen what you carry, <b>T</b> talks.</li>
-      <li><b>💬 Talk:</b> to <span class="synthname">Zen</span> (it answers with its own brain) or ask the Sprite on its tab.</li>
-      <li><b>♥ Love</b> the keepsakes you like: it teaches Zen your taste.</li>
-    </ul>
-    <p class="muted">The first time, the Sprite's model (about 3 GB) is downloaded and started on your CPU; the Sprite tab shows the progress. Your GPU is kept for training.</p>
     <form method="dialog"><button class="primary big">Let's go</button></form>
   </div>
 </dialog>
-<script src="/static/chunks.js"></script>
-<script src="/static/world.js"></script>
-<script src="/static/art.js"></script>
-<script src="/static/studio.js"></script>
-<script src="/static/minds.js"></script>
-<script src="/static/atlas.js"></script>
-<script src="/static/app.js"></script>
-<script type="module">
-  // The 3D world loads as a module; if WebGL isn't available the page keeps the minimap.
-  import("/static/world3d.js").then((m) => window.dispatchEvent(new CustomEvent("world3d", { detail: m.default || window.World3D })))
-    .catch((e) => { console.warn("3D view unavailable:", e); window.dispatchEvent(new CustomEvent("world3d", { detail: null })); });
-</script>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>
