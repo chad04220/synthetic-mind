@@ -5,8 +5,8 @@
 const Community = (() => {
   const st = { minds: [], byName: {}, works: new Map(), feed: [], selected: null, filter: "all",
                onSelect: null, playing: null, sort: "new", thumbs: new Map(), sprite: null, loved: new Set() };
-  const NEED_ICON = { energy: "🍞", water: "💧", rest: "😴", warmth: "🔥", health: "❤️" };
-  const NEED_NAME = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", health: "Health" };
+  const NEED_ICON = { energy: "🍞", water: "💧", rest: "😴", warmth: "🔥", health: "❤️", boredom: "🥱" };
+  const NEED_NAME = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", health: "Health", boredom: "Boredom (higher is worse)" };
   const KIND_ICON = { painting: "🖼️", music: "💿", sculpture: "🗿", building: "🏠", poem: "📜", writing: "📜" };
   const HAPPEN_ICON = { rainbow: "🌈", weather: "🌦️", dusk: "🌇", night: "🌙", dawn: "🌅", visitor: "👋", found: "📍", fainted: "😵", season: "🍂" };
   const mood = (m) => {
@@ -15,6 +15,7 @@ const Community = (() => {
     if (m.waiting) return ["🤔", "waiting for an answer"];
     if (f.some((x) => /happy|content|good|well/.test(x))) return ["😊", f.join(", ")];
     if (f.some((x) => /very|hurt|faint|freezing|starving/.test(x))) return ["😟", f.join(", ")];
+    if (f.some((x) => /bored/.test(x))) return ["🥱", f.join(", ")];
     if (f.length) return ["😐", f.join(", ")];
     return ["🙂", "fine"];
   };
@@ -30,7 +31,7 @@ const Community = (() => {
   // ------------------------------------------------------------------ small pieces
   function needBars(m, compact) {
     return `<div class="nbars${compact ? " compact" : ""}">` + Object.entries(m.needs || {}).map(([k, v]) => {
-      const c = v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
+      const c = k === "boredom" ? (v > 60 ? "var(--bad)" : v > 35 ? "var(--warn)" : "color-mix(in srgb, var(--warn) 55%, var(--muted))") : v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
       return `<div class="nb" title="${e(NEED_NAME[k] || k)}: ${Math.round(v)}"><span>${NEED_ICON[k] || k[0]}</span><i><b style="width:${v}%;background:${c}"></b></i></div>`;
     }).join("") + "</div>";
   }

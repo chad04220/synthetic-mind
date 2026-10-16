@@ -15,7 +15,7 @@ const GLYPH = {   // filled in from the World's kinds table too
 const PORTABLE = ["apple", "berries", "mushroom", "stick", "log", "stone", "flint", "clay", "feather", "shell", "flower", "pinecone", "egg", "honey", "paper", "cup", "lantern"];
 const EMOJI_FONT = `"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
 const PLACE_ICON = { home: "🏡", ruins: "🏛️", cabin: "🛖", cave: "🕳️", stones: "🗿", standing_stones: "🗿", spring: "💧", lookout: "⛰️",
-  beehive: "🐝", nest: "🪺", well: "🪣" };
+  beehive: "🐝", nest: "🪺", well: "🪣", pond: "🪷", lake: "🪷" };
 
 const MapView = (() => {
   const cv = document.getElementById("map"), g = cv.getContext("2d");

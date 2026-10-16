@@ -51,7 +51,7 @@
 /* crosshair + hint */
 .w3d-crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; z-index: 3;
   background: rgba(255, 255, 255, .9); box-shadow: 0 0 0 2px rgba(0, 0, 0, .35); pointer-events: none; }
-.w3d-hint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 3; pointer-events: none; padding: 6px 12px; border-radius: 999px;
+.w3d-hint { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 3; pointer-events: none; padding: 6px 12px; border-radius: 999px;
   font-size: 12.5px; color: var(--text, #e7ecf5); background: color-mix(in srgb, var(--panel, #131a27) 80%, transparent); white-space: nowrap;
   border: 1px solid color-mix(in srgb, var(--text, #e7ecf5) 12%, transparent); max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; }
 .w3d-hint b { color: var(--accent, #7c9cff); font-weight: 700; }

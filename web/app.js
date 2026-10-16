@@ -16,7 +16,10 @@ function setText(el, t) { if (el && el.textContent !== t) el.textContent = t; }
 
 const MOTOR = ["forward", "back", "left", "right", "wait", "take", "drop", "eat", "drink", "use", "sleep", "look", "speak", "ask"];
 const MOTOR_ICON = { forward: "⬆️", back: "⬇️", left: "↶", right: "↷", wait: "⏸", take: "✋", drop: "🫳", eat: "🍽️", drink: "💧", use: "🛠️", sleep: "😴", look: "👀", speak: "🗣️", ask: "❓" };
-const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", health: "Health" };
+const NEED_LABEL = { energy: "Food", water: "Water", rest: "Rest", warmth: "Warmth", health: "Health", boredom: "Boredom" };
+// every need is "higher is better" except boredom, which fills up as it gets worse
+const needColor = (k, v) => k === "boredom" ? (v > 60 ? "var(--bad)" : v > 35 ? "var(--warn)" : "color-mix(in srgb, var(--warn) 55%, var(--muted))")
+  : v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
 
 const S = { view: "world", settings: {}, academy: {}, metrics: [], concepts: {}, oracle: {}, feeds: {}, mode: "watch",
             pendingChat: null, dids: [], rewards: [], lastDid: null, lastThought: null, studioKey: "" };
@@ -216,8 +219,8 @@ Community.onChange = () => renderAll();
 // ================================================================== home
 function needsHTML(needs) {
   return Object.entries(needs || {}).map(([k, v]) => {
-    const c = v < 25 ? "var(--bad)" : v < 50 ? "var(--warn)" : "var(--good)";
-    return `<div class="need"><span>${NEED_LABEL[k] || k}</span><div><i style="width:${Math.round(v)}%;background:${c}"></i></div><b>${Math.round(v)}</b></div>`;
+    const c = needColor(k, v), bored = k === "boredom" && v > 60;
+    return `<div class="need${k === "boredom" ? " inverse" : ""}" title="${k === "boredom" ? "Boredom: higher is worse" : esc(NEED_LABEL[k] || k)}"><span>${NEED_LABEL[k] || k}</span><div><i style="width:${Math.round(v)}%;background:${c}"></i></div><b>${bored ? "bored" : Math.round(v)}</b></div>`;
   }).join("");
 }
 const whereWords = (z) => [z.place, z.biome ? Chunks.label(z.biome) : ""].filter(Boolean).join(" · ");

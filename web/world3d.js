@@ -2128,6 +2128,7 @@ function frame(now) {
   S.renderer.render(S.scene, S.camera);
   updateLabels();
   const st = S.stats, info = S.renderer.info.render, ms = performance.now() - t0;
+  if (ms > 60 && S.debugSlow) { const pr = S.renderer.info.programs?.length; S.slow = S.slow || []; S.slow.push({ ms: Math.round(ms), programs: pr, built: st.built, roofs: S.roofs.size, animals: S.animals.size, ents: S.entObjs.size }); }
   st.drawCalls = info.calls; st.triangles = info.triangles; st.frameMax = Math.max(st.frameMax, ms);
   st.frames++; st.msAcc += ms;
   if (now - st.last > 1000) { st.fps = Math.round((st.frames * 1000) / (now - st.last)); st.ms = +(st.msAcc / st.frames).toFixed(2); st.frames = 0; st.msAcc = 0; st.last = now; }
