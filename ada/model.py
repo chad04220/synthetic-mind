@@ -109,27 +109,34 @@ class FusedLMLoss(torch.autograd.Function):
     vocabulary-sized elementwise passes per chunk."""
 
     @staticmethod
-    def forward(ctx, h, W, t, cap: float, chunk: int, dt):
+    def forward(ctx, h, W, t, cap: float, chunk: int, dt, masked: bool = True):
+        # Every step below reads or writes a (tokens x vocabulary) block, so their number is what
+        # costs: memory traffic, not arithmetic, is the limit. Each is in place where possible.
         with torch.autocast(h.device.type, enabled=False):
             n = (t != -1).sum().clamp_min(1)
             Wd = W.detach().to(dt)
+            Ws = (W.detach() / cap).to(dt)                           # folds the 1/c into the product
             gh = torch.empty_like(h)
             gW = torch.zeros(W.shape, dtype=torch.float32, device=W.device)
             total = torch.zeros((), dtype=torch.float32, device=h.device)
             for i in range(0, h.size(0), chunk):
                 hc, tc = h[i:i + chunk].detach().to(dt), t[i:i + chunk]
-                valid = tc != -1
                 tg = tc.clamp_min(0).unsqueeze(1)
-                th = (hc @ Wd.T).float().div_(cap).tanh_()          # tanh(z / c)
-                y = th * cap                                         # softcapped logits
-                lse = torch.logsumexp(y, -1)
-                total += ((lse - y.gather(1, tg).squeeze(1)) * valid).sum()
-                g = y.sub_(lse.unsqueeze(1)).exp_()                  # softmax(y), in place
-                g.scatter_add_(1, tg, -valid.unsqueeze(1).to(g.dtype))
-                g.mul_(valid.unsqueeze(1))
-                g.mul_(th.mul_(th).neg_().add_(1))                   # times dy/dz = 1 - tanh^2
+                th = (hc @ Ws.T).float().tanh_()                     # tanh(z / c)
+                p = torch.softmax(th * cap, -1)                      # softmax of the capped logits
+                pt = p.gather(1, tg).squeeze(1)
+                if masked:
+                    valid = (tc != -1).to(p.dtype)
+                    total -= (pt.clamp_min(1e-38).log() * valid).sum()
+                    p.scatter_add_(1, tg, -valid.unsqueeze(1))       # p - onehot
+                    p.mul_(valid.unsqueeze(1))                       # ignored targets: no gradient
+                else:
+                    total -= pt.clamp_min(1e-38).log().sum()
+                    p.scatter_add_(1, tg, torch.full_like(pt, -1.0).unsqueeze(1))
+                p.addcmul_(p, th.square_(), value=-1)                # times dy/dz = 1 - tanh^2
                 del th
-                g = g.to(dt)
+                g = p.to(dt)
+                del p
                 gh[i:i + chunk] = (g @ Wd).to(h.dtype)
                 gW += g.T @ hc
             ctx.save_for_backward(gh, gW, n)
@@ -139,7 +146,7 @@ class FusedLMLoss(torch.autograd.Function):
     def backward(ctx, go):
         gh, gW, n = ctx.saved_tensors
         s = go / n
-        return gh * s.to(gh.dtype), gW * s, None, None, None, None
+        return gh * s.to(gh.dtype), gW * s, None, None, None, None, None
 
 
 class Brain(nn.Module):
@@ -162,16 +169,17 @@ class Brain(nn.Module):
         c = self.cfg.logit_softcap
         return c * torch.tanh(z / c)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, masked: bool = True):
+        """masked=False promises there are no ignored (-1) targets, which saves a pass in training."""
         h = self.hidden(idx)
         if targets is None:
             return self.logits(h)
-        return self.chunked_loss(h, targets)
+        return self.chunked_loss(h, targets, masked=masked)
 
     def _ce(self, h, t):
         return F.cross_entropy(self.logits(h), t, ignore_index=-1, reduction="sum")
 
-    def chunked_loss(self, h, targets, chunk: int = 1024, reduction: str = "mean"):
+    def chunked_loss(self, h, targets, chunk: int = 1024, reduction: str = "mean", masked: bool = True):
         """Cross-entropy without materialising the full (tokens x vocabulary) logits.
 
         When training, the gradients of the vocabulary projection are worked out in the same pass
@@ -180,7 +188,7 @@ class Brain(nn.Module):
         t = targets.reshape(-1)
         if torch.is_grad_enabled() and (h.requires_grad or self.embed.weight.requires_grad) and reduction == "mean":
             dt = torch.get_autocast_dtype(h.device.type) if torch.is_autocast_enabled(h.device.type) else h.dtype
-            return FusedLMLoss.apply(h, self.embed.weight, t, self.cfg.logit_softcap, chunk, dt)
+            return FusedLMLoss.apply(h, self.embed.weight, t, self.cfg.logit_softcap, chunk, dt, masked)
         total = h.new_zeros((), dtype=torch.float32)
         for i in range(0, h.size(0), chunk):
             if torch.is_grad_enabled():

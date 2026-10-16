@@ -1,3 +1,32 @@
+# Ada v1.2.1
+
+## Fixed: the built-in Oracle couldn't download llama.cpp ("HTTP Error 404")
+
+llama.cpp publishes a new release many times a day, and each one appears on GitHub before its
+files have finished uploading. The newest release had no Windows file yet, so the program fell
+back to a fixed release that turned out not to have one either.
+
+- It now looks through llama.cpp's recent releases and downloads the newest one whose file for
+  this computer is actually there. Without GitHub's release list (it allows 60 requests an hour),
+  it follows the "latest release" page instead.
+- If the download still fails, the message names the address that failed and says what else you
+  can do: put `llama-server` in `oracle/llama.cpp/` yourself, or use Ollama.
+
+## Faster training: fewer passes over the vocabulary
+
+Your report showed that the loss over the 50,304-token vocabulary took 288 ms of each step (the
+forward pass took 72 ms, the backward pass 133 ms). Its cost is memory traffic: every step of the
+calculation reads and writes a 1024 × 50,304 block of numbers. It now makes about 40% fewer
+passes over that block:
+- the 1/30 scaling is folded into the weights;
+- the loss is read straight from the softmax;
+- the tanh derivative takes one fused step;
+- the masking pass is skipped in training, whose batches never contain ignored positions.
+
+The results are the same up to bf16 rounding (checked by the tests).
+
+---
+
 # Ada v1.2.0
 
 ## The GPU is for training; everything else runs on the CPU

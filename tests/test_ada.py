@@ -531,6 +531,15 @@ def test_fused_loss_matches_plain_cross_entropy():
     assert abs(l1 - l2) < 1e-5
     for n in g1:
         assert (g1[n] - g2[n]).norm() <= 1e-5 * (g2[n].norm() + 1e-8), n
+    # Training's packed batches have no ignored targets and skip the masking pass: same result.
+    y[0, :7] = 5
+    b.zero_grad()
+    b(x, y, masked=False).backward()
+    g3 = {n: p.grad.clone() for n, p in b.named_parameters()}
+    b.zero_grad()
+    b(x, y).backward()
+    for n, p in b.named_parameters():
+        assert (g3[n] - p.grad).norm() <= 1e-6 * (p.grad.norm() + 1e-8), n
 
 
 def test_muon_batched_step_matches_one_matrix_at_a_time():
@@ -609,3 +618,31 @@ def test_builtin_oracle_talks_to_a_llama_server(tmp_path):
         local.proc.kill()
         srv.shutdown()
     assert platform_asset() is not None
+
+
+def test_builtin_oracle_skips_releases_still_uploading(tmp_path, monkeypatch):
+    """llama.cpp's newest release often has no files yet: use the newest one that has ours."""
+    import ada.localllm as ll
+
+    class Fake(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            suffix = ll.platform_asset()
+            rels = [{"tag_name": "b3", "assets": []},
+                    {"tag_name": "b2", "assets": [{"name": f"llama-b2-{suffix}", "browser_download_url": "http://x/b2"}]},
+                    {"tag_name": "b1", "assets": [{"name": f"llama-b1-{suffix}", "browser_download_url": "http://x/b1"}]}]
+            b = json.dumps(rels).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(ll, "RELEASES", f"http://127.0.0.1:{srv.server_port}/releases")
+    try:
+        assert ll.LocalLLM(tmp_path)._find_release(ll.platform_asset()) == ("b2", "http://x/b2")
+    finally:
+        srv.shutdown()

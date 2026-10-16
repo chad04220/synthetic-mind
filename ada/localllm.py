@@ -33,8 +33,10 @@ CATALOG = {
                      "Llama-3.2-3B-Instruct-Q4_K_M.gguf", 2019377696),
 }
 DEFAULT_MODEL = "gemma-2-2b"
-PINNED_TAG = "b11676"          # used when GitHub's "latest release" can't be read
-RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+# llama.cpp publishes a release many times a day, and each one appears before its files have
+# finished uploading: look through the recent ones for the newest that has the file we need.
+RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20"
+LATEST_PAGE = "https://github.com/ggml-org/llama.cpp/releases/latest"
 
 
 def platform_asset() -> str | None:
@@ -137,16 +139,7 @@ class LocalLLM:
         suffix = platform_asset()
         if not suffix:
             raise RuntimeError(f"no prebuilt llama.cpp for {platform.system()} {platform.machine()}; use Ollama")
-        tag, url = PINNED_TAG, None
-        try:
-            rel = json.loads(self._get(RELEASES, timeout=15).read().decode())
-            for a in rel.get("assets", []):
-                if a.get("name", "").endswith(suffix) and a["name"].startswith("llama-"):
-                    tag, url = rel.get("tag_name", tag), a["browser_download_url"]
-                    break
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            self.log(f"couldn't read llama.cpp's latest release ({type(e).__name__}); using {PINNED_TAG}")
-        url = url or f"https://github.com/ggml-org/llama.cpp/releases/download/{tag}/llama-{tag}-{suffix}"
+        tag, url = self._find_release(suffix)
         archive = self.folder / "downloads" / url.rsplit("/", 1)[1]
         self._download(url, archive, f"llama.cpp {tag} (the Oracle's engine)")
         dest = self.folder / "llama.cpp"
@@ -175,6 +168,32 @@ class LocalLLM:
         self.log(f"installed llama.cpp {tag} in {dest}")
         return exe
 
+    def _find_release(self, suffix: str) -> tuple[str, str]:
+        """The newest llama.cpp release that has the CPU build for this computer: (tag, url)."""
+        seen = []
+        try:
+            with self._get(RELEASES, timeout=20, headers={"Accept": "application/vnd.github+json"}) as r:
+                releases = json.loads(r.read().decode())
+            for rel in releases:
+                if rel.get("draft"):
+                    continue
+                seen.append(rel.get("tag_name", "?"))
+                for a in rel.get("assets", []):
+                    if a.get("name", "").endswith(suffix):
+                        return rel["tag_name"], a["browser_download_url"]
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            self.log(f"couldn't list llama.cpp's releases on GitHub ({type(e).__name__}: {e}); trying its latest release page")
+        # Without the API (it allows 60 requests an hour), follow the "latest release" page to its tag.
+        try:
+            with self._get(LATEST_PAGE, timeout=20) as r:
+                tag = r.geturl().rstrip("/").rsplit("/", 1)[-1]
+            if tag.startswith("b"):
+                return tag, f"https://github.com/ggml-org/llama.cpp/releases/download/{tag}/llama-{tag}-{suffix}"
+        except (urllib.error.URLError, OSError) as e:
+            seen.append(f"latest page: {type(e).__name__}")
+        raise RuntimeError(f"no llama.cpp release with '{suffix}' found (looked at: {', '.join(seen[:8]) or 'nothing'}). "
+                           f"You can put llama-server and its files in {self.folder / 'llama.cpp'} yourself, or use Ollama")
+
     def _model(self, key: str) -> Path:
         label, repo, file, _size = CATALOG[key]
         path = self.folder / "models" / file
@@ -194,7 +213,12 @@ class LocalLLM:
         have = part.stat().st_size if part.exists() else 0
         self.status, self.detail, self.progress = "downloading", f"Downloading {what}", 0.0
         self.log(f"downloading {what} from {url}")
-        with self._get(url, timeout=60, headers={"Range": f"bytes={have}-"} if have else None) as r:
+        try:
+            r = self._get(url, timeout=60, headers={"Range": f"bytes={have}-"} if have else None)
+        except urllib.error.HTTPError as e:
+            e.close()
+            raise RuntimeError(f"downloading {what} failed: HTTP {e.code} {e.reason} ({url})") from None
+        with r:
             if have and r.status != 206:
                 have = 0                                      # the server ignored the resume
             total = have + int(r.headers.get("Content-Length") or 0)

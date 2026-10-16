@@ -220,7 +220,7 @@ class Academy:
                     loss = self.profiled(x, y, a.grad_accum)
                 else:
                     with self.autocast():
-                        loss = self.brain(x, y)
+                        loss = self.brain(x, y, masked=False)       # packed rows: no ignored targets
                     (loss / a.grad_accum).backward()
                 losses.append(loss.detach())
             ntok += x.numel()
@@ -282,7 +282,7 @@ class Academy:
         with self.autocast():
             h = self.brain.hidden(x)
             ev[1].record()
-            loss = self.brain.chunked_loss(h, y)
+            loss = self.brain.chunked_loss(h, y, masked=False)
         ev[2].record()
         (loss / accum).backward()
         ev[3].record()
